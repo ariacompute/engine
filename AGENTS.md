@@ -34,7 +34,7 @@
 - `cargo test -p aria-kernel`
 - `cargo build`
 - `cargo clippy --all-targets`
-- `cargo run -p aria-openai -- serve --model <bundle_dir>`
+- `cargo run -p aria-openai --bin aria-engine -- serve --model <bundle_dir>`
 
 ## 进行中需求
 Spec 见 `requirements.md`（已审核通过）。`task.md` T0–T6（阶段 A）与 T10/T11（阶段 B/C）均已完成。

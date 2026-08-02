@@ -14,7 +14,7 @@ Aria Compute 推理引擎（Rust）：OpenAI 兼容 API、Aria bundle 推理、�
 
 ```bash
 cargo test
-cargo run -p aria-openai -- serve --model /path/to/aria-bundle
+cargo run -p aria-openai --bin aria-engine -- serve --model /path/to/aria-bundle
 ```
 
 权重格式：**仅** `aria-quant-bundle`（`config.json` + `weight.bin`）。不支持 GGUF。

@@ -6,7 +6,7 @@ license.workspace = true
 description = "OpenAI-compatible HTTP API for Aria engine"
 
 [[bin]]
-name = "aria-openai"
+name = "aria-engine"
 path = "src/main.rs"
 
 [dependencies]

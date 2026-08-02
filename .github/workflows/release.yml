@@ -1,0 +1,87 @@
+name: Release
+
+on:
+  release:
+    types:
+      - created
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: aria-engine
+
+jobs:
+  build:
+    name: Build & Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            asset_os: linux_x86_64
+            archive: tar.gz
+          - name: windows-x86_64
+            os: windows-latest
+            asset_os: windows_x86_64
+            archive: zip
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            asset_os: linux_arm64
+            archive: tar.gz
+          - name: macos
+            os: macos-latest
+            asset_os: macos
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build release binary
+        run: cargo build --release -p aria-openai
+
+      - name: Package release archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          ASSET_OS: ${{ matrix.asset_os }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          ARCHIVE_NAME="engine_${VERSION}_${ASSET_OS}.tar.gz"
+          tar -czf "$ARCHIVE_NAME" -C target/release "$BIN_NAME"
+          echo "ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
+      - name: Package release archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          ASSET_OS: ${{ matrix.asset_os }}
+        run: |
+          $version = $env:TAG_NAME.TrimStart('v')
+          $archiveName = "engine_${version}_$($env:ASSET_OS).zip"
+          Compress-Archive -Path "target/release/$($env:BIN_NAME).exe" -DestinationPath $archiveName -Force
+          Add-Content -Path $env:GITHUB_ENV -Value "ASSET_PATH=$archiveName"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: ${{ env.ASSET_PATH }}
+          token: ${{ secrets.ARIACOMPUTE_TOKEN }}
