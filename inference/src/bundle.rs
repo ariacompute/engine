@@ -117,7 +117,7 @@ fn offset_pair(v: &Value, key: &str) -> Result<(usize, usize), EngineError> {
 }
 
 fn f16_bytes_to_f32(bytes: &[u8]) -> Result<Vec<f32>, EngineError> {
-    if bytes.len() % 2 != 0 {
+    if !bytes.len().is_multiple_of(2) {
         return Err(EngineError::Format("f16 byte length odd".into()));
     }
     let mut out = Vec::with_capacity(bytes.len() / 2);
@@ -129,7 +129,7 @@ fn f16_bytes_to_f32(bytes: &[u8]) -> Result<Vec<f32>, EngineError> {
 }
 
 fn f32_bytes_to_f32(bytes: &[u8]) -> Result<Vec<f32>, EngineError> {
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(EngineError::Format("f32 byte length not aligned".into()));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
@@ -221,7 +221,7 @@ pub fn load_bundle(path: impl AsRef<Path>) -> Result<Bundle, EngineError> {
                 let codebook = f16_bytes_to_f32(cb_raw)?;
                 let kc = 1usize << bits;
                 let codebook_shape = if share == "group" {
-                    if codebook.len() % kc != 0 {
+                    if !codebook.len().is_multiple_of(kc) {
                         return Err(EngineError::ShapeMismatch(
                             "bad group codebook size".into(),
                         ));

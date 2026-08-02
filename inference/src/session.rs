@@ -338,7 +338,7 @@ pub fn confidence_from_logits(logits: &[f32]) -> f32 {
 
 #[allow(dead_code)]
 pub fn cache_shapes_ok(cache: &HashMap<usize, Vec<f32>>, kv_dim: usize) -> bool {
-    cache.values().all(|v| v.len() % kv_dim == 0)
+    cache.values().all(|v| v.len().is_multiple_of(kv_dim))
 }
 
 #[cfg(test)]

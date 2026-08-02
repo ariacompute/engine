@@ -76,7 +76,7 @@ impl TensorView {
             return Err(EngineError::ShapeMismatch("expected f32 tensor".into()));
         }
         let bytes = &self.buf.as_slice()[self.offset..self.offset + self.len];
-        if bytes.len() % 4 != 0 {
+        if !bytes.len().is_multiple_of(4) {
             return Err(EngineError::Format("f32 byte length not aligned".into()));
         }
         let ptr = bytes.as_ptr() as *const f32;

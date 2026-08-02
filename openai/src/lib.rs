@@ -197,7 +197,7 @@ fn decode_b64(s: &str) -> Result<Vec<u8>, EngineError> {
         }
     }
     let bytes = s.as_bytes();
-    if bytes.len() % 4 != 0 {
+    if !bytes.len().is_multiple_of(4) {
         return Err(EngineError::Format("invalid base64 length".into()));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4 * 3);
@@ -562,7 +562,7 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let v = body_json(res).await;
-        assert!(v["data"][0]["embedding"].as_array().unwrap().len() > 0);
+        assert!(!v["data"][0]["embedding"].as_array().unwrap().is_empty());
 
         let pcm = [0u8, 1, 2, 3, 4, 5, 6, 7];
         let res = app
@@ -581,7 +581,7 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let v = body_json(res).await;
-        assert!(v["text"].as_str().unwrap().len() > 0);
+        assert!(!v["text"].as_str().unwrap().is_empty());
 
         let res = app
             .clone()

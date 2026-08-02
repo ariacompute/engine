@@ -36,7 +36,7 @@ pub fn matmul(
 
 /// y = x @ W^T where W is [out_features, in_features] row-major (GGUF-style).
 pub fn linear(x: &[f32], w: &[f32], out_f: usize, in_f: usize) -> Result<Vec<f32>, EngineError> {
-    if x.len() % in_f != 0 {
+    if !x.len().is_multiple_of(in_f) {
         return Err(EngineError::ShapeMismatch(format!(
             "linear x len {} not divisible by in_f {in_f}",
             x.len()
@@ -65,7 +65,7 @@ pub fn linear(x: &[f32], w: &[f32], out_f: usize, in_f: usize) -> Result<Vec<f32
 
 pub fn rms_norm(x: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>, EngineError> {
     let n = weight.len();
-    if n == 0 || x.len() % n != 0 {
+    if n == 0 || !x.len().is_multiple_of(n) {
         return Err(EngineError::ShapeMismatch(
             "rms_norm: x length must be multiple of weight len".into(),
         ));
@@ -110,12 +110,12 @@ pub fn softmax(logits: &[f32]) -> Vec<f32> {
 
 /// Apply RoPE to interleaved q/k pairs for one token (head_dim even).
 pub fn rope(x: &mut [f32], head_dim: usize, pos: usize, theta: f32) -> Result<(), EngineError> {
-    if head_dim == 0 || head_dim % 2 != 0 {
+    if head_dim == 0 || !head_dim.is_multiple_of(2) {
         return Err(EngineError::ShapeMismatch(
             "rope head_dim must be positive even".into(),
         ));
     }
-    if x.len() % head_dim != 0 {
+    if !x.len().is_multiple_of(head_dim) {
         return Err(EngineError::ShapeMismatch(
             "rope x len not divisible by head_dim".into(),
         ));
@@ -146,7 +146,8 @@ pub fn attention(
     n_kv_heads: usize,
     head_dim: usize,
 ) -> Result<Vec<f32>, EngineError> {
-    if n_heads == 0 || head_dim == 0 || n_kv_heads == 0 || n_heads % n_kv_heads != 0 {
+    if n_heads == 0 || head_dim == 0 || n_kv_heads == 0 || !n_heads.is_multiple_of(n_kv_heads)
+    {
         return Err(EngineError::ShapeMismatch(
             "attention invalid head configuration".into(),
         ));
@@ -155,7 +156,7 @@ pub fn attention(
     if q.len() != n_heads * head_dim {
         return Err(EngineError::ShapeMismatch("attention q shape".into()));
     }
-    if k_cache.len() != v_cache.len() || k_cache.len() % kv_dim != 0 {
+    if k_cache.len() != v_cache.len() || !k_cache.len().is_multiple_of(kv_dim) {
         return Err(EngineError::ShapeMismatch("attention kv cache shape".into()));
     }
     let seq = k_cache.len() / kv_dim;

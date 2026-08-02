@@ -21,7 +21,7 @@ fn quantize_group_q4(
     group_size: usize,
 ) -> (Vec<u8>, Vec<f32>, usize) {
     assert_eq!(w.len(), k * n);
-    let num_groups = (k + group_size - 1) / group_size;
+    let num_groups = k.div_ceil(group_size);
     let k_work = num_groups * group_size;
     let kc = 16usize;
     let mut codebook = vec![0.0f32; num_groups * kc];

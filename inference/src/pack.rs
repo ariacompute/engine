@@ -6,7 +6,7 @@ pub fn packed_size(count: usize, bits: u8) -> Result<usize, EngineError> {
     if !INTEGER_BITS.contains(&bits) {
         return Err(EngineError::Quant(format!("bits must be 1-4 or 8, got {bits}")));
     }
-    Ok((count * bits as usize + 7) / 8)
+    Ok((count * bits as usize).div_ceil(8))
 }
 
 pub fn pack_indices(indices: &[u8], bits: u8) -> Result<Vec<u8>, EngineError> {
@@ -54,7 +54,7 @@ pub fn unpack_indices(data: &[u8], count: usize, bits: u8) -> Result<Vec<u8>, En
     let max_val = (1u8 << bits) - 1;
     let mut out = vec![0u8; count];
     let mut bit_pos = 0usize;
-    for i in 0..count {
+    for slot in &mut out {
         let mut v = 0u8;
         for b in 0..bits {
             let byte_i = bit_pos / 8;
@@ -64,7 +64,7 @@ pub fn unpack_indices(data: &[u8], count: usize, bits: u8) -> Result<Vec<u8>, En
             }
             bit_pos += 1;
         }
-        out[i] = v & max_val;
+        *slot = v & max_val;
     }
     Ok(out)
 }

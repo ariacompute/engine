@@ -40,14 +40,14 @@ pub fn asr_transcribe_pcm16le(pcm: &[u8], vocab: u32) -> Result<String, EngineEr
     if pcm.len() < 2 {
         return Err(EngineError::InvalidParam("pcm too short".into()));
     }
-    if pcm.len() % 2 != 0 {
+    if !pcm.len().is_multiple_of(2) {
         return Err(EngineError::Format("pcm16 length must be even".into()));
     }
     let vocab = vocab.max(1);
     let mut words = Vec::new();
     for chunk in pcm.chunks(2).take(32) {
         let s = i16::from_le_bytes([chunk[0], chunk[1]]);
-        let tok = ((s as i32).unsigned_abs() as u32) % vocab;
+        let tok = (s as i32).unsigned_abs() % vocab;
         words.push(format!("t{tok}"));
     }
     Ok(words.join(" "))
