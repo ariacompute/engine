@@ -171,5 +171,29 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, EngineError::Cloud(_)));
+
+        let to = CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Timeout);
+        let err = to
+            .chat(&CloudChatRequest {
+                model: "x".into(),
+                messages: vec![],
+                max_tokens: None,
+            })
+            .await
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Cloud(_)));
+        assert!(err.to_string().contains("timeout"));
+    }
+
+    #[test]
+    fn invalid_threshold() {
+        assert!(matches!(
+            Router::new(-0.1),
+            Err(EngineError::InvalidParam(_))
+        ));
+        assert!(matches!(
+            Router::new(1.01),
+            Err(EngineError::InvalidParam(_))
+        ));
     }
 }

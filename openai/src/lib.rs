@@ -698,4 +698,60 @@ mod tests {
         // Must stay local — content is token dump, not cloud string.
         assert_ne!(v["choices"][0]["message"]["content"], "from-cloud");
     }
+
+    #[tokio::test]
+    async fn invalid_max_tokens_and_cloud_timeout() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let state = build_state(
+            dir.path(),
+            Router::new(0.5).unwrap(),
+            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Timeout),
+        )
+        .unwrap();
+        let app = app(state);
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"hi"}],
+                            "max_tokens": 0
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+        let v = body_json(res).await;
+        assert_eq!(v["error"]["type"], "invalid_request_error");
+
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"FORCE_CLOUD please"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
+        let v = body_json(res).await;
+        assert_eq!(v["error"]["type"], "cloud_error");
+    }
 }

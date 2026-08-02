@@ -1,6 +1,7 @@
-//! Synthetic tiny q4 Aria bundle for Stage A tests (mirrors model tiny layout).
+//! Synthetic tiny Aria bundles / QuantTensors for contract tests (mirrors model tiny layout).
 
-use crate::pack::{pack_indices, unpack_indices};
+use crate::bundle::QuantTensor;
+use crate::pack::pack_indices;
 use aria_kernel::EngineError;
 use half::f16;
 use serde_json::{json, Value};
@@ -14,16 +15,46 @@ fn write_f16_slice(buf: &mut Vec<u8>, data: &[f32]) {
     }
 }
 
-fn quantize_group_q4(
+/// Relative RMSE: sqrt(mean((a-b)^2)) / (rms(a)+eps). Matches model `test_quant._rel_rmse`.
+pub fn rel_rmse(a: &[f32], b: &[f32]) -> f32 {
+    assert_eq!(a.len(), b.len());
+    let mut mse = 0.0f64;
+    let mut ms = 0.0f64;
+    for (&x, &y) in a.iter().zip(b.iter()) {
+        let d = f64::from(x) - f64::from(y);
+        mse += d * d;
+        ms += f64::from(x) * f64::from(x);
+    }
+    let n = a.len() as f64;
+    let rmse = (mse / n).sqrt();
+    let rms = (ms / n).sqrt() + 1e-12;
+    (rmse / rms) as f32
+}
+
+fn fill_linspace_codebook(codebook: &mut [f32], kc: usize, mn: f32, mx: f32) {
+    if kc == 1 {
+        codebook[0] = mn;
+        return;
+    }
+    let denom = (kc as f32) - 1.0;
+    for (c, slot) in codebook.iter_mut().enumerate().take(kc) {
+        *slot = mn + (mx - mn) * (c as f32) / denom;
+    }
+}
+
+/// Linspace group-share quant (test stand-in for Lloyd-Max).
+pub fn make_group_quant_tensor(
     w: &[f32],
     k: usize,
     n: usize,
     group_size: usize,
-) -> (Vec<u8>, Vec<f32>, usize) {
+    bits: u8,
+) -> QuantTensor {
     assert_eq!(w.len(), k * n);
+    assert!((1..=4).contains(&bits) || bits == 8);
+    let kc = 1usize << bits;
     let num_groups = k.div_ceil(group_size);
     let k_work = num_groups * group_size;
-    let kc = 16usize;
     let mut codebook = vec![0.0f32; num_groups * kc];
     let mut indices = vec![0u8; k_work * n];
     for g in 0..num_groups {
@@ -44,9 +75,7 @@ fn quantize_group_q4(
             });
         let mn = if mn.is_finite() { mn } else { 0.0 };
         let mx = if mx.is_finite() { mx } else { 0.0 };
-        for c in 0..kc {
-            codebook[g * kc + c] = mn + (mx - mn) * (c as f32) / (kc as f32 - 1.0).max(1.0);
-        }
+        fill_linspace_codebook(&mut codebook[g * kc..(g + 1) * kc], kc, mn, mx);
         for r in 0..group_size {
             let row = g * group_size + r;
             for j in 0..n {
@@ -64,8 +93,91 @@ fn quantize_group_q4(
             }
         }
     }
-    let packed = pack_indices(&indices, 4).expect("pack");
-    (packed, codebook, num_groups)
+    let packed = pack_indices(&indices, bits).expect("pack");
+    QuantTensor {
+        bits,
+        group_size,
+        shape: (k, n),
+        row_pad: 0,
+        codebook_share: "group".into(),
+        packed_indices: packed,
+        codebook,
+        codebook_shape: vec![num_groups, kc],
+        hadamard: json!({ "applied": true, "axis": 0, "seed": 0 }),
+    }
+}
+
+/// Linspace channel-share quant.
+pub fn make_channel_quant_tensor(
+    w: &[f32],
+    k: usize,
+    n: usize,
+    group_size: usize,
+    bits: u8,
+) -> QuantTensor {
+    assert_eq!(w.len(), k * n);
+    let kc = 1usize << bits;
+    let num_groups = k.div_ceil(group_size);
+    let k_work = num_groups * group_size;
+    let mut codebook = vec![0.0f32; num_groups * n * kc];
+    let mut indices = vec![0u8; k_work * n];
+    for g in 0..num_groups {
+        for j in 0..n {
+            let mut vals = Vec::new();
+            for r in 0..group_size {
+                let row = g * group_size + r;
+                if row < k {
+                    vals.push(w[row * n + j]);
+                }
+            }
+            let (mn, mx) = vals
+                .iter()
+                .copied()
+                .fold((f32::INFINITY, f32::NEG_INFINITY), |(a, b), v| {
+                    (a.min(v), b.max(v))
+                });
+            let mn = if mn.is_finite() { mn } else { 0.0 };
+            let mx = if mx.is_finite() { mx } else { 0.0 };
+            let base = (g * n + j) * kc;
+            fill_linspace_codebook(&mut codebook[base..base + kc], kc, mn, mx);
+            for r in 0..group_size {
+                let row = g * group_size + r;
+                let v = if row < k { w[row * n + j] } else { 0.0 };
+                let mut best = 0u8;
+                let mut best_d = f32::INFINITY;
+                for c in 0..kc {
+                    let d = (v - codebook[base + c]).abs();
+                    if d < best_d {
+                        best_d = d;
+                        best = c as u8;
+                    }
+                }
+                indices[row * n + j] = best;
+            }
+        }
+    }
+    let packed = pack_indices(&indices, bits).expect("pack");
+    QuantTensor {
+        bits,
+        group_size,
+        shape: (k, n),
+        row_pad: 0,
+        codebook_share: "channel".into(),
+        packed_indices: packed,
+        codebook,
+        codebook_shape: vec![num_groups, n, kc],
+        hadamard: json!({ "applied": true, "axis": 0, "seed": 0 }),
+    }
+}
+
+fn quantize_group_q4(
+    w: &[f32],
+    k: usize,
+    n: usize,
+    group_size: usize,
+) -> (Vec<u8>, Vec<f32>, usize) {
+    let t = make_group_quant_tensor(w, k, n, group_size, 4);
+    (t.packed_indices, t.codebook, t.codebook_shape[0])
 }
 
 fn dequant_ref(
@@ -76,6 +188,7 @@ fn dequant_ref(
     n: usize,
     k0: usize,
 ) -> Vec<f32> {
+    use crate::pack::unpack_indices;
     let k_work = num_groups * gs;
     let idx = unpack_indices(indices_packed, k_work * n, 4).unwrap();
     let kc = 16;

@@ -397,4 +397,28 @@ mod tests {
             assert!((x - y).abs() < 1e-5, "{x} vs {y}");
         }
     }
+
+    #[test]
+    fn shape_errors() {
+        assert!(matches!(
+            rms_norm(&[1.0, 2.0], &[1.0, 1.0, 1.0], 1e-6),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+        assert!(matches!(
+            linear(&[1.0], &[1.0, 2.0], 1, 1),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+        assert!(matches!(
+            rope(&mut [1.0, 2.0, 3.0], 3, 0, 10000.0),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+        assert!(matches!(
+            attention(&[1.0], &[1.0], &[1.0], 1, 1, 2),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+        assert!(matches!(
+            fwht(&mut [1.0, 2.0, 3.0]),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+    }
 }

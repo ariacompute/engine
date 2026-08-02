@@ -432,4 +432,59 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, EngineError::UnsupportedFamily(_)));
     }
+
+    #[test]
+    fn greedy_deterministic() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        let prompt = s.encode_text("hi");
+        let opts = GenerateOpts {
+            max_tokens: 3,
+            temperature: 0.0,
+        };
+        let a = s.generate(&prompt, &opts).unwrap();
+        let b = s.generate(&prompt, &opts).unwrap();
+        assert_eq!(a.tokens, b.tokens);
+        assert_eq!(a.tokens.len(), 3);
+    }
+
+    #[test]
+    fn max_tokens_zero_rejected() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        let err = s
+            .generate(
+                &s.encode_text("x"),
+                &GenerateOpts {
+                    max_tokens: 0,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, EngineError::InvalidParam(_)));
+    }
+
+    #[test]
+    fn moe_family_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let s = SessionBuilder::new()
+            .model(dir.path())
+            .family("lfm/lfm2-8b-a1b")
+            .build()
+            .unwrap();
+        assert_eq!(s.arch(), ArchClass::TextMoE);
+        assert!(s.family().is_moe());
+        assert_eq!(s.graph_hook_name(), "text_moe_decoder_stub");
+    }
 }

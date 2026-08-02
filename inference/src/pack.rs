@@ -73,18 +73,54 @@ pub fn unpack_indices(data: &[u8], count: usize, bits: u8) -> Result<Vec<u8>, En
 mod tests {
     use super::*;
 
+    /// Mirror model `tests/test_pack.py::test_roundtrip_all_bits`.
     #[test]
-    fn pack_unpack_4bit() {
-        let idx = [0u8, 1, 2, 15, 3, 4];
-        let packed = pack_indices(&idx, 4).unwrap();
-        let back = unpack_indices(&packed, idx.len(), 4).unwrap();
-        assert_eq!(back, idx);
+    fn roundtrip_all_bits() {
+        let mut rng = 0u64;
+        let mut next_u8 = |max_inclusive: u16| {
+            rng = rng.wrapping_mul(6364136223846793005).wrapping_add(1);
+            ((rng >> 33) % (u64::from(max_inclusive) + 1)) as u8
+        };
+        for bits in [1u8, 2, 3, 4, 8] {
+            let max_v: u16 = if bits == 8 {
+                255
+            } else {
+                u16::from((1u8 << bits) - 1)
+            };
+            let idx: Vec<u8> = (0..100).map(|_| next_u8(max_v)).collect();
+            let packed = pack_indices(&idx, bits).unwrap();
+            assert_eq!(packed.len(), packed_size(idx.len(), bits).unwrap());
+            let out = unpack_indices(&packed, idx.len(), bits).unwrap();
+            assert_eq!(out, idx, "bits={bits}");
+        }
     }
 
     #[test]
-    fn pack_8bit() {
-        let idx = [0u8, 128, 255];
-        let packed = pack_indices(&idx, 8).unwrap();
-        assert_eq!(packed, idx);
+    fn bad_bits() {
+        assert!(matches!(
+            pack_indices(&[0], 5),
+            Err(EngineError::Quant(_))
+        ));
+        assert!(matches!(
+            unpack_indices(&[0], 1, 7),
+            Err(EngineError::Quant(_))
+        ));
+    }
+
+    #[test]
+    fn short_buffer() {
+        let packed = pack_indices(&[0, 1, 2, 3], 4).unwrap();
+        assert!(matches!(
+            unpack_indices(&packed[..1], 4, 4),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn index_overflow() {
+        assert!(matches!(
+            pack_indices(&[16], 4),
+            Err(EngineError::Quant(_))
+        ));
     }
 }
