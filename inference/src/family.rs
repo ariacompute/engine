@@ -1,0 +1,330 @@
+use aria_kernel::EngineError;
+
+/// Delivery phase for a registered family (requirements §1.1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum FamilyPhase {
+    A,
+    B,
+    C,
+}
+
+/// Architecture class for graph / loader hooks.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ArchClass {
+    /// Dense decoder-only LLM (Gemma / Qwen / LFM / …).
+    TextDense,
+    /// MoE text (LFM2-8B-A1B); stage B uses dense graph stub + expert flag.
+    TextMoE,
+    /// Vision-language.
+    VL,
+    /// Vision-language-action.
+    VLA,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FamilyEntry {
+    pub path: &'static str,
+    pub base_model: &'static str,
+    pub phase: FamilyPhase,
+    pub arch: ArchClass,
+}
+
+/// Full registry mirroring model/requirements.md §1.1.
+pub const FAMILY_REGISTRY: &[FamilyEntry] = &[
+    FamilyEntry {
+        path: "qwen/qwen3-0.6b",
+        base_model: "Qwen/Qwen3-0.6B",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "qwen/qwen3-1.7b",
+        base_model: "Qwen/Qwen3-1.7B",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "qwen/qwen3.5-0.8b",
+        base_model: "Qwen/Qwen3.5-0.8B",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "qwen/qwen3.5-2b",
+        base_model: "Qwen/Qwen3.5-2B",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "gemma/gemma-3-270m-it",
+        base_model: "google/gemma-3-270m-it",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "gemma/gemma-3-1b-it",
+        base_model: "google/gemma-3-1b-it",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "gemma/gemma-3n-e2b-it",
+        base_model: "google/gemma-3n-E2B-it",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VL,
+    },
+    FamilyEntry {
+        path: "gemma/gemma-3n-e4b-it",
+        base_model: "google/gemma-3n-E4B-it",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VL,
+    },
+    FamilyEntry {
+        path: "gemma/gemma-4-e2b-it",
+        base_model: "google/gemma-4-E2B-it",
+        phase: FamilyPhase::A,
+        arch: ArchClass::VL, // full VL in stage C; tiny text path available from A
+    },
+    FamilyEntry {
+        path: "gemma/gemma-4-e4b-it",
+        base_model: "google/gemma-4-E4B-it",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VL,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2-350m",
+        base_model: "LiquidAI/LFM2-350M",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2-700m",
+        base_model: "LiquidAI/LFM2-700M",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2-1.2b",
+        base_model: "LiquidAI/LFM2-1.2B",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2-2.6b",
+        base_model: "LiquidAI/LFM2-2.6B",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2-8b-a1b",
+        base_model: "LiquidAI/LFM2-8B-A1B",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextMoE,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2-vl-450m",
+        base_model: "LiquidAI/LFM2-VL-450M",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VL,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2.5-350m",
+        base_model: "LiquidAI/LFM2.5-350M",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2.5-1.2b-instruct",
+        base_model: "LiquidAI/LFM2.5-1.2B-Instruct",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2.5-1.2b-thinking",
+        base_model: "LiquidAI/LFM2.5-1.2B-Thinking",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "lfm/lfm2.5-vl-1.6b",
+        base_model: "LiquidAI/LFM2.5-VL-1.6B",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VL,
+    },
+    FamilyEntry {
+        path: "nanbeige/nanbeige4.2-3b",
+        base_model: "Nanbeige/Nanbeige4.2-3B",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "bonsai/bonsai-27b",
+        base_model: "prism-ml/Bonsai-27B-unpacked",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "inkling/inkling-small",
+        base_model: "thinkingmachines/Inkling-Small",
+        phase: FamilyPhase::B,
+        arch: ArchClass::TextDense,
+    },
+    FamilyEntry {
+        path: "openvla/openvla-7b",
+        base_model: "openvla/openvla-7b",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VLA,
+    },
+    FamilyEntry {
+        path: "openpi/openpi-pi0-3b",
+        base_model: "lerobot/pi0_base",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VLA,
+    },
+    FamilyEntry {
+        path: "openpi/openpi-pi0.5-3b",
+        base_model: "lerobot/pi05_base",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VLA,
+    },
+    FamilyEntry {
+        path: "lingbot/lingbot-vla-v2-6b",
+        base_model: "robbyant/lingbot-vla-v2-6b",
+        phase: FamilyPhase::C,
+        arch: ArchClass::VLA,
+    },
+];
+
+/// Runtime family handle used by Session.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub struct Family {
+    pub path: &'static str,
+    pub arch: ArchClass,
+    pub phase: FamilyPhase,
+}
+
+impl Family {
+    pub fn path(self) -> &'static str {
+        self.path
+    }
+
+    pub fn uses_text_decoder(self) -> bool {
+        matches!(
+            self.arch,
+            ArchClass::TextDense | ArchClass::TextMoE | ArchClass::VL | ArchClass::VLA
+        )
+    }
+
+    pub fn is_moe(self) -> bool {
+        self.arch == ArchClass::TextMoE
+    }
+}
+
+pub fn lookup_family(path: &str) -> Result<&'static FamilyEntry, EngineError> {
+    FAMILY_REGISTRY
+        .iter()
+        .find(|e| e.path == path)
+        .ok_or_else(|| EngineError::UnsupportedFamily(path.to_string()))
+}
+
+pub fn family_phase(path: &str) -> Result<FamilyPhase, EngineError> {
+    Ok(lookup_family(path)?.phase)
+}
+
+/// Graph hook id for an architecture class (stage B/C dispatch).
+pub fn graph_hook(arch: ArchClass) -> &'static str {
+    match arch {
+        ArchClass::TextDense => "text_dense_decoder",
+        ArchClass::TextMoE => "text_moe_decoder_stub",
+        ArchClass::VL => "vl_text_plus_vision",
+        ArchClass::VLA => "vla_text_vision_action",
+    }
+}
+
+/// Stage A only: gemma-4-e2b-it.
+pub fn require_stage_a(path: &str) -> Result<Family, EngineError> {
+    let e = lookup_family(path)?;
+    if e.phase != FamilyPhase::A {
+        return Err(EngineError::UnsupportedFamily(format!(
+            "{} is phase {:?}; stage A only runs gemma/gemma-4-e2b-it",
+            path, e.phase
+        )));
+    }
+    Ok(Family {
+        path: e.path,
+        arch: e.arch,
+        phase: e.phase,
+    })
+}
+
+/// Stage B: text / MoE families (+ stage-A golden path).
+pub fn require_stage_b(path: &str) -> Result<Family, EngineError> {
+    let e = lookup_family(path)?;
+    let ok = match (e.phase, e.arch) {
+        (FamilyPhase::A, _) => e.path == "gemma/gemma-4-e2b-it",
+        (FamilyPhase::B, ArchClass::TextDense | ArchClass::TextMoE) => true,
+        _ => false,
+    };
+    if !ok {
+        return Err(EngineError::UnsupportedFamily(format!(
+            "{} (phase {:?}, arch {:?}) is not a stage-B text/MoE family",
+            path, e.phase, e.arch
+        )));
+    }
+    Ok(Family {
+        path: e.path,
+        arch: e.arch,
+        phase: e.phase,
+    })
+}
+
+/// Any registered family that can run the shared text decoder (+ stage C extras).
+pub fn require_runnable(path: &str) -> Result<Family, EngineError> {
+    let e = lookup_family(path)?;
+    Ok(Family {
+        path: e.path,
+        arch: e.arch,
+        phase: e.phase,
+    })
+}
+
+/// Representative path per arch class for tiny E2E tests.
+pub fn arch_class_representatives() -> &'static [(&'static str, ArchClass)] {
+    &[
+        ("gemma/gemma-3-270m-it", ArchClass::TextDense),
+        ("qwen/qwen3.5-2b", ArchClass::TextDense),
+        ("lfm/lfm2-350m", ArchClass::TextDense),
+        ("lfm/lfm2-8b-a1b", ArchClass::TextMoE),
+        ("nanbeige/nanbeige4.2-3b", ArchClass::TextDense),
+        ("bonsai/bonsai-27b", ArchClass::TextDense),
+        ("inkling/inkling-small", ArchClass::TextDense),
+        ("lfm/lfm2-vl-450m", ArchClass::VL),
+        ("openvla/openvla-7b", ArchClass::VLA),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn registry_complete() {
+        assert_eq!(FAMILY_REGISTRY.len(), 27);
+        assert!(lookup_family("gemma/gemma-4-e2b-it").is_ok());
+        assert!(require_stage_b("qwen/qwen3.5-2b").is_ok());
+        assert!(require_stage_b("lfm/lfm2-8b-a1b").is_ok());
+        assert!(matches!(
+            require_stage_b("openvla/openvla-7b"),
+            Err(EngineError::UnsupportedFamily(_))
+        ));
+        assert!(require_runnable("openvla/openvla-7b").is_ok());
+        assert_eq!(
+            graph_hook(ArchClass::TextMoE),
+            "text_moe_decoder_stub"
+        );
+        assert_eq!(
+            require_stage_a("gemma/gemma-4-e2b-it").unwrap().path(),
+            "gemma/gemma-4-e2b-it"
+        );
+    }
+}

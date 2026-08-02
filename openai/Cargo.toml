@@ -1,0 +1,28 @@
+[package]
+name = "aria-openai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "OpenAI-compatible HTTP API for Aria engine"
+
+[[bin]]
+name = "aria-openai"
+path = "src/main.rs"
+
+[dependencies]
+aria-kernel = { workspace = true }
+aria-inference = { workspace = true }
+aria-hybrid = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tower = { workspace = true }
+http-body-util = { workspace = true }
+bytes = { workspace = true }
+futures-util = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tower = { workspace = true }
+http-body-util = { workspace = true }
