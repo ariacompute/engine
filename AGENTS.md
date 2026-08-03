@@ -7,6 +7,7 @@
 五层：`openai`（OpenAI 兼容 API）→ `hybrid`（端云路由）→ `inference`（全家族推理）
 → `graph`（零拷贝计算图）→ `kernel`（ARM NEON + 可移植 scalar）。
 权重格式：**仅** Aria bundle（`aria-quant-bundle` v1：`weight.bin` + `config.json` + tokenizer）。
+评测：`bench/` Python，对标 aria / llama.cpp / ollama / vllm，产出 JSON+MD（report-only）。
 
 ## 架构
 `openai` → `hybrid` → `inference`（Bundle + Session + 家族图）→ `graph` → `kernel`。
@@ -15,11 +16,12 @@
 （Hadamard + Dequant + MatMul），不强制整表逆 Hadamard 物化。
 
 ## 目录
-- `openai/`：`aria-openai` — HTTP（chat / 后续 audio·embeddings·tools）
+- `openai/`：`aria-openai` — HTTP（chat / audio·embeddings·tools）
 - `hybrid/`：`aria-hybrid` — 置信度路由、`cloud_handoff`、云端 OpenAI 客户端
 - `inference/`：`aria-inference` — Bundle 加载、Prefill/Decode、家族注册表
 - `graph/`：`aria-graph` — Op DAG、BufferPool、mmap / external 零拷贝
 - `kernel/`：`aria-kernel` — matmul / attention / norm / RoPE / dequant / FWHT
+- `bench/`：Python 引擎对标评测（§1.1 全家族；性能+质量；JSON+MD）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
 
 ## 开发规范
@@ -31,15 +33,15 @@
 
 ## 常用命令
 - `cargo test`
-- `cargo test -p aria-kernel`
-- `cargo build`
-- `cargo clippy --all-targets`
 - `cargo run -p aria-openai --bin aria-engine -- serve --model <bundle_dir>`
+- `python -m unittest discover -s bench/tests -t .`
+- `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
 
 ## 进行中需求
-Spec 见 `requirements.md`（已审核通过）。`task.md` T0–T6（阶段 A）与 T10/T11（阶段 B/C）均已完成。
+Spec 见 `requirements.md`（含 §8 评测）。`task.md` T0–T6 / T10–T11 / T20 均已完成。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。
 - 全家族 §1.1：`ArchClass` + `graph_hook`；VL/VLA 见 `multimodal`。
-- NEON：`SimdMode::Neon`（blocked matmul，与 scalar 对拍）；混合云：`ARIA_HYBRID_CLOUD_API_KEY` / `on_device_only`。
+- 评测对齐 `model` `audit_cli`：缺后端 skip、`ci_fail: false`；不启动第三方引擎进程。
+- NEON：`SimdMode::Neon`；混合云：`ARIA_HYBRID_CLOUD_API_KEY` / `on_device_only`。

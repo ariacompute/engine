@@ -1,0 +1,2 @@
+# bench/ uses Python ≥3.10 standard library only (urllib, argparse, unittest).
+# No pip packages required for CI or local report generation.

@@ -217,13 +217,82 @@ engine/
   inference/              # aria-inference
   graph/                  # aria-graph
   kernel/                 # aria-kernel
+  bench/                  # Python 引擎对标评测（report-only）
 ```
 
 - HTTP：**axum**。
 - 混合云：可配置 base URL + `ARIA_HYBRID_CLOUD_API_KEY`；阶段 A 测试用 mock。
 - 权重与多 GB 产物 **不入 Git**。
+- 评测：`bench/` 为 **Python ≥3.10、标准库为主**（对齐 `model` 的 `audit_cli` 风格）；不解析 GGUF；不修改 live `model` / `serve`。
 
-## 8. 审核检查表
+## 8. 引擎对标评测（`bench/`）
+
+> 对齐 `model` 仓 `audit_cli`：**report-only**（默认不因阈值 / 缺后端失败 CI）；产物 **JSON + Markdown**（无 HTML）。
+> 人工锁定（2026-08-03）：交付 JSON+MD；后端 aria + llama.cpp + ollama + vllm；指标性能+质量；覆盖 §1.1 全部家族；实现语言 `bench/` Python。
+
+### 8.1 目标
+
+在统一 **OpenAI 兼容** `POST /v1/chat/completions` 面上，将 **aria-engine** 与主流推理后端对比，覆盖 §1.1 全部家族行，生成可归档评测报告。
+
+### 8.2 后端
+
+| id | 典型服务 | 约定 |
+|----|----------|------|
+| `aria` | `aria-engine serve` | Aria bundle；`--model` 为家族 path 或服务端已加载 id |
+| `llamacpp` | `llama-server` OpenAI 兼容 | 仅 HTTP 调用；本仓不解析 GGUF |
+| `ollama` | Ollama `/v1` | 同上 |
+| `vllm` | vLLM OpenAI 兼容 | 同上 |
+
+- CLI：`--backend <id>=<base_url>`（可重复）；缺省 / 不可达 → 该后端 `status: skipped`（`ci_fail: false`）。
+- 每家族在各后端的 `model` 字段默认取 §1.1 `base_model`；可用 `--model-id <family_path>=<id>` 或配置文件覆盖。
+- **禁止**在 `bench/` 内启动或打包第三方引擎二进制；文档说明外部启动方式即可。
+
+### 8.3 家族覆盖
+
+- 注册表与 §1.1 / `model/tests/test_families.py` `EXPECTED` 一致（27 行）。
+- `kind`：`text` | `vl` | `vla`（与架构类对应；VL/VLA 默认用文本 chat 探针，不支持则 `skipped` + reason）。
+- `--family` 可过滤；默认跑全表。
+
+### 8.4 指标
+
+**性能（每 backend × family × prompt，聚合后写入报告）：**
+
+- `latency_ms`：端到端（非流式）p50 / p95 / mean  
+- `ttft_ms`：若后端支持 SSE 则测首 token；否则 `null` + note  
+- `tokens_per_sec`：`completion_tokens / (latency_s)`（无 usage 则按字符启发式并标注）  
+- `warmup` / `runs`：可配置（默认 warmup=1, runs=3）
+
+**质量：**
+
+- 参考后端：`--ref-backend`（默认优先 `llamacpp`，否则第一个非 `aria` 可用后端）  
+- `token_overlap`：与 `model.common.gen_compare._token_overlap` 同语义（空白分词 Jaccard）  
+- `exact_match`：规范化后字符串全等  
+- 无参考后端时质量段 `skipped`
+
+### 8.5 CLI 与产物
+
+```bash
+python -m bench run \
+  --backend aria=http://127.0.0.1:8080 \
+  --backend llamacpp=http://127.0.0.1:8081 \
+  --backend ollama=http://127.0.0.1:11434 \
+  --backend vllm=http://127.0.0.1:8000 \
+  --max-tokens 64 --warmup 1 --runs 3 \
+  --report ./out/bench_report.json
+```
+
+- 同目录写 `bench_report.md`（或 `--report-md`）。
+- JSON 顶层：`mode: "engine_bench"`、`ci_fail: false`、`families`、`backends`、`results[]`、`summary`。
+- 缺依赖 / 缺服务 / 超时：条目 `skipped` 或 `error`，进程默认 **exit 0**（配置错误 exit 2，对齐 `audit_cli`）。
+
+### 8.6 验收
+
+1. `python -m unittest discover -s bench/tests -t .` 全绿（mock HTTP，无外部引擎）。  
+2. 注册表长度与 §1.1 一致。  
+3. 报告同时产出 `.json` 与 `.md`。  
+4. 四后端适配器存在；未配置 URL 时 skip 而非崩溃。
+
+## 9. 审核检查表
 
 - [x] §1.1 与 `model/requirements.md` §1.1 家族列表一致可接受
 - [x] 仅 `aria-quant-bundle`、禁止 GGUF 可接受
@@ -236,12 +305,13 @@ engine/
 - [x] 五 crate 命名与目录映射可接受
 - [x] 非目标（不动 model/serve、无 Metal/计费、无 Cactus FFI）可接受
 - [x] 验收门禁（`cargo test`、单测覆盖正常/异常）可接受
+- [x] §8 引擎对标评测（JSON+MD；aria/llamacpp/ollama/vllm；性能+质量；全家族；`bench/` Python）可接受
 
-> **人工审核状态**：2026-08-02 **已通过（approved）**。可据本 Spec 生成 / 执行 `task.md`。
+> **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。可据本 Spec 生成 / 执行 `task.md`。
 
-## 9. 参考
+## 10. 参考
 
 - Cactus：<https://github.com/cactus-compute/cactus>
 - `model` 契约：`model/common/bundle.py`、`pack.py`、`quant.py`、`hadamard.py`
-- `model` Spec：`model/requirements.md`
+- `model` Spec：`model/requirements.md`；质量审计：`model/common/audit_cli.py`
 - 调研笔记：桌面 `cactus_compute_research.md`；PPT《技术架构-大模型》

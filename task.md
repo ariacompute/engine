@@ -55,3 +55,12 @@
 - [x] OpenAI：`/v1/audio/transcriptions`、`/v1/embeddings`、chat `tool_calls`、`rag_snippets`
 - [x] NEON vs scalar matmul 对拍（`matmul_blocked` / `SimdMode::Neon`）
 - [x] hybrid `on_device_only` 强制 Local（集成测试）
+
+## 阶段 D — 引擎对标评测（requirements §8）
+
+### T20 — `bench/` Python harness
+- [x] §1.1 全家族注册表（与 model EXPECTED 锁表）
+- [x] 后端适配：`aria` / `llamacpp` / `ollama` / `vllm`（OpenAI chat）
+- [x] 性能：latency p50/p95、tok/s、可选 TTFT；质量：token_overlap + exact_match vs ref
+- [x] CLI：`python -m bench run` → JSON + MD；缺后端 skip；默认 exit 0
+- [x] `unittest` mock；更新 AGENTS / README
