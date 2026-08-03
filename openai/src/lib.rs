@@ -1,6 +1,8 @@
 //! OpenAI-compatible HTTP surface (chat / embeddings / ASR / tools / RAG).
 
-use aria_hybrid::{CloudChatRequest, CloudClient, CloudMessage, RouteDecision, Router};
+use aria_hybrid::{
+    CloudChatRequest, CloudClient, CloudMessage, RouteAction, RouteOutcome, RouteSignal, Router,
+};
 use aria_inference::{rag_pack_context, GenerateOpts, Session, SessionBuilder};
 use aria_kernel::EngineError;
 use axum::extract::State;
@@ -62,6 +64,9 @@ pub struct ChatCompletionRequest {
     /// Optional RAG snippets (stage C).
     #[serde(default)]
     pub rag_snippets: Option<Vec<String>>,
+    /// Optional hybrid session id for sticky Local/Cloud routing.
+    #[serde(default)]
+    pub session_id: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -276,14 +281,24 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
         }
     }
 
-    let conf = if prompt_text.contains("FORCE_CLOUD") {
-        0.0
-    } else {
-        0.95
+    let force_cloud = prompt_text.contains("FORCE_CLOUD");
+    let signal = RouteSignal {
+        confidence: if force_cloud { 0.0 } else { 0.95 },
+        complexity: 0.0,
+        context_tokens: 0,
+        context_limit: u32::MAX,
+        modality_unsupported_locally: false,
+        consecutive_local_failures: 0,
+        privacy_sensitive: false,
+        cloud_available: st.cloud.is_available(),
+        session_id: req.session_id.clone(),
+        force_cloud,
     };
+    let decision = st.router.route(&signal);
+    let started = std::time::Instant::now();
 
-    match st.router.route(conf) {
-        RouteDecision::CloudHandoff => {
+    match decision.action {
+        RouteAction::CloudHandoff => {
             let cloud_req = CloudChatRequest {
                 model: req.model.unwrap_or_else(|| st.model_id.clone()),
                 messages: req
@@ -297,9 +312,23 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                 max_tokens: Some(max_tokens as u32),
             };
             let v = st.cloud.chat(&cloud_req).await?;
+            st.router.record_outcome(RouteOutcome {
+                task_id: format!("chat-{}", now_secs()),
+                session_id: signal.session_id.clone(),
+                action: decision.action,
+                reason: decision.reason.clone(),
+                policy_version: decision.policy_version.clone(),
+                mode: decision.mode,
+                input_tokens: None,
+                output_tokens: None,
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                cloud_handoff: true,
+                user_corrected: None,
+                validation_ok: None,
+            });
             Ok(Json(v).into_response())
         }
-        RouteDecision::Local => {
+        RouteAction::Local => {
             let mut sess = st
                 .session
                 .lock()
@@ -312,6 +341,20 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                     temperature: req.temperature.unwrap_or(0.0),
                 },
             )?;
+            st.router.record_outcome(RouteOutcome {
+                task_id: format!("chat-{}", now_secs()),
+                session_id: signal.session_id.clone(),
+                action: decision.action,
+                reason: decision.reason.clone(),
+                policy_version: decision.policy_version.clone(),
+                mode: decision.mode,
+                input_tokens: Some(prompt.len() as u32),
+                output_tokens: Some(gen.tokens.len() as u32),
+                latency_ms: Some(started.elapsed().as_millis() as u64),
+                cloud_handoff: false,
+                user_corrected: None,
+                validation_ok: None,
+            });
             let created = now_secs();
             if req.stream.unwrap_or(false) {
                 let content = gen.text.clone();
@@ -424,7 +467,7 @@ pub fn build_state_with_family(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aria_hybrid::MockMode;
+    use aria_hybrid::{MockMode, ParetoMode, POLICY_VERSION};
     use aria_inference::fixture::write_tiny_q4_bundle;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
@@ -753,5 +796,299 @@ mod tests {
         assert_eq!(res.status(), StatusCode::BAD_GATEWAY);
         let v = body_json(res).await;
         assert_eq!(v["error"]["type"], "cloud_error");
+    }
+
+    #[tokio::test]
+    async fn hybrid_records_outcome_local_and_cloud() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let state = build_state(
+            dir.path(),
+            Router::new(0.5).unwrap(),
+            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"from-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        let router = state.router.clone();
+        let svc = app(state);
+
+        let res = svc
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"stay local"}],
+                            "max_tokens": 2,
+                            "session_id": "out-1"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(router.outcomes.len(), 1);
+        let local = &router.outcomes.recent(1)[0];
+        assert!(!local.cloud_handoff);
+        assert_eq!(local.session_id.as_deref(), Some("out-1"));
+        assert_eq!(local.policy_version, POLICY_VERSION);
+        assert!(local.input_tokens.unwrap_or(0) > 0);
+        assert!(local.output_tokens.unwrap_or(0) > 0);
+
+        let res = svc
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"FORCE_CLOUD"}],
+                            "max_tokens": 2,
+                            "session_id": "out-1"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        assert_eq!(router.outcomes.len(), 2);
+        let cloud = &router.outcomes.recent(1)[0];
+        assert!(cloud.cloud_handoff);
+        assert_eq!(cloud.action, aria_hybrid::RouteAction::CloudHandoff);
+    }
+
+    #[tokio::test]
+    async fn hybrid_session_sticky_then_force_upgrade() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let state = build_state(
+            dir.path(),
+            Router::new(0.5).unwrap(),
+            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"from-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        let svc = app(state);
+
+        // Seed session as Local.
+        let res = svc
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"hello"}],
+                            "max_tokens": 2,
+                            "session_id": "stick-http"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_ne!(v["choices"][0]["message"]["content"], "from-cloud");
+
+        // Soft path without FORCE_CLOUD stays local (confidence 0.95).
+        let res = svc
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"again"}],
+                            "max_tokens": 2,
+                            "session_id": "stick-http"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_ne!(v["choices"][0]["message"]["content"], "from-cloud");
+
+        // Hard FORCE_CLOUD upgrades the sticky session.
+        let res = svc
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"FORCE_CLOUD now"}],
+                            "max_tokens": 2,
+                            "session_id": "stick-http"
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["choices"][0]["message"]["content"], "from-cloud");
+    }
+
+    #[tokio::test]
+    async fn hybrid_intelligence_mode_handoff_without_force() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        // threshold 0.8 + Intelligence → effective 1.0 → conf 0.95 handoff
+        let router = Router::new(0.8)
+            .unwrap()
+            .with_mode(ParetoMode::Intelligence);
+        let state = build_state(
+            dir.path(),
+            router,
+            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"intel-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        let svc = app(state);
+        let res = svc
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"ordinary question"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["choices"][0]["message"]["content"], "intel-cloud");
+    }
+
+    #[tokio::test]
+    async fn hybrid_cost_mode_stays_local_when_balance_would_handoff() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        // With FORCE_CLOUD, Cost mode still handoffs (force is hard). Use non-force +
+        // high threshold via Cost: threshold 0.5 Cost → 0.25; conf 0.95 → local.
+        // Contrast: Balance threshold 0.99 → conf 0.95 handoff.
+        let balance = build_state(
+            dir.path(),
+            Router::new(0.99).unwrap(),
+            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"balance-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        let res = app(balance)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"q"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v = body_json(res).await;
+        assert_eq!(v["choices"][0]["message"]["content"], "balance-cloud");
+
+        let cost = build_state(
+            dir.path(),
+            Router::new(0.99).unwrap().with_mode(ParetoMode::Cost),
+            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"cost-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        // Cost effective = 0.495; conf 0.95 → Local
+        let res = app(cost)
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"q"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        let v = body_json(res).await;
+        assert_ne!(v["choices"][0]["message"]["content"], "cost-cloud");
+    }
+
+    #[tokio::test]
+    async fn hybrid_unavailable_cloud_stays_local_on_force() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        // No mock, no API key → cloud_available=false
+        let state = build_state(
+            dir.path(),
+            Router::new(0.5).unwrap(),
+            CloudClient::from_env("http://127.0.0.1:9"),
+        )
+        .unwrap();
+        assert!(!state.cloud.is_available());
+        let svc = app(state);
+        let res = svc
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"FORCE_CLOUD please"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        // Local path succeeds rather than Cloud error.
+        let v = body_json(res).await;
+        assert!(v["choices"][0]["message"]["content"].is_string());
     }
 }

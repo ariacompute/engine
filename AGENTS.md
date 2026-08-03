@@ -17,7 +17,7 @@
 
 ## 目录
 - `openai/`：`aria-openai` — HTTP（chat / audio·embeddings·tools）
-- `hybrid/`：`aria-hybrid` — 置信度路由、`cloud_handoff`、云端 OpenAI 客户端
+- `hybrid/`：`aria-hybrid` — 信号→投影→决策、Pareto 模式、会话粘性、`cloud_handoff`、Outcome
 - `inference/`：`aria-inference` — Bundle 加载、Prefill/Decode、家族注册表
 - `graph/`：`aria-graph` — Op DAG、BufferPool、mmap / external 零拷贝
 - `kernel/`：`aria-kernel` — matmul / attention / norm / RoPE / dequant / FWHT
@@ -38,10 +38,10 @@
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8 评测）。`task.md` T0–T6 / T10–T11 / T20 均已完成。
+Spec 见 `requirements.md`（含 §8 评测）。`task.md` T0–T6 / T10–T11 / T20 / **T21** 均已完成。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。
 - 全家族 §1.1：`ArchClass` + `graph_hook`；VL/VLA 见 `multimodal`。
 - 评测对齐 `model` `audit_cli`：缺后端 skip、`ci_fail: false`；不启动第三方引擎进程。
-- NEON：`SimdMode::Neon`；混合云：`ARIA_HYBRID_CLOUD_API_KEY` / `on_device_only`。
+- NEON：`SimdMode::Neon`；混合云：`ARIA_HYBRID_CLOUD_API_KEY` / `ARIA_HYBRID_MODE` / `on_device_only`。

@@ -34,6 +34,12 @@
 - [x] `CloudClient`（reqwest）+ `ARIA_HYBRID_CLOUD_API_KEY`
 - [x] mock：成功 / 超时或非 2xx → `Cloud`
 
+### T21 — `aria-hybrid` P0/P1（信号路由）
+- [x] P0：`RouteDecision`（reason / policy_version / fallback）+ `ParetoMode` + 硬约束 + 会话粘性 + `RouteOutcome`/`OutcomeStore`
+- [x] P1：`RouteSignal` → `ProjectionBand` → 决策；单测覆盖模式/粘性/投影/Outcome
+- [x] `aria-openai` 接线 `route(&RouteSignal)`；`FORCE_CLOUD` / `on_device_only` 集成测仍绿
+- [x] 补测：边界阈值、force/modality 无云、会话隔离、serde、Outcome HTTP、Pareto 模式、云不可用降级
+
 ### T5 — `aria-openai`
 - [x] axum：`GET /v1/models`、`POST /v1/chat/completions`（JSON + SSE）
 - [x] 接 hybrid 路由；阶段 A 拒 ASR/embeddings → `Unsupported`

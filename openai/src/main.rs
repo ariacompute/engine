@@ -1,7 +1,15 @@
-use aria_hybrid::{CloudClient, Router};
+use aria_hybrid::{CloudClient, ParetoMode, Router};
 use aria_openai::{app, build_state};
 use std::env;
 use std::net::SocketAddr;
+
+fn parse_mode(raw: &str) -> ParetoMode {
+    match raw.to_ascii_lowercase().as_str() {
+        "cost" => ParetoMode::Cost,
+        "intelligence" | "intel" => ParetoMode::Intelligence,
+        _ => ParetoMode::Balance,
+    }
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -26,7 +34,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(0.0);
-    let mut router = Router::new(threshold)?;
+    let mode = env::var("ARIA_HYBRID_MODE")
+        .ok()
+        .map(|s| parse_mode(&s))
+        .unwrap_or_default();
+    let mut router = Router::new(threshold)?.with_mode(mode);
     if env::var("ARIA_ON_DEVICE_ONLY").ok().as_deref() == Some("1") {
         router.on_device_only = true;
     }

@@ -67,7 +67,7 @@
 | 2 | **graph** | Layer → Op → Tensor IR；`BufferPool`；mmap / `external` 零拷贝输入；融合节点 **HDM**（Hadamard + Dequant + MatMul）；阶段 A：LLM decode 所需 ops 可调度；图序列化可选（阶段 B+） |
 | 3 | **inference** | `load_bundle`（mmap `weight.bin`）；KV cache；greedy / 基础 sampling；tokenizer；§1.1 家族注册与图构建钩子；阶段 A：`gemma-4-e2b-it` **tiny q4** 黄金路径；阶段 B/C：见上表 |
 | 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排 |
-| 5 | **hybrid** | 置信度阈值 → `Local` \| `CloudHandoff`；云端 OpenAI 兼容 POST；环境变量 `ARIA_HYBRID_CLOUD_API_KEY` + 可配置 base URL；阶段 A：mock + 单测；阶段 C：on-device-only 锁定 |
+| 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；`ARIA_HYBRID_CLOUD_API_KEY` + base URL；阶段 A：mock + 单测；`on_device_only` / privacy 强制 Local |
 | 6 | **反量化语义** | 与 Python `model.common.quant.dequantize` 一致：**rotated-space** 重建；推理优先融合 HDM，**不**要求加载时整表逆 Hadamard 物化 |
 | 7 | **HTTP** | **axum** 实现本地 serve |
 
@@ -110,9 +110,18 @@
 
 ### 3.5 `aria-hybrid`
 
-- `Router::route(signal) -> RouteDecision::{Local, CloudHandoff}`。
-- `CloudClient`：OpenAI 兼容 HTTP；读取 `ARIA_HYBRID_CLOUD_API_KEY`；超时与非 2xx → `EngineError::Cloud`。
-- 阶段 A：阈值以下走 mock；单测覆盖 Local / Handoff / Cloud 失败。
+- **P0**
+  - `RouteAction::{Local, CloudHandoff}`；`RouteDecision` 含 `action` / `reason` / `policy_version` / `fallback` / `projection` / `mode`。
+  - `ParetoMode::{Cost, Balance, Intelligence}`：调节有效置信度阈值（Cost 更偏 Local，Intelligence 更易 Handoff）。
+  - 硬约束：`on_device_only`、`privacy_sensitive` → 强制 Local；`!cloud_available` 时不得 Handoff；本地不支持 modality / 上下文超限且云可用 → PreferCloud。
+  - 会话粘性：同 `session_id` 默认保持上次 `action`；仅硬约束或 `consecutive_local_failures >= upgrade_after_failures` 允许 Local→Cloud 升级。
+  - `RouteOutcome` + `OutcomeStore`（进程内）：记录 action、reason、tokens、latency、handoff、可选 user_corrected。
+- **P1（薄信号面）**
+  - `RouteSignal`：`confidence`、`complexity`、`context_tokens`/`context_limit`、`modality_unsupported_locally`、`consecutive_local_failures`、`privacy_sensitive`、`cloud_available`、`session_id`、`force_cloud`。
+  - `ProjectionBand::{MustLocal, LocalOk, PreferCloud}`；决策由投影 + 模式阈值合成。
+- `Router::route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。
+- `CloudClient`：OpenAI 兼容 HTTP；`ARIA_HYBRID_CLOUD_API_KEY`；超时与非 2xx → `EngineError::Cloud`。
+- 单测：模式阈值、硬约束、粘性升级、投影、Outcome、Cloud mock 成功/失败。
 
 ### 3.6 错误类型
 
@@ -195,7 +204,7 @@
 3. 反量化与 Python `dequantize` 参考在约定误差界内（RMSE 上界写入单测常量，与 `model` 高斯/tiny 实践同量级）。
 4. Prefill + decode 产出非空 token 序列（greedy 可复现）。
 5. `POST /v1/chat/completions` 非流式与 SSE 均可测通。
-6. Hybrid：置信度低于阈值时 `CloudHandoff`；mock 云端成功与失败路径单测覆盖。
+6. Hybrid：低置信 / PreferCloud 时 `CloudHandoff`（带 `reason`）；Pareto 模式与粘性单测；mock 云端成功与失败路径覆盖。
 7. §1.1 注册表在代码中完整列出；非阶段 A 家族返回明确 `UnsupportedFamily` / 门控，不得 panic。
 
 ### 6.3 阶段 B / C（后续验收，写入 Spec 以免范围漂移）
