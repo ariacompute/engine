@@ -30,3 +30,11 @@ python -m bench run \
 ```
 
 可用 `--model-id family=path=id` 或 `backend:family=id` 覆盖模型 id。aria 默认使用家族 path；其余后端默认使用 HF `base_model`。
+
+## 工程规范
+
+本仓库遵循 Harness Engineering 理念：
+
+- [`AGENTS.md`](AGENTS.md)：Agent 工程上下文入口与目录索引
+- [`requirements.md`](requirements.md)：需求规格（功能边界/异常/验收标准，人工审核制）
+- [`task.md`](task.md)：实施任务清单

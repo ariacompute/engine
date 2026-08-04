@@ -30,3 +30,11 @@ python -m bench run \
 ```
 
 Override model ids with `--model-id family=path=id` or `backend:family=id`. Default aria model id is the family path; others use HF `base_model`.
+
+## Engineering Conventions
+
+This repository follows the Harness Engineering philosophy:
+
+- [`AGENTS.md`](AGENTS.md): Agent engineering context entry and directory index
+- [`requirements.md`](requirements.md): Requirements spec (feature boundaries/exceptions/acceptance criteria, human-review-gated)
+- [`task.md`](task.md): Implementation task checklist
