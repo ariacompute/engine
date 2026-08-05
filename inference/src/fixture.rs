@@ -15,6 +15,29 @@ fn write_f16_slice(buf: &mut Vec<u8>, data: &[f32]) {
     }
 }
 
+fn blocked_hadamard_meta(k: usize, seed: i64) -> Value {
+    let mut blocks = Vec::new();
+    let mut rem = k;
+    let mut start = 0usize;
+    while rem > 0 {
+        let mut b = 1usize;
+        while (b << 1) <= rem {
+            b <<= 1;
+        }
+        blocks.push(json!({ "start": start, "size": b }));
+        start += b;
+        rem -= b;
+    }
+    json!({
+        "applied": true,
+        "axis": 0,
+        "seed": seed,
+        "mode": "blocked",
+        "blocks": blocks,
+        "row_pad": 0
+    })
+}
+
 /// Relative RMSE: sqrt(mean((a-b)^2)) / (rms(a)+eps). Matches model `test_quant._rel_rmse`.
 pub fn rel_rmse(a: &[f32], b: &[f32]) -> f32 {
     assert_eq!(a.len(), b.len());
@@ -103,7 +126,7 @@ pub fn make_group_quant_tensor(
         packed_indices: packed,
         codebook,
         codebook_shape: vec![num_groups, kc],
-        hadamard: json!({ "applied": true, "axis": 0, "seed": 0 }),
+        hadamard: blocked_hadamard_meta(k, 0),
     }
 }
 
@@ -166,7 +189,7 @@ pub fn make_channel_quant_tensor(
         packed_indices: packed,
         codebook,
         codebook_shape: vec![num_groups, n, kc],
-        hadamard: json!({ "applied": true, "axis": 0, "seed": 0 }),
+        hadamard: blocked_hadamard_meta(k, 0),
     }
 }
 
@@ -246,7 +269,7 @@ impl Writer {
                 "shape": [k, n],
                 "row_pad": 0,
                 "codebook_share": "group",
-                "hadamard": { "applied": true, "axis": 0, "seed": 0, "row_pad": 0 },
+                "hadamard": blocked_hadamard_meta(k, 0),
                 "offsets": {
                     "packed_indices": [pi_start, pi_len],
                     "codebook": [cb_start, cb_len]
@@ -349,7 +372,7 @@ pub fn write_tiny_q4_bundle(out: &Path) -> Result<(f32, std::path::PathBuf), Eng
     fs::write(out.join("weight.bin"), &w.bin)?;
     let config = json!({
         "format": "aria-quant-bundle",
-        "format_version": 1,
+        "format_version": 2,
         "quantization": "q4",
         "group_size_default": gs,
         "hadamard_seed": 0,

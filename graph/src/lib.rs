@@ -1,6 +1,6 @@
 //! Zero-copy compute graph: Layer → Op → TensorView + BufferPool.
 
-use aria_kernel::{linear, matmul_dispatch, EngineError, SimdMode};
+use aria_kernel::{hadamard_blocked_vec, linear, matmul_dispatch, EngineError, SimdMode};
 use std::sync::Arc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -129,8 +129,12 @@ pub enum Op {
         b_rows: usize,
         b_cols: usize,
     },
-    /// Fused Hadamard + Dequant + MatMul placeholder: dequantized W already provided as input1.
-    HdmLinear { out_f: usize, in_f: usize },
+    /// Fused path: matmul with rotated W then blocked unrotate on output features.
+    HdmLinear {
+        out_f: usize,
+        in_f: usize,
+        hadamard_seed: Option<i64>,
+    },
 }
 
 pub struct Node {
@@ -167,7 +171,7 @@ impl Graph {
     pub fn execute(&mut self, _pool: &mut BufferPool) -> Result<(), EngineError> {
         for node in &self.nodes {
             match &node.op {
-                Op::Linear { out_f, in_f } | Op::HdmLinear { out_f, in_f } => {
+                Op::Linear { out_f, in_f } => {
                     let x = self.tensors[node.inputs[0]]
                         .as_ref()
                         .ok_or_else(|| EngineError::Format("missing input tensor".into()))?
@@ -181,6 +185,33 @@ impl Graph {
                         vec![*out_f]
                     } else {
                         vec![x.len() / *in_f, *out_f]
+                    };
+                    self.tensors[node.output] = Some(TensorView::from_f32(y, shape));
+                }
+                Op::HdmLinear {
+                    out_f,
+                    in_f,
+                    hadamard_seed,
+                } => {
+                    let x = self.tensors[node.inputs[0]]
+                        .as_ref()
+                        .ok_or_else(|| EngineError::Format("missing input tensor".into()))?
+                        .to_f32_vec()?;
+                    let w = self.tensors[node.inputs[1]]
+                        .as_ref()
+                        .ok_or_else(|| EngineError::Format("missing weight tensor".into()))?
+                        .to_f32_vec()?;
+                    // y = W_rot @ x  (or batched), then blocked unrotate on out features.
+                    let mut y = linear(&x, &w, *out_f, *in_f)?;
+                    let batch = y.len() / *out_f;
+                    for b in 0..batch {
+                        let sl = b * *out_f..(b + 1) * *out_f;
+                        hadamard_blocked_vec(&mut y[sl], *hadamard_seed, true)?;
+                    }
+                    let shape = if x.len() == *in_f {
+                        vec![*out_f]
+                    } else {
+                        vec![batch, *out_f]
                     };
                     self.tensors[node.output] = Some(TensorView::from_f32(y, shape));
                 }
@@ -213,6 +244,42 @@ impl Graph {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hdm_linear_matches_orig_weight() {
+        use aria_kernel::hadamard_blocked_rows;
+        let out_f = 10usize;
+        let in_f = 4usize;
+        let seed = Some(3i64);
+        let mut w_orig: Vec<f32> = (0..out_f * in_f)
+            .map(|i| (i as f32) * 0.07 - 0.3)
+            .collect();
+        let x = vec![0.5f32, -0.2, 0.1, 0.3];
+        let y_ref = linear(&x, &w_orig, out_f, in_f).unwrap();
+
+        // Rotate weight rows for HDM path.
+        hadamard_blocked_rows(&mut w_orig, out_f, in_f, seed, false).unwrap();
+        let mut g = Graph::new(SimdMode::Scalar);
+        let xi = g.push_tensor(TensorView::from_f32(x, vec![in_f]));
+        let wi = g.push_tensor(TensorView::from_f32(w_orig, vec![out_f, in_f]));
+        let yi = g.push_tensor(TensorView::from_f32(vec![0.0; out_f], vec![out_f]));
+        g.add_node(Node {
+            op: Op::HdmLinear {
+                out_f,
+                in_f,
+                hadamard_seed: seed,
+            },
+            inputs: vec![xi, wi],
+            output: yi,
+        });
+        let mut pool = BufferPool::new();
+        g.execute(&mut pool).unwrap();
+        let y = g.tensors[yi].as_ref().unwrap().to_f32_vec().unwrap();
+        assert_eq!(y.len(), y_ref.len());
+        for (a, b) in y.iter().zip(y_ref.iter()) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
 
     #[test]
     fn linear_dispatch() {

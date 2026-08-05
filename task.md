@@ -29,6 +29,12 @@
 - [x] `Session`：prefill + decode，greedy 产出非空 tokens
 - [x] 反量化 RMSE 有界单测
 
+### T22 — Blocked Hadamard（与 model 协议 B）
+- [x] kernel：`pow2_tile` + portable signs + blocked FWHT forward/inverse
+- [x] bundle：`format_version` 1|2；fixture v2 `mode=blocked`
+- [x] graph：`HdmLinear` = Gemm(W_rot) 后对 out 维 blocked unrotate
+- [x] 单测 roundtrip / HDM；README
+
 ### T4 — `aria-hybrid`
 - [x] `Router` + 置信度阈值 → `Local` / `CloudHandoff`
 - [x] `CloudClient`（reqwest）+ `ARIA_HYBRID_CLOUD_API_KEY`

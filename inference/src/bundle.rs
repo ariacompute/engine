@@ -164,7 +164,7 @@ pub fn load_bundle(path: impl AsRef<Path>) -> Result<Bundle, EngineError> {
             cfg.format
         )));
     }
-    if cfg.format_version != 1 {
+    if cfg.format_version != 1 && cfg.format_version != 2 {
         return Err(EngineError::Format(format!(
             "unsupported format_version {}",
             cfg.format_version

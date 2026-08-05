@@ -209,6 +209,9 @@ pub fn fwht(x: &mut [f32]) -> Result<(), EngineError> {
             "fwht length must be power of two".into(),
         ));
     }
+    if n == 1 {
+        return Ok(());
+    }
     let mut h = 1usize;
     while h < n {
         for i in (0..n).step_by(h * 2) {
@@ -226,6 +229,109 @@ pub fn fwht(x: &mut [f32]) -> Result<(), EngineError> {
         *v *= scale;
     }
     Ok(())
+}
+
+/// Greedy largest-pow2 tiling of row count (e.g. 10 → [8, 2]).
+pub fn pow2_tile_sizes(k: usize) -> Result<Vec<usize>, EngineError> {
+    if k == 0 {
+        return Err(EngineError::ShapeMismatch(
+            "pow2_tile_sizes expects k>=1".into(),
+        ));
+    }
+    let mut sizes = Vec::new();
+    let mut rem = k;
+    while rem > 0 {
+        let mut b = 1usize;
+        while (b << 1) <= rem {
+            b <<= 1;
+        }
+        sizes.push(b);
+        rem -= b;
+    }
+    Ok(sizes)
+}
+
+/// Portable ±1 signs matching Python `portable_block_signs`.
+pub fn portable_block_signs(seed: i64, start: usize, size: usize) -> Vec<f32> {
+    let mut signs = vec![0.0f32; size];
+    let mut state = (seed as u64) ^ ((start as u64).wrapping_mul(0x9E3779B97F4A7C15));
+    for s in signs.iter_mut() {
+        state = state.wrapping_add(0x9E3779B97F4A7C15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58476D1CE4E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D049BB133111EB);
+        z ^= z >> 31;
+        *s = if (z & 1) == 0 { 1.0 } else { -1.0 };
+    }
+    signs
+}
+
+/// Apply blocked Hadamard on rows of a row-major `[rows, cols]` matrix.
+/// `inverse=false` → per-block `H@S`; `inverse=true` → `S@H`.
+pub fn hadamard_blocked_rows(
+    data: &mut [f32],
+    rows: usize,
+    cols: usize,
+    seed: Option<i64>,
+    inverse: bool,
+) -> Result<(), EngineError> {
+    if rows == 0 || cols == 0 || data.len() != rows * cols {
+        return Err(EngineError::ShapeMismatch(
+            "hadamard_blocked_rows shape mismatch".into(),
+        ));
+    }
+    let sizes = pow2_tile_sizes(rows)?;
+    let mut start = 0usize;
+    for &sz in &sizes {
+        let signs = seed.map(|s| portable_block_signs(s, start, sz));
+        // Process column-chunks to bound stack/temp if needed; here full width.
+        let mut work = vec![0.0f32; sz * cols];
+        for r in 0..sz {
+            let src = (start + r) * cols;
+            work[r * cols..(r + 1) * cols].copy_from_slice(&data[src..src + cols]);
+        }
+        // Apply along axis 0 for each column: collect column into contiguous buffer.
+        let mut colbuf = vec![0.0f32; sz];
+        for c in 0..cols {
+            for r in 0..sz {
+                colbuf[r] = work[r * cols + c];
+            }
+            if let Some(ref sg) = signs {
+                if !inverse {
+                    for r in 0..sz {
+                        colbuf[r] *= sg[r];
+                    }
+                    fwht(&mut colbuf)?;
+                } else {
+                    fwht(&mut colbuf)?;
+                    for r in 0..sz {
+                        colbuf[r] *= sg[r];
+                    }
+                }
+            } else if sz > 1 {
+                fwht(&mut colbuf)?;
+            }
+            for r in 0..sz {
+                work[r * cols + c] = colbuf[r];
+            }
+        }
+        for r in 0..sz {
+            let dst = (start + r) * cols;
+            data[dst..dst + cols].copy_from_slice(&work[r * cols..(r + 1) * cols]);
+        }
+        start += sz;
+    }
+    Ok(())
+}
+
+/// Blocked unrotate on a length-`rows` vector (treat as `[rows, 1]`).
+pub fn hadamard_blocked_vec(
+    x: &mut [f32],
+    seed: Option<i64>,
+    inverse: bool,
+) -> Result<(), EngineError> {
+    let rows = x.len();
+    hadamard_blocked_rows(x, rows, 1, seed, inverse)
 }
 
 /// Codebook lookup dequant (group share): indices [k_work, n], codebook [g, kc].
@@ -375,6 +481,36 @@ mod tests {
         for (a, b) in x.iter().zip(orig.iter()) {
             assert!((a - b).abs() < 1e-4);
         }
+    }
+
+    #[test]
+    fn pow2_tiles() {
+        assert_eq!(pow2_tile_sizes(10).unwrap(), vec![8, 2]);
+        assert_eq!(pow2_tile_sizes(3072).unwrap(), vec![2048, 1024]);
+        assert_eq!(pow2_tile_sizes(64).unwrap(), vec![64]);
+    }
+
+    #[test]
+    fn blocked_roundtrip_non_pow2() {
+        let rows = 10usize;
+        let cols = 3usize;
+        let mut w: Vec<f32> = (0..rows * cols).map(|i| (i as f32) * 0.1 - 0.5).collect();
+        let orig = w.clone();
+        hadamard_blocked_rows(&mut w, rows, cols, Some(7), false).unwrap();
+        hadamard_blocked_rows(&mut w, rows, cols, Some(7), true).unwrap();
+        for (a, b) in w.iter().zip(orig.iter()) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn portable_signs_stable() {
+        let a = portable_block_signs(0, 0, 8);
+        let b = portable_block_signs(0, 0, 8);
+        assert_eq!(a, b);
+        // Golden from model.common.hadamard.portable_block_signs(0, 0, 8)
+        let golden = [-1.0f32, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+        assert_eq!(a, golden);
     }
 
     #[test]

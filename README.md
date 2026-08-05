@@ -11,7 +11,7 @@ cargo test
 cargo run -p aria-openai --bin aria-engine -- serve --model /path/to/aria-bundle
 ```
 
-Weights: `aria-quant-bundle` (`config.json` + `weight.bin`).
+Weights: `aria-quant-bundle` v1|**v2** (`config.json` + `weight.bin`). v2 uses **blocked Hadamard** (greedy pow2 row tiles; HDM unrotates output features). Re-quantize model bundles after the protocol change.
 
 ## Bench
 

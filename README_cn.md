@@ -11,7 +11,7 @@ cargo test
 cargo run -p aria-openai --bin aria-engine -- serve --model /path/to/aria-bundle
 ```
 
-权重：`aria-quant-bundle`（`config.json` + `weight.bin`）。
+权重：`aria-quant-bundle` v1|**v2**（`config.json` + `weight.bin`）。v2 为 **blocked Hadamard**（greedy 2 幂行分块；HDM 对输出维做 blocked unrotate）。协议变更后需重量化 model 产物。
 
 ## 评测
 

@@ -13,7 +13,7 @@
 - **位宽**：消费 `q1`–`q4` / `q8` / `q1.5` / `q2.54` / `q3.26`（与 `model` 产物一致）。
 - **模型覆盖**：§1.1 全部家族（与 `model/requirements.md` §1.1 对齐）。
 - **SIMD**：主路径 **ARM NEON**（`aarch64`）；可移植 **scalar** 覆盖 x86_64（WSL/CI）；AVX2 为后续优化，不阻塞 MVP。
-- **不动** live `model` / `serve` 源码。
+- 本增量与 **model** 协同 blocked Hadamard。
 
 ### 1.1 家族注册表（推理目标）
 
@@ -73,11 +73,10 @@
 
 ### 2.1 非目标
 
-- 修改 live `model` / `serve`
 - 解析或导出 **GGUF**；Cactus `CACT` / `.graph` 等专有二进制格式
 - 通过 FFI 嵌入 Cactus C++（本仓为 **Rust 原生**重写，仅借鉴架构）
 - Metal / Vulkan / ANE / NPU（roadmap，不进本 Spec 验收）
-- 生产计费、云端密钥校验服务（`serve` 侧未接线部分不在本仓实现）
+- 生产计费、云端密钥校验服务
 - 剪枝 / 蒸馏 / 对称 int8 旁路量化
 
 ## 3. API 边界
@@ -151,21 +150,23 @@
 | 字段 | 类型 | 约束 |
 |------|------|------|
 | `format` | string | 必须 `"aria-quant-bundle"` |
-| `format_version` | int | `1` |
+| `format_version` | int | `1`（legacy pad-crop）或 **`2`（blocked Hadamard）** |
 | `quantization` | string | `q1`…`q4` / `q8` / `q1.5` / `q2.54` / `q3.26` |
 | `group_size_default` | int | 通常 32 |
-| `hadamard_seed` | int \| null | 全局种子；符号对角由 seed 再生 |
+| `hadamard_seed` | int \| null | 全局种子；**v2** 用 portable SplitMix 派生每块 ±1（与 `model.common.hadamard.portable_block_signs` 一致） |
 | `model` | object | 见下 |
 | `tensors` | object | name → 张量元数据 |
 | 可选 | `bit_policy` 等 | `q1.5` 等 extras |
 
 **`model` 对象（常用）**：`hidden_size`、`num_layers`、`num_attention_heads`、`num_kv_heads`、`intermediate_size`、`vocab_size`、`context_length`、`rope_theta`。
 
-**张量 `kind == "codebook"`**：`bits`、`group_size`、`shape` `[K,N]`、`row_pad`、`codebook_share`（`group`\|`channel`）、`hadamard`、`offsets`（`packed_indices`、`codebook` 必填；legacy `input_scale*` / `norms` 可选）。
+**张量 `kind == "codebook"`**：`bits`、`group_size`、`shape` `[K,N]`、`row_pad`（**仅** group 对齐）、`codebook_share`（`group`\|`channel`）、`hadamard`（v2：`mode=blocked`、`blocks=[{start,size},…]`、`applied`、`seed`）、`offsets`（`packed_indices`、`codebook` 必填；legacy `input_scale*` / `norms` 可选）。
 
 **张量 `kind == "raw"`**：`dtype` `f16`\|`f32`、`shape`、`offsets.data`。
 
 **`weight.bin`**：无文件头；按 `offsets` 的 `[start, length]` 切片。索引：bits 1–4 为 **LSB-first** 位打包；bits 8 为每索引 1 字节 `uint8`。码本：fp16，C-order；`group` → `(G, Kc)`，`channel` → `(G, N, Kc)`，`Kc = 2^bits`。
+
+**Hadamard / HDM（v2）**：权重存旋转域；`HdmLinear` 先 `W_rot @ x` 再对输出维做 blocked **unrotate**（`S@H`），等价原域 `W@x`。禁止依赖全局 pad→crop。
 
 **tokenizer 侧车**（若存在）：`tokenizer.json`、`tokenizer.model`、`tokenizer_config.json`、`special_tokens_map.json`、`vocab.json`、`merges.txt`。
 
@@ -232,7 +233,7 @@ engine/
 - HTTP：**axum**。
 - 混合云：可配置 base URL + `ARIA_HYBRID_CLOUD_API_KEY`；阶段 A 测试用 mock。
 - 权重与多 GB 产物 **不入 Git**。
-- 评测：`bench/` 为 **Python ≥3.10、标准库为主**（对齐 `model` 的 `audit_cli` 风格）；不解析 GGUF；不修改 live `model` / `serve`。
+- 评测：`bench/` 为 **Python ≥3.10、标准库为主**（对齐 `model` 的 `audit_cli` 风格）；不解析 GGUF。本增量与 **model** 协同 blocked Hadamard（`format_version=2`）。
 
 ## 8. 引擎对标评测（`bench/`）
 
@@ -312,7 +313,7 @@ python -m bench run \
 - [x] Kernel：NEON 主路径 + x86 scalar CI 可接受
 - [x] 反量化 = rotated-space + 融合 HDM、不强制加载期逆 H 可接受
 - [x] 五 crate 命名与目录映射可接受
-- [x] 非目标（不动 model/serve、无 Metal/计费、无 Cactus FFI）可接受
+- [x] 非目标（不动 model、无 Metal/计费、无 Cactus FFI）可接受
 - [x] 验收门禁（`cargo test`、单测覆盖正常/异常）可接受
 - [x] §8 引擎对标评测（JSON+MD；aria/llamacpp/ollama/vllm；性能+质量；全家族；`bench/` Python）可接受
 
