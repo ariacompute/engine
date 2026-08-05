@@ -9,7 +9,7 @@
 用 **Rust** 实现端侧推理引擎，消费 `model` 仓导出的 **Aria model bundle**，提供本地推理与 OpenAI 兼容 HTTP，并在置信度不足时路由至云端。
 
 - **五层产品面**：`openai` / `inference` / `graph` / `kernel` / `hybrid`（与仓库目录 1:1，Cargo workspace crate：`aria-openai` / `aria-inference` / `aria-graph` / `aria-kernel` / `aria-hybrid`）。
-- **权重格式**：仅 `aria-quant-bundle`（`format_version: 1`）— `config.json` + `weight.bin` + tokenizer 侧车；**禁止**解析 / 导出 GGUF 与 Cactus 专有权重格式。
+- **权重格式**：仅 `aria-quant-bundle`（`format_version: 1|2`）— `config.json` + `weight.bin` + tokenizer 侧车；**禁止**解析 / 导出 GGUF 与 Cactus 专有权重格式。
 - **位宽**：消费 `q1`–`q4` / `q8` / `q1.5` / `q2.54` / `q3.26`（与 `model` 产物一致）。
 - **模型覆盖**：§1.1 全部家族（与 `model/requirements.md` §1.1 对齐）。
 - **SIMD**：主路径 **ARM NEON**（`aarch64`）；可移植 **scalar** 覆盖 x86_64（WSL/CI）；AVX2 为后续优化，不阻塞 MVP。
@@ -95,7 +95,7 @@
 
 ### 3.3 `aria-inference`
 
-- `load_bundle(path) -> Result<Bundle, EngineError>`：校验 `format == "aria-quant-bundle"` 且 `format_version == 1`。
+- `load_bundle(path) -> Result<Bundle, EngineError>`：校验 `format == "aria-quant-bundle"` 且 `format_version` ∈ `{1, 2}`。
 - `Session` / `SessionBuilder` / `GenerateOpts` / `generate`（prefill + decode）。
 - `Family` 注册表：覆盖 §1.1 每一行；未知家族 → `UnsupportedFamily`。
 - 阶段 A CLI / 库入口可加载 tiny 目录并产出 token 序列。

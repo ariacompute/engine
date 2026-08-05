@@ -22,7 +22,7 @@
 - [x] 单测：dispatch + 维度错误
 
 ### T3 — `aria-inference`（bundle + session + 家族）
-- [x] `load_bundle`：`aria-quant-bundle` v1；mmap `weight.bin`；codebook/raw
+- [x] `load_bundle`：`aria-quant-bundle` v1|v2；mmap `weight.bin`；codebook/raw
 - [x] LSB unpack 1–4 / u8 for 8；`dequantize` rotated-space
 - [x] §1.1 `Family` 注册表完整；非阶段 A → `UnsupportedFamily`
 - [x] 测试夹具 tiny q4 bundle（`fixture::write_tiny_q4_bundle`）
@@ -33,7 +33,7 @@
 - [x] kernel：`pow2_tile` + portable signs + blocked FWHT forward/inverse
 - [x] bundle：`format_version` 1|2；fixture v2 `mode=blocked`
 - [x] graph：`HdmLinear` = Gemm(W_rot) 后对 out 维 blocked unrotate
-- [x] 单测 roundtrip / HDM；README
+- [x] 单测：kernel golden/edge、HDM batch、bundle v1|v2|reject-v3；README
 
 ### T4 — `aria-hybrid`
 - [x] `Router` + 置信度阈值 → `Local` / `CloudHandoff`

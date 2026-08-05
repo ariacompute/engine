@@ -402,6 +402,82 @@ mod tests {
         ));
     }
 
+    #[test]
+    fn load_v2_blocked_hadamard_meta() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let cfg_text = std::fs::read_to_string(dir.path().join("config.json")).unwrap();
+        let cfg: serde_json::Value = serde_json::from_str(&cfg_text).unwrap();
+        assert_eq!(cfg["format_version"], 2);
+        assert_eq!(cfg["hadamard_seed"], 0);
+        let b = load_bundle(dir.path()).unwrap();
+        assert_eq!(b.hadamard_seed, Some(0));
+        match b.tensors.get("blk.0.attn_q.weight").unwrap() {
+            TensorData::Codebook(q) => {
+                assert_eq!(q.hadamard.get("mode"), Some(&json!("blocked")));
+                assert_eq!(q.hadamard.get("applied"), Some(&json!(true)));
+                let blocks = q.hadamard["blocks"].as_array().expect("blocks");
+                assert!(!blocks.is_empty());
+                let k = q.shape.0;
+                let covered: usize = blocks
+                    .iter()
+                    .map(|b| b["size"].as_u64().unwrap() as usize)
+                    .sum();
+                assert_eq!(covered, k);
+                assert_eq!(blocks[0]["start"], 0);
+                // First tile is largest power-of-two ≤ k.
+                let first = blocks[0]["size"].as_u64().unwrap() as usize;
+                assert!(first.is_power_of_two());
+                assert!(first <= k);
+                if k > first {
+                    assert_eq!(blocks[1]["start"], first as u64);
+                }
+            }
+            _ => panic!("expected codebook"),
+        }
+    }
+
+    #[test]
+    fn load_accepts_format_version_1() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let cfg_path = dir.path().join("config.json");
+        let mut cfg: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        cfg["format_version"] = json!(1);
+        // Legacy fixtures may omit blocked mode; loader must still accept v1.
+        if let Some(tensors) = cfg["tensors"].as_object_mut() {
+            for meta in tensors.values_mut() {
+                if meta.get("kind") == Some(&json!("codebook")) {
+                    if let Some(h) = meta.get_mut("hadamard") {
+                        if let Some(o) = h.as_object_mut() {
+                            o.remove("mode");
+                            o.remove("blocks");
+                        }
+                    }
+                }
+            }
+        }
+        std::fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+        let b = load_bundle(dir.path()).unwrap();
+        assert!(!b.tensors.is_empty());
+    }
+
+    #[test]
+    fn load_rejects_format_version_3() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let cfg_path = dir.path().join("config.json");
+        let mut cfg: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        cfg["format_version"] = json!(3);
+        std::fs::write(&cfg_path, serde_json::to_string_pretty(&cfg).unwrap()).unwrap();
+        let err = load_bundle(dir.path()).unwrap_err();
+        assert!(matches!(err, EngineError::Format(_)));
+        let msg = format!("{err}");
+        assert!(msg.contains("format_version"), "{msg}");
+    }
+
     /// Mirror model `test_quant.test_dequant_error_bounds` (linspace stand-in; Spec-ish bands).
     #[test]
     fn dequant_error_bounds_group() {

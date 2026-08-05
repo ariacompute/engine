@@ -488,6 +488,12 @@ mod tests {
         assert_eq!(pow2_tile_sizes(10).unwrap(), vec![8, 2]);
         assert_eq!(pow2_tile_sizes(3072).unwrap(), vec![2048, 1024]);
         assert_eq!(pow2_tile_sizes(64).unwrap(), vec![64]);
+        assert_eq!(pow2_tile_sizes(1).unwrap(), vec![1]);
+        assert_eq!(pow2_tile_sizes(151936).unwrap()[0], 131072);
+        assert!(matches!(
+            pow2_tile_sizes(0),
+            Err(EngineError::ShapeMismatch(_))
+        ));
     }
 
     #[test]
@@ -497,10 +503,58 @@ mod tests {
         let mut w: Vec<f32> = (0..rows * cols).map(|i| (i as f32) * 0.1 - 0.5).collect();
         let orig = w.clone();
         hadamard_blocked_rows(&mut w, rows, cols, Some(7), false).unwrap();
+        // Second forward is not the inverse.
+        let mut twice = w.clone();
+        hadamard_blocked_rows(&mut twice, rows, cols, Some(7), false).unwrap();
+        let mut err_wrong = 0.0f32;
+        for (a, b) in twice.iter().zip(orig.iter()) {
+            err_wrong += (a - b).abs();
+        }
+        assert!(err_wrong > 1.0, "second forward unexpectedly near identity");
         hadamard_blocked_rows(&mut w, rows, cols, Some(7), true).unwrap();
         for (a, b) in w.iter().zip(orig.iter()) {
             assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }
+    }
+
+    #[test]
+    fn blocked_roundtrip_unsigned_and_pow2() {
+        let rows = 16usize;
+        let cols = 5usize;
+        let mut w: Vec<f32> = (0..rows * cols).map(|i| (i as f32) * 0.03).collect();
+        let orig = w.clone();
+        hadamard_blocked_rows(&mut w, rows, cols, None, false).unwrap();
+        hadamard_blocked_rows(&mut w, rows, cols, None, true).unwrap();
+        for (a, b) in w.iter().zip(orig.iter()) {
+            assert!((a - b).abs() < 1e-4);
+        }
+    }
+
+    #[test]
+    fn blocked_matches_python_golden() {
+        // W[i,j] = i*3+j)*0.1 - 0.5; seed=7 — from model.common.hadamard
+        let rows = 10usize;
+        let cols = 3usize;
+        let mut w: Vec<f32> = (0..rows * cols)
+            .map(|i| (i as f32) * 0.1 - 0.5)
+            .collect();
+        hadamard_blocked_rows(&mut w, rows, cols, Some(7), false).unwrap();
+        // Rounded float32 from model.common.hadamard.hadamard_rotate
+        let golden: [f32; 30] = [
+            0.919239, 0.989949, 1.060660, 0.919239, 0.989950, 1.060660, -0.919239, -0.989949,
+            -1.060660, 0.777817, 0.707107, 0.636396, -0.919239, -0.989949, -1.060660, -0.070711,
+            -0.141421, -0.212132, 1.343503, 1.414214, 1.484924, -0.636396, -0.848528, -1.060660,
+            -2.899138, -3.040559, -3.181980, 0.212132, 0.212132, 0.212132,
+        ];
+        assert_eq!(w.len(), golden.len());
+        for (a, b) in w.iter().zip(golden.iter()) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+        assert_eq!(
+            portable_block_signs(7, 0, 8),
+            vec![-1.0, 1.0, 1.0, -1.0, 1.0, -1.0, 1.0, 1.0]
+        );
+        assert_eq!(portable_block_signs(7, 8, 2), vec![-1.0, -1.0]);
     }
 
     #[test]
@@ -511,6 +565,30 @@ mod tests {
         // Golden from model.common.hadamard.portable_block_signs(0, 0, 8)
         let golden = [-1.0f32, 1.0, -1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
         assert_eq!(a, golden);
+    }
+
+    #[test]
+    fn hadamard_blocked_shape_errors() {
+        let mut w = [1.0f32, 2.0];
+        assert!(matches!(
+            hadamard_blocked_rows(&mut w, 2, 2, None, false),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+        assert!(matches!(
+            hadamard_blocked_rows(&mut [], 0, 1, None, false),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn hadamard_blocked_vec_roundtrip() {
+        let mut x: Vec<f32> = (0..10).map(|i| (i as f32) * 0.2 - 1.0).collect();
+        let orig = x.clone();
+        hadamard_blocked_vec(&mut x, Some(11), false).unwrap();
+        hadamard_blocked_vec(&mut x, Some(11), true).unwrap();
+        for (a, b) in x.iter().zip(orig.iter()) {
+            assert!((a - b).abs() < 1e-4);
+        }
     }
 
     #[test]

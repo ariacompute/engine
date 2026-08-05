@@ -245,6 +245,45 @@ impl Graph {
 mod tests {
     use super::*;
 
+    fn run_hdm(
+        w_rot: Vec<f32>,
+        x: Vec<f32>,
+        out_f: usize,
+        in_f: usize,
+        seed: Option<i64>,
+    ) -> Vec<f32> {
+        let batch = x.len() / in_f;
+        let mut g = Graph::new(SimdMode::Scalar);
+        let xi = g.push_tensor(TensorView::from_f32(
+            x,
+            if batch == 1 {
+                vec![in_f]
+            } else {
+                vec![batch, in_f]
+            },
+        ));
+        let wi = g.push_tensor(TensorView::from_f32(w_rot, vec![out_f, in_f]));
+        let yi = g.push_tensor(TensorView::from_f32(
+            vec![0.0; batch * out_f],
+            if batch == 1 {
+                vec![out_f]
+            } else {
+                vec![batch, out_f]
+            },
+        ));
+        g.add_node(Node {
+            op: Op::HdmLinear {
+                out_f,
+                in_f,
+                hadamard_seed: seed,
+            },
+            inputs: vec![xi, wi],
+            output: yi,
+        });
+        g.execute(&mut BufferPool::new()).unwrap();
+        g.tensors[yi].as_ref().unwrap().to_f32_vec().unwrap()
+    }
+
     #[test]
     fn hdm_linear_matches_orig_weight() {
         use aria_kernel::hadamard_blocked_rows;
@@ -259,26 +298,51 @@ mod tests {
 
         // Rotate weight rows for HDM path.
         hadamard_blocked_rows(&mut w_orig, out_f, in_f, seed, false).unwrap();
-        let mut g = Graph::new(SimdMode::Scalar);
-        let xi = g.push_tensor(TensorView::from_f32(x, vec![in_f]));
-        let wi = g.push_tensor(TensorView::from_f32(w_orig, vec![out_f, in_f]));
-        let yi = g.push_tensor(TensorView::from_f32(vec![0.0; out_f], vec![out_f]));
-        g.add_node(Node {
-            op: Op::HdmLinear {
-                out_f,
-                in_f,
-                hadamard_seed: seed,
-            },
-            inputs: vec![xi, wi],
-            output: yi,
-        });
-        let mut pool = BufferPool::new();
-        g.execute(&mut pool).unwrap();
-        let y = g.tensors[yi].as_ref().unwrap().to_f32_vec().unwrap();
+        let y = run_hdm(w_orig, x, out_f, in_f, seed);
         assert_eq!(y.len(), y_ref.len());
         for (a, b) in y.iter().zip(y_ref.iter()) {
             assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }
+    }
+
+    #[test]
+    fn hdm_linear_batch_and_unsigned() {
+        use aria_kernel::hadamard_blocked_rows;
+        let out_f = 10usize;
+        let in_f = 3usize;
+        let mut w: Vec<f32> = (0..out_f * in_f)
+            .map(|i| (i as f32) * 0.05 - 0.2)
+            .collect();
+        let x = vec![
+            0.2f32, -0.1, 0.4, // batch 0
+            -0.3, 0.5, 0.1, // batch 1
+        ];
+        let y_ref = linear(&x, &w, out_f, in_f).unwrap();
+        hadamard_blocked_rows(&mut w, out_f, in_f, None, false).unwrap();
+        let y = run_hdm(w, x, out_f, in_f, None);
+        assert_eq!(y.len(), 2 * out_f);
+        for (a, b) in y.iter().zip(y_ref.iter()) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn hdm_linear_shape_err() {
+        let mut g = Graph::new(SimdMode::Scalar);
+        let x = g.push_tensor(TensorView::from_f32(vec![1.0, 2.0], vec![2]));
+        let w = g.push_tensor(TensorView::from_f32(vec![1.0; 6], vec![3, 2]));
+        let y = g.push_tensor(TensorView::from_f32(vec![0.0; 3], vec![3]));
+        g.add_node(Node {
+            op: Op::HdmLinear {
+                out_f: 3,
+                in_f: 3, // mismatch vs weight / x
+                hadamard_seed: Some(0),
+            },
+            inputs: vec![x, w],
+            output: y,
+        });
+        let err = g.execute(&mut BufferPool::new()).unwrap_err();
+        assert!(matches!(err, EngineError::ShapeMismatch(_)));
     }
 
     #[test]
