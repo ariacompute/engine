@@ -4,14 +4,84 @@
 
 Aria Compute inference engine: OpenAI-compatible API, Aria bundle inference, zero-copy graph, ARM NEON / scalar kernels, hybrid router.
 
-## Build
+## Build / Test
 
 ```bash
 cargo test
-cargo run -p aria-openai --bin aria-engine -- serve --model /path/to/aria-bundle
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-Weights: `aria-quant-bundle` v1|**v2** (`config.json` + `weight.bin`). v2 uses **blocked Hadamard** (greedy pow2 row tiles; HDM unrotates output features). Re-quantize model bundles after the protocol change.
+## HTTP Serve
+
+```bash
+cargo run -p aria-openai --bin aria-engine -- serve \
+  --model /path/to/aria-bundle \
+  --bind 127.0.0.1:8080
+```
+
+Default bind is `127.0.0.1:8080`. The process listens for OpenAI-compatible HTTP.
+
+## Hybrid Cloud
+
+Configure via environment variables (no CLI flags):
+
+| Variable | Meaning | Default |
+|----------|---------|---------|
+| `ARIA_HYBRID_CLOUD_URL` | Cloud OpenAI-compatible **base URL** (engine appends `/v1/chat/completions`) | `http://127.0.0.1:9` |
+| `ARIA_HYBRID_CLOUD_API_KEY` | Bearer token; required for real cloud calls | _(empty → cloud errors)_ |
+| `ARIA_HYBRID_THRESHOLD` | Confidence threshold in `[0,1]` | `0.0` |
+| `ARIA_HYBRID_MODE` | `cost` / `balance` / `intelligence` | `balance` |
+| `ARIA_ON_DEVICE_ONLY` | `1` = never hand off to cloud | unset |
+
+```bash
+export ARIA_HYBRID_CLOUD_URL=https://api.openai.com
+export ARIA_HYBRID_CLOUD_API_KEY=sk-...
+export ARIA_HYBRID_THRESHOLD=0.5
+export ARIA_HYBRID_MODE=balance
+
+cargo run -p aria-openai --bin aria-engine -- serve \
+  --model /path/to/aria-bundle \
+  --bind 127.0.0.1:8080
+```
+
+Force a cloud path in chat by including `FORCE_CLOUD` in the user message (tests / demos). With `ARIA_ON_DEVICE_ONLY=1`, handoff stays local.
+
+## OpenAI API
+
+Assuming the server is on `http://127.0.0.1:8080`:
+
+```bash
+# List models
+curl -s http://127.0.0.1:8080/v1/models | jq .
+
+# Chat (non-stream)
+curl -s http://127.0.0.1:8080/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "messages":[{"role":"user","content":"Hello"}],
+    "max_tokens": 32,
+    "temperature": 0
+  }' | jq .
+
+# Chat (SSE stream)
+curl -sN http://127.0.0.1:8080/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "messages":[{"role":"user","content":"Hello"}],
+    "max_tokens": 32,
+    "stream": true
+  }'
+
+# Embeddings
+curl -s http://127.0.0.1:8080/v1/embeddings \
+  -H 'content-type: application/json' \
+  -d '{"input":"hello embedding"}' | jq .
+
+# ASR stub (PCM16 LE bytes, base64)
+curl -s http://127.0.0.1:8080/v1/audio/transcriptions \
+  -H 'content-type: application/json' \
+  -d '{"file_b64":"AAECAwQFBgc="}' | jq .
+```
 
 ## Bench
 
