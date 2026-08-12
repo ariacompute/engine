@@ -28,8 +28,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let model = model.ok_or("usage: aria-openai serve --model <bundle_dir> [--bind host:port]")?;
-    let cloud_base =
-        env::var("ARIA_HYBRID_CLOUD_URL").unwrap_or_else(|_| "http://127.0.0.1:9".into());
+    let cloud_base = env::var("ARIA_HYBRID_CLOUD_URL")
+        .unwrap_or_else(|_| "https://gateway.ariacompute.com".into());
     let threshold: f32 = env::var("ARIA_HYBRID_THRESHOLD")
         .ok()
         .and_then(|s| s.parse().ok())

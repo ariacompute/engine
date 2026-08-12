@@ -27,14 +27,14 @@ Configure via environment variables (no CLI flags):
 
 | Variable | Meaning | Default |
 |----------|---------|---------|
-| `ARIA_HYBRID_CLOUD_URL` | Cloud OpenAI-compatible **base URL** (engine appends `/v1/chat/completions`) | `http://127.0.0.1:9` |
+| `ARIA_HYBRID_CLOUD_URL` | Cloud OpenAI-compatible **base URL** (engine appends `/v1/chat/completions`) | `https://gateway.ariacompute.com` |
 | `ARIA_HYBRID_CLOUD_API_KEY` | Bearer token; required for real cloud calls | _(empty → cloud errors)_ |
 | `ARIA_HYBRID_THRESHOLD` | Confidence threshold in `[0,1]` | `0.0` |
 | `ARIA_HYBRID_MODE` | `cost` / `balance` / `intelligence` | `balance` |
 | `ARIA_ON_DEVICE_ONLY` | `1` = never hand off to cloud | unset |
 
 ```bash
-export ARIA_HYBRID_CLOUD_URL=https://api.openai.com
+export ARIA_HYBRID_CLOUD_URL=https://gateway.ariacompute.com
 export ARIA_HYBRID_CLOUD_API_KEY=sk-...
 export ARIA_HYBRID_THRESHOLD=0.5
 export ARIA_HYBRID_MODE=balance

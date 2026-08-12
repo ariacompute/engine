@@ -27,14 +27,14 @@ cargo run -p aria-openai --bin aria-engine -- serve \
 
 | 变量 | 含义 | 默认 |
 |------|------|------|
-| `ARIA_HYBRID_CLOUD_URL` | 云端 OpenAI 兼容 **base URL**（引擎会追加 `/v1/chat/completions`） | `http://127.0.0.1:9` |
+| `ARIA_HYBRID_CLOUD_URL` | 云端 OpenAI 兼容 **base URL**（引擎会追加 `/v1/chat/completions`） | `https://gateway.ariacompute.com` |
 | `ARIA_HYBRID_CLOUD_API_KEY` | Bearer Token；真实云调用必填 | _(空 → 云调用报错)_ |
 | `ARIA_HYBRID_THRESHOLD` | 置信度阈值，`[0,1]` | `0.0` |
 | `ARIA_HYBRID_MODE` | `cost` / `balance` / `intelligence` | `balance` |
 | `ARIA_ON_DEVICE_ONLY` | `1` = 禁止卸载到云端 | 未设置 |
 
 ```bash
-export ARIA_HYBRID_CLOUD_URL=https://api.openai.com
+export ARIA_HYBRID_CLOUD_URL=https://gateway.ariacompute.com
 export ARIA_HYBRID_CLOUD_API_KEY=sk-...
 export ARIA_HYBRID_THRESHOLD=0.5
 export ARIA_HYBRID_MODE=balance
