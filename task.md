@@ -43,7 +43,7 @@
 ### T21 — `aria-hybrid` P0/P1（信号路由）
 - [x] P0：`RouteDecision`（reason / policy_version / fallback）+ `ParetoMode` + 硬约束 + 会话粘性 + `RouteOutcome`/`OutcomeStore`
 - [x] P1：`RouteSignal` → `ProjectionBand` → 决策；单测覆盖模式/粘性/投影/Outcome
-- [x] `aria-openai` 接线 `route(&RouteSignal)`；`FORCE_CLOUD` / `on_device_only` 集成测仍绿
+- [x] `aria-openai` 接线 `route(&RouteSignal)`；`FORCE_CLOUD` / `ARIA_HYBRID_EXECUTION` 集成测仍绿
 - [x] 补测：边界阈值、force/modality 无云、会话隔离、serde、Outcome HTTP、Pareto 模式、云不可用降级
 
 ### T5 — `aria-openai`
@@ -66,7 +66,7 @@
 - [x] VL `vision_prefix` / VLA `predict_action` + 单测
 - [x] OpenAI：`/v1/audio/transcriptions`、`/v1/embeddings`、chat `tool_calls`、`rag_snippets`
 - [x] NEON vs scalar matmul 对拍（`matmul_blocked` / `SimdMode::Neon`）
-- [x] hybrid `on_device_only` 强制 Local（集成测试）
+- [x] hybrid `ARIA_HYBRID_EXECUTION=device|cloud`（集成测试）
 
 ## 阶段 D — 引擎对标评测（requirements §8）
 

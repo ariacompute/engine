@@ -8,6 +8,33 @@ use std::sync::{Arc, Mutex};
 /// Policy contract version embedded in every decision (replay / Outcome).
 pub const POLICY_VERSION: &str = "hybrid-p0p1-v1";
 
+/// Where inference is allowed to run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionMode {
+    /// Signal → projection hybrid (default).
+    #[default]
+    Hybrid,
+    /// Force on-device Local (never hand off).
+    Device,
+    /// Force cloud handoff (never run local decode for chat routing).
+    Cloud,
+}
+
+impl ExecutionMode {
+    /// Parse `ARIA_HYBRID_EXECUTION`: `hybrid` (default) | `device` | `cloud`.
+    pub fn parse(raw: &str) -> Result<Self, EngineError> {
+        match raw.trim().to_ascii_lowercase().as_str() {
+            "" | "hybrid" => Ok(Self::Hybrid),
+            "device" => Ok(Self::Device),
+            "cloud" => Ok(Self::Cloud),
+            other => Err(EngineError::InvalidParam(format!(
+                "ARIA_HYBRID_EXECUTION must be hybrid|device|cloud, got {other:?}"
+            ))),
+        }
+    }
+}
+
 /// Pareto position on the cost–intelligence frontier.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
@@ -152,7 +179,7 @@ struct StickinessState {
 #[derive(Debug, Clone)]
 pub struct Router {
     pub threshold: f32,
-    pub on_device_only: bool,
+    pub execution: ExecutionMode,
     pub mode: ParetoMode,
     pub upgrade_after_failures: u32,
     pub policy_version: String,
@@ -169,7 +196,7 @@ impl Router {
         }
         Ok(Self {
             threshold,
-            on_device_only: false,
+            execution: ExecutionMode::Hybrid,
             mode: ParetoMode::Balance,
             upgrade_after_failures: 2,
             policy_version: POLICY_VERSION.to_string(),
@@ -180,6 +207,11 @@ impl Router {
 
     pub fn with_mode(mut self, mode: ParetoMode) -> Self {
         self.mode = mode;
+        self
+    }
+
+    pub fn with_execution(mut self, execution: ExecutionMode) -> Self {
+        self.execution = execution;
         self
     }
 
@@ -194,17 +226,19 @@ impl Router {
 
     /// Project raw signals into a routing band (no stickiness yet).
     pub fn project(&self, signal: &RouteSignal) -> (ProjectionBand, String) {
-        if self.on_device_only {
-            return (
-                ProjectionBand::MustLocal,
-                "on_device_only".into(),
-            );
+        if self.execution == ExecutionMode::Device {
+            return (ProjectionBand::MustLocal, "execution_device".into());
         }
         if signal.privacy_sensitive {
             return (
                 ProjectionBand::MustLocal,
                 "privacy_sensitive".into(),
             );
+        }
+        if self.execution == ExecutionMode::Cloud {
+            // Force handoff; unavailable cloud still PreferCloud so chat errors
+            // instead of silently decoding locally.
+            return (ProjectionBand::PreferCloud, "execution_cloud".into());
         }
 
         let context_overflow = signal.context_tokens > signal.context_limit;
@@ -299,7 +333,8 @@ impl Router {
                 }
                 // Stay local unless hard PreferCloud upgrade (failures / modality / force).
                 (RouteAction::Local, ProjectionBand::PreferCloud, RouteAction::CloudHandoff) => {
-                    let hard_upgrade = signal.force_cloud
+                    let hard_upgrade = self.execution == ExecutionMode::Cloud
+                        || signal.force_cloud
                         || signal.modality_unsupported_locally
                         || signal.context_tokens > signal.context_limit
                         || signal.consecutive_local_failures >= self.upgrade_after_failures;

@@ -3,8 +3,8 @@
 mod route;
 
 pub use route::{
-    OutcomeStore, ParetoMode, ProjectionBand, RouteAction, RouteDecision, RouteOutcome,
-    RouteSignal, Router, POLICY_VERSION,
+    ExecutionMode, OutcomeStore, ParetoMode, ProjectionBand, RouteAction, RouteDecision,
+    RouteOutcome, RouteSignal, Router, POLICY_VERSION,
 };
 
 use aria_kernel::EngineError;
@@ -119,9 +119,50 @@ mod tests {
             RouteAction::CloudHandoff
         );
         let mut r2 = Router::new(0.5).unwrap();
-        r2.on_device_only = true;
+        r2.execution = ExecutionMode::Device;
         assert_eq!(r2.route_confidence(0.0).action, RouteAction::Local);
         assert!(Router::new(1.5).is_err());
+    }
+
+    #[test]
+    fn execution_mode_device_and_cloud() {
+        assert_eq!(ExecutionMode::parse("").unwrap(), ExecutionMode::Hybrid);
+        assert_eq!(ExecutionMode::parse("hybrid").unwrap(), ExecutionMode::Hybrid);
+        assert_eq!(ExecutionMode::parse("DEVICE").unwrap(), ExecutionMode::Device);
+        assert_eq!(ExecutionMode::parse("cloud").unwrap(), ExecutionMode::Cloud);
+        assert!(ExecutionMode::parse("gpu").is_err());
+
+        let device = Router::new(0.5)
+            .unwrap()
+            .with_execution(ExecutionMode::Device);
+        let d = device.route(&RouteSignal {
+            force_cloud: true,
+            confidence: 0.0,
+            ..RouteSignal::from_confidence(0.0)
+        });
+        assert_eq!(d.action, RouteAction::Local);
+        assert_eq!(d.reason, "execution_device");
+
+        let cloud = Router::new(0.5)
+            .unwrap()
+            .with_execution(ExecutionMode::Cloud);
+        let c = cloud.route(&RouteSignal::from_confidence(0.99));
+        assert_eq!(c.action, RouteAction::CloudHandoff);
+        assert_eq!(c.reason, "execution_cloud");
+
+        // Privacy still wins over cloud execution.
+        let mut priv_sig = RouteSignal::from_confidence(0.0);
+        priv_sig.privacy_sensitive = true;
+        let p = cloud.route(&priv_sig);
+        assert_eq!(p.action, RouteAction::Local);
+        assert_eq!(p.reason, "privacy_sensitive");
+
+        // Cloud mode with unavailable backend still PreferCloud (handoff path).
+        let mut no_cloud = RouteSignal::from_confidence(0.99);
+        no_cloud.cloud_available = false;
+        let u = cloud.route(&no_cloud);
+        assert_eq!(u.action, RouteAction::CloudHandoff);
+        assert_eq!(u.reason, "execution_cloud");
     }
 
     #[test]

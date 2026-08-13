@@ -31,20 +31,23 @@ cargo run -p aria-openai --bin aria-engine -- serve \
 | `ARIA_HYBRID_CLOUD_API_KEY` | Bearer Token；真实云调用必填 | _(空 → 云调用报错)_ |
 | `ARIA_HYBRID_THRESHOLD` | 置信度阈值，`[0,1]` | `0.0` |
 | `ARIA_HYBRID_MODE` | `cost` / `balance` / `intelligence` | `balance` |
-| `ARIA_ON_DEVICE_ONLY` | `1` = 禁止卸载到云端 | 未设置 |
+| `ARIA_HYBRID_EXECUTION` | `hybrid`（默认）/ `device`（仅端侧）/ `cloud`（仅云端） | `hybrid` |
 
 ```bash
 export ARIA_HYBRID_CLOUD_URL=https://gateway.ariacompute.com
 export ARIA_HYBRID_CLOUD_API_KEY=sk-...
 export ARIA_HYBRID_THRESHOLD=0.5
 export ARIA_HYBRID_MODE=balance
+# 可选：强制仅端侧或仅云端
+# export ARIA_HYBRID_EXECUTION=device
+# export ARIA_HYBRID_EXECUTION=cloud
 
 cargo run -p aria-openai --bin aria-engine -- serve \
   --model /path/to/aria-bundle \
   --bind 127.0.0.1:8080
 ```
 
-用户消息中包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。设置 `ARIA_ON_DEVICE_ONLY=1` 时始终本地。
+混合模式下用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`ARIA_HYBRID_EXECUTION=device` 永不卸载；`=cloud` 始终卸载（隐私敏感请求仍留本地）。
 
 ## OpenAI API
 

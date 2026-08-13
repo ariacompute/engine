@@ -675,7 +675,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hybrid_cloud_and_on_device_only() {
+    async fn hybrid_cloud_and_execution_modes() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
         let state = build_state(
@@ -708,8 +708,10 @@ mod tests {
         let v = body_json(res).await;
         assert_eq!(v["choices"][0]["message"]["content"], "from-cloud");
 
-        let mut router = Router::new(0.5).unwrap();
-        router.on_device_only = true;
+        // device: FORCE_CLOUD still stays local
+        let router = Router::new(0.5)
+            .unwrap()
+            .with_execution(aria_hybrid::ExecutionMode::Device);
         let state = build_state(
             dir.path(),
             router,
@@ -738,8 +740,41 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let v = body_json(res).await;
-        // Must stay local — content is token dump, not cloud string.
         assert_ne!(v["choices"][0]["message"]["content"], "from-cloud");
+
+        // cloud: plain prompt (no FORCE_CLOUD) still handoffs
+        let router = Router::new(0.5)
+            .unwrap()
+            .with_execution(aria_hybrid::ExecutionMode::Cloud);
+        let state = build_state(
+            dir.path(),
+            router,
+            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"from-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        let svc = app(state);
+        let res = svc
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"hello locally please"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["choices"][0]["message"]["content"], "from-cloud");
     }
 
     #[tokio::test]

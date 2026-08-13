@@ -67,7 +67,7 @@
 | 2 | **graph** | Layer → Op → Tensor IR；`BufferPool`；mmap / `external` 零拷贝输入；融合节点 **HDM**（Hadamard + Dequant + MatMul）；阶段 A：LLM decode 所需 ops 可调度；图序列化可选（阶段 B+） |
 | 3 | **inference** | `load_bundle`（mmap `weight.bin`）；KV cache；greedy / 基础 sampling；tokenizer；§1.1 家族注册与图构建钩子；阶段 A：`gemma-4-e2b-it` **tiny q4** 黄金路径；阶段 B/C：见上表 |
 | 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排 |
-| 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；`ARIA_HYBRID_CLOUD_API_KEY` + base URL；阶段 A：mock + 单测；`on_device_only` / privacy 强制 Local |
+| 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；`ARIA_HYBRID_CLOUD_API_KEY` + base URL；`ARIA_HYBRID_EXECUTION`=`hybrid`\|`device`\|`cloud`；阶段 A：mock + 单测；`device` / privacy 强制 Local，`cloud` 强制 Handoff |
 | 6 | **反量化语义** | 与 Python `model.common.quant.dequantize` 一致：**rotated-space** 重建；推理优先融合 HDM，**不**要求加载时整表逆 Hadamard 物化 |
 | 7 | **HTTP** | **axum** 实现本地 serve |
 
@@ -112,7 +112,7 @@
 - **P0**
   - `RouteAction::{Local, CloudHandoff}`；`RouteDecision` 含 `action` / `reason` / `policy_version` / `fallback` / `projection` / `mode`。
   - `ParetoMode::{Cost, Balance, Intelligence}`：调节有效置信度阈值（Cost 更偏 Local，Intelligence 更易 Handoff）。
-  - 硬约束：`on_device_only`、`privacy_sensitive` → 强制 Local；`!cloud_available` 时不得 Handoff；本地不支持 modality / 上下文超限且云可用 → PreferCloud。
+  - 硬约束：`ARIA_HYBRID_EXECUTION=device`、`privacy_sensitive` → 强制 Local；`=cloud` → 强制 CloudHandoff（云不可用时仍走 handoff 路径并报错，禁止静默本地）；`!cloud_available` 时 hybrid 模式不得 Handoff；本地不支持 modality / 上下文超限且云可用 → PreferCloud。
   - 会话粘性：同 `session_id` 默认保持上次 `action`；仅硬约束或 `consecutive_local_failures >= upgrade_after_failures` 允许 Local→Cloud 升级。
   - `RouteOutcome` + `OutcomeStore`（进程内）：记录 action、reason、tokens、latency、handoff、可选 user_corrected。
 - **P1（薄信号面）**
@@ -211,7 +211,7 @@
 ### 6.3 阶段 B / C（后续验收，写入 Spec 以免范围漂移）
 
 - **B**：每个 text/MoE 家族具备 loader/graph 钩子并通过该类 tiny 或全量文本生成测试。
-- **C**：VL/VLA、ASR、embeddings/RAG、tool_calls 的 OpenAI 面；NEON vs scalar 对拍；`on_device_only` 禁止云卸载。
+- **C**：VL/VLA、ASR、embeddings/RAG、tool_calls 的 OpenAI 面；NEON vs scalar 对拍；`ARIA_HYBRID_EXECUTION=device` 禁止云卸载、`=cloud` 强制云端。
 
 ## 7. 目录与依赖约定
 

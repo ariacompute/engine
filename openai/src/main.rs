@@ -1,4 +1,4 @@
-use aria_hybrid::{CloudClient, ParetoMode, Router};
+use aria_hybrid::{CloudClient, ExecutionMode, ParetoMode, Router};
 use aria_openai::{app, build_state};
 use std::env;
 use std::net::SocketAddr;
@@ -38,10 +38,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .ok()
         .map(|s| parse_mode(&s))
         .unwrap_or_default();
-    let mut router = Router::new(threshold)?.with_mode(mode);
-    if env::var("ARIA_ON_DEVICE_ONLY").ok().as_deref() == Some("1") {
-        router.on_device_only = true;
-    }
+    let execution = match env::var("ARIA_HYBRID_EXECUTION") {
+        Ok(s) => ExecutionMode::parse(&s)?,
+        Err(_) => ExecutionMode::Hybrid,
+    };
+    let router = Router::new(threshold)?
+        .with_mode(mode)
+        .with_execution(execution);
     let state = build_state(&model, router, CloudClient::from_env(cloud_base))?;
     let app = app(state);
     let addr: SocketAddr = bind.parse()?;
