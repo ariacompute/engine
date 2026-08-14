@@ -1,8 +1,8 @@
 //! OpenAI-compatible HTTP surface (chat / embeddings / ASR / tools / RAG).
 
 use aria_hybrid::{
-    estimate_route_signals, CloudChatRequest, CloudClient, CloudMessage, RouteAction, RouteOutcome,
-    RouteSignal, Router, CLOUD_GATEWAY_MODEL,
+    estimate_route_signals, CloudChatRequest, CloudClient, CloudMessage, ExecutionMode, RouteAction,
+    RouteOutcome, RouteSignal, Router, CLOUD_GATEWAY_MODEL,
 };
 use aria_inference::{rag_pack_context, GenerateOpts, Session, SessionBuilder};
 use aria_kernel::EngineError;
@@ -464,7 +464,12 @@ pub fn build_state_with_family(
         .model(model_dir)
         .family(family)
         .build()?;
-    let model_id = session.model_id().to_string();
+    // Cloud-only execution advertises the gateway model id (ariacompute/ariamodel).
+    let model_id = if router.execution == ExecutionMode::Cloud {
+        CLOUD_GATEWAY_MODEL.to_string()
+    } else {
+        session.model_id().to_string()
+    };
     Ok(AppState {
         session: Arc::new(Mutex::new(session)),
         router,
@@ -763,7 +768,22 @@ mod tests {
             }))),
         )
         .unwrap();
+        assert_eq!(state.model_id, CLOUD_GATEWAY_MODEL);
         let svc = app(state);
+        let res = svc
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/models")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let models = body_json(res).await;
+        assert_eq!(models["data"][0]["id"], CLOUD_GATEWAY_MODEL);
+
         let res = svc
             .oneshot(
                 Request::builder()
