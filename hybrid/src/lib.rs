@@ -11,6 +11,9 @@ use aria_kernel::EngineError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+/// Model id posted to Aria gateway (`ARIA_HYBRID_CLOUD_URL`) on cloud handoff.
+pub const CLOUD_GATEWAY_MODEL: &str = "ariacompute/ariamodel";
+
 #[derive(Debug, Clone)]
 pub struct CloudClient {
     pub base_url: String,
@@ -106,6 +109,18 @@ impl CloudClient {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn cloud_gateway_model_id() {
+        assert_eq!(CLOUD_GATEWAY_MODEL, "ariacompute/ariamodel");
+        let req = CloudChatRequest {
+            model: CLOUD_GATEWAY_MODEL.to_string(),
+            messages: vec![],
+            max_tokens: Some(8),
+        };
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["model"], "ariacompute/ariamodel");
+    }
 
     #[test]
     fn router_threshold_balance() {

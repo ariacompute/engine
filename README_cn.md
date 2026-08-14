@@ -47,7 +47,7 @@ cargo run -p aria-openai --bin aria-engine -- serve \
   --bind 127.0.0.1:8080
 ```
 
-混合模式下用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`ARIA_HYBRID_EXECUTION=device` 永不卸载；`=cloud` 始终卸载（隐私敏感请求仍留本地）。
+混合模式下用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`ARIA_HYBRID_EXECUTION=device` 永不卸载；`=cloud` 始终卸载（隐私敏感请求仍留本地）。云端 handoff 请求的 `model` 固定为 `ariacompute/ariamodel`。
 
 ## OpenAI API
 

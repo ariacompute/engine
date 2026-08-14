@@ -119,7 +119,7 @@
   - `RouteSignal`：`confidence`、`complexity`、`context_tokens`/`context_limit`、`modality_unsupported_locally`、`consecutive_local_failures`、`privacy_sensitive`、`cloud_available`、`session_id`、`force_cloud`。
   - `ProjectionBand::{MustLocal, LocalOk, PreferCloud}`；决策由投影 + 模式阈值合成。
 - `Router::route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。
-- `CloudClient`：OpenAI 兼容 HTTP；`ARIA_HYBRID_CLOUD_API_KEY`；超时与非 2xx → `EngineError::Cloud`。
+- `CloudClient`：OpenAI 兼容 HTTP；`ARIA_HYBRID_CLOUD_API_KEY`；超时与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。
 - 单测：模式阈值、硬约束、粘性升级、投影、Outcome、Cloud mock 成功/失败。
 
 ### 3.6 错误类型

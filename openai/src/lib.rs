@@ -2,6 +2,7 @@
 
 use aria_hybrid::{
     CloudChatRequest, CloudClient, CloudMessage, RouteAction, RouteOutcome, RouteSignal, Router,
+    CLOUD_GATEWAY_MODEL,
 };
 use aria_inference::{rag_pack_context, GenerateOpts, Session, SessionBuilder};
 use aria_kernel::EngineError;
@@ -300,7 +301,7 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
     match decision.action {
         RouteAction::CloudHandoff => {
             let cloud_req = CloudChatRequest {
-                model: req.model.unwrap_or_else(|| st.model_id.clone()),
+                model: CLOUD_GATEWAY_MODEL.to_string(),
                 messages: req
                     .messages
                     .iter()

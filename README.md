@@ -47,7 +47,7 @@ cargo run -p aria-openai --bin aria-engine -- serve \
   --bind 127.0.0.1:8080
 ```
 
-Force a cloud path in hybrid mode by including `FORCE_CLOUD` in the user message (tests / demos). `ARIA_HYBRID_EXECUTION=device` never handoffs; `=cloud` always handoffs (privacy-sensitive requests still stay local).
+Force a cloud path in hybrid mode by including `FORCE_CLOUD` in the user message (tests / demos). `ARIA_HYBRID_EXECUTION=device` never handoffs; `=cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.
 
 ## OpenAI API
 
