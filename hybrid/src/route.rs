@@ -39,12 +39,12 @@ impl ExecutionMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "snake_case")]
 pub enum ParetoMode {
-    /// Prefer on-device; harder to hand off.
+    /// Prefer on-device; higher complexity cutoff before handoff.
     Cost,
-    /// Default threshold.
+    /// Signal-driven auto routing (default complexity cutoff).
     #[default]
     Balance,
-    /// Easier cloud handoff for higher quality.
+    /// Prefer cloud; lower complexity cutoff before handoff.
     Intelligence,
 }
 
@@ -68,7 +68,7 @@ pub enum ProjectionBand {
 /// Request-level routing inputs (P1 signal surface).
 #[derive(Debug, Clone, PartialEq)]
 pub struct RouteSignal {
-    /// Model confidence in `[0, 1]` (higher → stay local when other signals allow).
+    /// Reserved confidence in `[0, 1]` (API compat; not used for handoff).
     pub confidence: f32,
     /// Task complexity heuristic in `[0, 1]`.
     pub complexity: f32,
@@ -178,7 +178,6 @@ struct StickinessState {
 /// Hybrid router: signals → projection → sticky decision.
 #[derive(Debug, Clone)]
 pub struct Router {
-    pub threshold: f32,
     pub execution: ExecutionMode,
     pub mode: ParetoMode,
     pub upgrade_after_failures: u32,
@@ -188,14 +187,8 @@ pub struct Router {
 }
 
 impl Router {
-    pub fn new(threshold: f32) -> Result<Self, EngineError> {
-        if !(0.0..=1.0).contains(&threshold) {
-            return Err(EngineError::InvalidParam(
-                "confidence threshold must be in [0,1]".into(),
-            ));
-        }
+    pub fn new() -> Result<Self, EngineError> {
         Ok(Self {
-            threshold,
             execution: ExecutionMode::Hybrid,
             mode: ParetoMode::Balance,
             upgrade_after_failures: 2,
@@ -215,12 +208,12 @@ impl Router {
         self
     }
 
-    /// Effective confidence cutoff: `confidence < threshold` → prefer cloud.
-    pub fn effective_threshold(&self) -> f32 {
+    /// Complexity at/above which hybrid mode prefers cloud.
+    pub fn complexity_cutoff(&self) -> f32 {
         match self.mode {
-            ParetoMode::Cost => (self.threshold * 0.5).clamp(0.0, 1.0),
-            ParetoMode::Balance => self.threshold,
-            ParetoMode::Intelligence => (self.threshold + 0.25).clamp(0.0, 1.0),
+            ParetoMode::Cost => 0.90,
+            ParetoMode::Balance => 0.75,
+            ParetoMode::Intelligence => 0.40,
         }
     }
 
@@ -245,9 +238,8 @@ impl Router {
         let need_cloud = signal.force_cloud
             || signal.modality_unsupported_locally
             || context_overflow
-            || signal.complexity >= 0.75
-            || signal.confidence < self.effective_threshold()
-            || signal.consecutive_local_failures >= self.upgrade_after_failures;
+            || signal.consecutive_local_failures >= self.upgrade_after_failures
+            || signal.complexity >= self.complexity_cutoff();
 
         if need_cloud {
             if !signal.cloud_available {
@@ -264,10 +256,8 @@ impl Router {
                 "context_overflow"
             } else if signal.consecutive_local_failures >= self.upgrade_after_failures {
                 "local_failures_upgrade"
-            } else if signal.complexity >= 0.75 {
-                "high_complexity"
             } else {
-                "low_confidence"
+                "high_complexity"
             };
             return (ProjectionBand::PreferCloud, reason.into());
         }

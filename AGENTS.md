@@ -44,5 +44,5 @@ Spec 见 `requirements.md`（含 §8 评测）。`task.md` T0–T6 / T10–T11 /
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。
 - 全家族 §1.1：`ArchClass` + `graph_hook`；VL/VLA 见 `multimodal`。
 - 评测对齐 `model` `audit_cli`：缺后端 skip、`ci_fail: false`；不启动第三方引擎进程。
-- NEON：`SimdMode::Neon`；混合云：`ARIA_HYBRID_CLOUD_API_KEY` / `ARIA_HYBRID_MODE` / `ARIA_HYBRID_EXECUTION`。
+- NEON：`SimdMode::Neon`；混合云：`ARIA_HYBRID_CLOUD_API_KEY` / `ARIA_HYBRID_MODE`（复杂度阈值）/ `ARIA_HYBRID_EXECUTION`。
 - 与 **model** 协同 blocked Hadamard（`format_version=2`）。

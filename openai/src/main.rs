@@ -30,7 +30,6 @@ Options:
 Environment (hybrid cloud):
   ARIA_HYBRID_CLOUD_URL       Cloud base URL (default: https://gateway.ariacompute.com)
   ARIA_HYBRID_CLOUD_API_KEY   Bearer token for cloud calls
-  ARIA_HYBRID_THRESHOLD       Confidence threshold in [0,1] (default: 0.0)
   ARIA_HYBRID_MODE            cost | balance | intelligence (default: balance)
   ARIA_HYBRID_EXECUTION       hybrid | device | cloud (default: hybrid)
 "
@@ -72,10 +71,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     let cloud_base = env::var("ARIA_HYBRID_CLOUD_URL")
         .unwrap_or_else(|_| "https://gateway.ariacompute.com".into());
-    let threshold: f32 = env::var("ARIA_HYBRID_THRESHOLD")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(0.0);
     let mode = env::var("ARIA_HYBRID_MODE")
         .ok()
         .map(|s| parse_mode(&s))
@@ -84,7 +79,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Ok(s) => ExecutionMode::parse(&s)?,
         Err(_) => ExecutionMode::Hybrid,
     };
-    let router = Router::new(threshold)?
+    let router = Router::new()?
         .with_mode(mode)
         .with_execution(execution);
     let state = build_state(&model, router, CloudClient::from_env(cloud_base))?;

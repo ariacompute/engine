@@ -32,14 +32,12 @@ Configure via environment variables (no CLI flags):
 |----------|---------|---------|
 | `ARIA_HYBRID_CLOUD_URL` | Cloud OpenAI-compatible **base URL** (engine appends `/v1/chat/completions`) | `https://gateway.ariacompute.com` |
 | `ARIA_HYBRID_CLOUD_API_KEY` | Bearer token; required for real cloud calls | _(empty → cloud errors)_ |
-| `ARIA_HYBRID_THRESHOLD` | Confidence threshold in `[0,1]` | `0.0` |
 | `ARIA_HYBRID_MODE` | `cost` / `balance` / `intelligence` | `balance` |
 | `ARIA_HYBRID_EXECUTION` | `hybrid` (default) / `device` (on-device only) / `cloud` (cloud only) | `hybrid` |
 
 ```bash
 export ARIA_HYBRID_CLOUD_URL=https://gateway.ariacompute.com
 export ARIA_HYBRID_CLOUD_API_KEY=sk-...
-export ARIA_HYBRID_THRESHOLD=0.5
 export ARIA_HYBRID_MODE=balance
 # optional: force device-only or cloud-only
 # export ARIA_HYBRID_EXECUTION=device
@@ -50,7 +48,7 @@ cargo run -p aria-openai --bin aria-engine -- serve \
   --bind 127.0.0.1:8080
 ```
 
-Force a cloud path in hybrid mode by including `FORCE_CLOUD` in the user message (tests / demos). `ARIA_HYBRID_EXECUTION=device` never handoffs; `=cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.
+In `hybrid` execution, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `ARIA_HYBRID_EXECUTION=device` never handoffs; `=cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.
 
 ## OpenAI API
 

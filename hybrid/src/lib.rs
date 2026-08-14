@@ -14,6 +14,65 @@ use serde_json::Value;
 /// Model id posted to Aria gateway (`ARIA_HYBRID_CLOUD_URL`) on cloud handoff.
 pub const CLOUD_GATEWAY_MODEL: &str = "ariacompute/ariamodel";
 
+/// Estimate hybrid routing signals from prompt text and model context limit.
+///
+/// - `context_tokens`: ~chars/4 heuristic (OpenAI-style rough estimate)
+/// - `complexity` in `[0,1]`: length score + keyword boost (EN/ZH)
+pub fn estimate_route_signals(prompt: &str, context_limit: u32) -> (f32, u32) {
+    let chars = prompt.chars().count();
+    let context_tokens = chars.div_ceil(4) as u32;
+    let _ = context_limit; // caller uses for overflow; kept for API clarity
+
+    // Length: short prompts stay easy; long prompts ramp toward hard.
+    let length_score = if chars == 0 {
+        0.0
+    } else if chars < 80 {
+        0.15
+    } else if chars < 240 {
+        0.35
+    } else if chars < 800 {
+        0.55
+    } else if chars < 2000 {
+        0.75
+    } else {
+        0.90
+    };
+
+    let lower = prompt.to_ascii_lowercase();
+    let keywords = [
+        "analyze",
+        "analyse",
+        "step-by-step",
+        "step by step",
+        "multi-step",
+        "multistep",
+        "reason",
+        "reasoning",
+        "plan",
+        "compare",
+        "debug",
+        "refactor",
+        "architecture",
+        "分析",
+        "推理",
+        "逐步",
+        "多步",
+        "对比",
+        "规划",
+        "架构",
+        "调试",
+    ];
+    let mut boost = 0.0f32;
+    for k in keywords {
+        if lower.contains(k) || prompt.contains(k) {
+            boost += 0.18;
+        }
+    }
+    boost = boost.min(0.55);
+    let complexity = (length_score + boost).clamp(0.0, 1.0);
+    (complexity, context_tokens)
+}
+
 #[derive(Debug, Clone)]
 pub struct CloudClient {
     pub base_url: String,
@@ -123,20 +182,14 @@ mod tests {
     }
 
     #[test]
-    fn router_threshold_balance() {
-        let r = Router::new(0.5).unwrap();
-        assert_eq!(
-            r.route_confidence(0.9).action,
-            RouteAction::Local
-        );
-        assert_eq!(
-            r.route_confidence(0.1).action,
-            RouteAction::CloudHandoff
-        );
-        let mut r2 = Router::new(0.5).unwrap();
+    fn router_default_stays_local_on_confidence_only() {
+        let r = Router::new().unwrap();
+        // Confidence is unused for handoff; complexity defaults to 0.
+        assert_eq!(r.route_confidence(0.9).action, RouteAction::Local);
+        assert_eq!(r.route_confidence(0.1).action, RouteAction::Local);
+        let mut r2 = Router::new().unwrap();
         r2.execution = ExecutionMode::Device;
         assert_eq!(r2.route_confidence(0.0).action, RouteAction::Local);
-        assert!(Router::new(1.5).is_err());
     }
 
     #[test]
@@ -147,7 +200,7 @@ mod tests {
         assert_eq!(ExecutionMode::parse("cloud").unwrap(), ExecutionMode::Cloud);
         assert!(ExecutionMode::parse("gpu").is_err());
 
-        let device = Router::new(0.5)
+        let device = Router::new()
             .unwrap()
             .with_execution(ExecutionMode::Device);
         let d = device.route(&RouteSignal {
@@ -158,7 +211,7 @@ mod tests {
         assert_eq!(d.action, RouteAction::Local);
         assert_eq!(d.reason, "execution_device");
 
-        let cloud = Router::new(0.5)
+        let cloud = Router::new()
             .unwrap()
             .with_execution(ExecutionMode::Cloud);
         let c = cloud.route(&RouteSignal::from_confidence(0.99));
@@ -181,37 +234,42 @@ mod tests {
     }
 
     #[test]
-    fn pareto_modes_shift_threshold() {
-        let base = Router::new(0.5).unwrap();
-        let cost = Router::new(0.5).unwrap().with_mode(ParetoMode::Cost);
-        let intel = Router::new(0.5)
+    fn pareto_modes_complexity_cutoffs() {
+        let base = Router::new().unwrap();
+        let cost = Router::new().unwrap().with_mode(ParetoMode::Cost);
+        let intel = Router::new()
             .unwrap()
             .with_mode(ParetoMode::Intelligence);
-        assert!((base.effective_threshold() - 0.5).abs() < 1e-6);
-        assert!((cost.effective_threshold() - 0.25).abs() < 1e-6);
-        assert!((intel.effective_threshold() - 0.75).abs() < 1e-6);
+        assert!((base.complexity_cutoff() - 0.75).abs() < 1e-6);
+        assert!((cost.complexity_cutoff() - 0.90).abs() < 1e-6);
+        assert!((intel.complexity_cutoff() - 0.40).abs() < 1e-6);
 
-        // conf=0.4 → Balance handoff, Cost stays local, Intelligence handoff
-        assert_eq!(cost.route_confidence(0.4).action, RouteAction::Local);
-        assert_eq!(
-            base.route_confidence(0.4).action,
-            RouteAction::CloudHandoff
-        );
-        assert_eq!(
-            intel.route_confidence(0.4).action,
-            RouteAction::CloudHandoff
-        );
-        // conf=0.6 → only Intelligence wants cloud
-        assert_eq!(base.route_confidence(0.6).action, RouteAction::Local);
-        assert_eq!(
-            intel.route_confidence(0.6).action,
-            RouteAction::CloudHandoff
-        );
+        // Mid complexity 0.5 → Cost/Balance local, Intelligence cloud.
+        let mid = |mode: ParetoMode| {
+            let r = Router::new().unwrap().with_mode(mode);
+            let mut sig = RouteSignal::from_confidence(0.95);
+            sig.complexity = 0.5;
+            r.route(&sig).action
+        };
+        assert_eq!(mid(ParetoMode::Cost), RouteAction::Local);
+        assert_eq!(mid(ParetoMode::Balance), RouteAction::Local);
+        assert_eq!(mid(ParetoMode::Intelligence), RouteAction::CloudHandoff);
+
+        // High complexity 0.8 → Cost local, Balance/Intelligence cloud.
+        let high = |mode: ParetoMode| {
+            let r = Router::new().unwrap().with_mode(mode);
+            let mut sig = RouteSignal::from_confidence(0.95);
+            sig.complexity = 0.8;
+            r.route(&sig).action
+        };
+        assert_eq!(high(ParetoMode::Cost), RouteAction::Local);
+        assert_eq!(high(ParetoMode::Balance), RouteAction::CloudHandoff);
+        assert_eq!(high(ParetoMode::Intelligence), RouteAction::CloudHandoff);
     }
 
     #[test]
     fn hard_constraints_and_projection() {
-        let r = Router::new(0.5).unwrap();
+        let r = Router::new().unwrap();
         let mut sig = RouteSignal::from_confidence(0.9);
         sig.privacy_sensitive = true;
         let d = r.route(&sig);
@@ -227,6 +285,7 @@ mod tests {
         assert_eq!(d.projection, ProjectionBand::PreferCloud);
 
         let mut sig = RouteSignal::from_confidence(0.0);
+        sig.complexity = 0.99;
         sig.cloud_available = false;
         let d = r.route(&sig);
         assert_eq!(d.action, RouteAction::Local);
@@ -242,15 +301,40 @@ mod tests {
     }
 
     #[test]
+    fn context_overflow_and_force_cloud_all_modes() {
+        for mode in [ParetoMode::Cost, ParetoMode::Balance, ParetoMode::Intelligence] {
+            let r = Router::new().unwrap().with_mode(mode);
+            let mut overflow = RouteSignal::from_confidence(0.95);
+            overflow.complexity = 0.0;
+            overflow.context_tokens = 100;
+            overflow.context_limit = 50;
+            assert_eq!(
+                r.route(&overflow).action,
+                RouteAction::CloudHandoff,
+                "overflow {mode:?}"
+            );
+
+            let mut force = RouteSignal::from_confidence(0.95);
+            force.complexity = 0.0;
+            force.force_cloud = true;
+            assert_eq!(
+                r.route(&force).action,
+                RouteAction::CloudHandoff,
+                "force {mode:?}"
+            );
+        }
+    }
+
+    #[test]
     fn session_stickiness_and_upgrade() {
-        let r = Router::new(0.5).unwrap();
+        let r = Router::new().unwrap();
         let mut sig = RouteSignal::from_confidence(0.9);
         sig.session_id = Some("s1".into());
         let d1 = r.route(&sig);
         assert_eq!(d1.action, RouteAction::Local);
 
-        // Soft prefer-cloud (low conf) should stick to Local.
-        sig.confidence = 0.1;
+        // Soft prefer-cloud (high complexity) should stick to Local.
+        sig.complexity = 0.9;
         let d2 = r.route(&sig);
         assert_eq!(d2.action, RouteAction::Local);
         assert!(d2.reason.contains("sticky_local"));
@@ -262,7 +346,7 @@ mod tests {
         assert!(d3.reason.contains("upgrade"));
 
         // After cloud, stick to cloud.
-        sig.confidence = 0.99;
+        sig.complexity = 0.0;
         sig.consecutive_local_failures = 0;
         let d4 = r.route(&sig);
         assert_eq!(d4.action, RouteAction::CloudHandoff);
@@ -277,8 +361,11 @@ mod tests {
 
     #[test]
     fn decision_carries_policy_metadata() {
-        let r = Router::new(0.5).unwrap();
-        let d = r.route_confidence(0.1);
+        let r = Router::new().unwrap();
+        let mut sig = RouteSignal::from_confidence(0.95);
+        sig.complexity = 0.9;
+        let d = r.route(&sig);
+        assert_eq!(d.action, RouteAction::CloudHandoff);
         assert_eq!(d.policy_version, POLICY_VERSION);
         assert_eq!(d.fallback, RouteAction::Local);
         assert_eq!(d.mode, ParetoMode::Balance);
@@ -287,8 +374,10 @@ mod tests {
 
     #[test]
     fn outcome_store_records() {
-        let r = Router::new(0.5).unwrap();
-        let d = r.route_confidence(0.1);
+        let r = Router::new().unwrap();
+        let mut sig = RouteSignal::from_confidence(0.95);
+        sig.complexity = 0.9;
+        let d = r.route(&sig);
         r.record_outcome(RouteOutcome {
             task_id: "t1".into(),
             session_id: None,
@@ -311,12 +400,29 @@ mod tests {
 
     #[test]
     fn high_complexity_prefers_cloud() {
-        let r = Router::new(0.5).unwrap();
+        let r = Router::new().unwrap();
         let mut sig = RouteSignal::from_confidence(0.95);
         sig.complexity = 0.8;
         let d = r.route(&sig);
         assert_eq!(d.action, RouteAction::CloudHandoff);
         assert!(d.reason.contains("complexity"));
+    }
+
+    #[test]
+    fn estimate_route_signals_length_and_keywords() {
+        let (c_short, tok) = estimate_route_signals("hi", 4096);
+        assert!(c_short < 0.4);
+        assert!(tok > 0);
+        let (c_kw, _) = estimate_route_signals(
+            "Please analyze and reason step-by-step about this plan",
+            4096,
+        );
+        assert!(c_kw >= 0.40);
+        assert!(c_kw < 0.75);
+        let long = "x".repeat(900);
+        let (c_long, _) = estimate_route_signals(&long, 4096);
+        assert!(c_long >= 0.75);
+        assert!(c_long < 0.90);
     }
 
     #[tokio::test]
@@ -363,37 +469,21 @@ mod tests {
     }
 
     #[test]
-    fn invalid_threshold() {
-        assert!(matches!(
-            Router::new(-0.1),
-            Err(EngineError::InvalidParam(_))
-        ));
-        assert!(matches!(
-            Router::new(1.01),
-            Err(EngineError::InvalidParam(_))
-        ));
-    }
-
-    #[test]
-    fn threshold_boundaries_ok() {
-        assert!(Router::new(0.0).is_ok());
-        assert!(Router::new(1.0).is_ok());
-        let r0 = Router::new(0.0).unwrap();
-        // Cost mode still 0; never handoff on confidence alone.
-        assert_eq!(r0.route_confidence(0.0).action, RouteAction::Local);
-        let r1 = Router::new(1.0)
+    fn router_new_ok() {
+        assert!(Router::new().is_ok());
+        let r = Router::new().unwrap();
+        assert_eq!(r.route_confidence(0.0).action, RouteAction::Local);
+        let intel = Router::new()
             .unwrap()
             .with_mode(ParetoMode::Intelligence);
-        // effective threshold clamped to 1.0 → conf < 1.0 handoff
-        assert_eq!(
-            r1.route_confidence(0.99).action,
-            RouteAction::CloudHandoff
-        );
+        let mut sig = RouteSignal::from_confidence(0.95);
+        sig.complexity = 0.5;
+        assert_eq!(intel.route(&sig).action, RouteAction::CloudHandoff);
     }
 
     #[test]
     fn force_cloud_and_modality_without_cloud() {
-        let r = Router::new(0.5).unwrap();
+        let r = Router::new().unwrap();
         let mut sig = RouteSignal::from_confidence(0.99);
         sig.force_cloud = true;
         let d = r.route(&sig);
@@ -412,7 +502,7 @@ mod tests {
 
     #[test]
     fn project_api_and_custom_upgrade_threshold() {
-        let mut r = Router::new(0.5).unwrap();
+        let mut r = Router::new().unwrap();
         r.upgrade_after_failures = 3;
         let mut sig = RouteSignal::from_confidence(0.9);
         sig.consecutive_local_failures = 2;
@@ -428,7 +518,7 @@ mod tests {
 
     #[test]
     fn sessions_are_isolated_and_clearable() {
-        let r = Router::new(0.5).unwrap();
+        let r = Router::new().unwrap();
         let mut a = RouteSignal::from_confidence(0.9);
         a.session_id = Some("a".into());
         assert_eq!(r.route(&a).action, RouteAction::Local);
@@ -453,7 +543,7 @@ mod tests {
 
     #[test]
     fn sticky_soft_complexity_stays_local() {
-        let r = Router::new(0.5).unwrap();
+        let r = Router::new().unwrap();
         let mut sig = RouteSignal::from_confidence(0.95);
         sig.session_id = Some("sticky-cplx".into());
         assert_eq!(r.route(&sig).action, RouteAction::Local);
@@ -496,10 +586,12 @@ mod tests {
 
     #[test]
     fn decision_and_outcome_serde_roundtrip() {
-        let r = Router::new(0.5)
+        let r = Router::new()
             .unwrap()
             .with_mode(ParetoMode::Intelligence);
-        let d = r.route_confidence(0.1);
+        let mut sig = RouteSignal::from_confidence(0.95);
+        sig.complexity = 0.5;
+        let d = r.route(&sig);
         let v = serde_json::to_value(&d).unwrap();
         let back: RouteDecision = serde_json::from_value(v).unwrap();
         assert_eq!(back.action, d.action);
@@ -510,7 +602,7 @@ mod tests {
             task_id: "x".into(),
             session_id: Some("s".into()),
             action: RouteAction::CloudHandoff,
-            reason: "low_confidence".into(),
+            reason: "high_complexity".into(),
             policy_version: POLICY_VERSION.into(),
             mode: ParetoMode::Balance,
             input_tokens: Some(1),

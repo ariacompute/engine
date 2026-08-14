@@ -111,16 +111,17 @@
 
 - **P0**
   - `RouteAction::{Local, CloudHandoff}`；`RouteDecision` 含 `action` / `reason` / `policy_version` / `fallback` / `projection` / `mode`。
-  - `ParetoMode::{Cost, Balance, Intelligence}`：调节有效置信度阈值（Cost 更偏 Local，Intelligence 更易 Handoff）。
+  - `ParetoMode::{Cost, Balance, Intelligence}`：调节复杂度 handoff 阈值（Cost=`0.90` 偏 Local，Balance=`0.75`，Intelligence=`0.40` 更易 Handoff）；`confidence` 保留字段但不参与 handoff。
   - 硬约束：`ARIA_HYBRID_EXECUTION=device`、`privacy_sensitive` → 强制 Local；`=cloud` → 强制 CloudHandoff（云不可用时仍走 handoff 路径并报错，禁止静默本地）；`!cloud_available` 时 hybrid 模式不得 Handoff；本地不支持 modality / 上下文超限且云可用 → PreferCloud。
-  - 会话粘性：同 `session_id` 默认保持上次 `action`；仅硬约束或 `consecutive_local_failures >= upgrade_after_failures` 允许 Local→Cloud 升级。
+  - 会话粘性：同 `session_id` 默认保持上次 `action`；仅硬约束或 `consecutive_local_failures >= upgrade_after_failures` 允许 Local→Cloud 升级（高复杂度为软升级，粘性可拦住）。
   - `RouteOutcome` + `OutcomeStore`（进程内）：记录 action、reason、tokens、latency、handoff、可选 user_corrected。
 - **P1（薄信号面）**
-  - `RouteSignal`：`confidence`、`complexity`、`context_tokens`/`context_limit`、`modality_unsupported_locally`、`consecutive_local_failures`、`privacy_sensitive`、`cloud_available`、`session_id`、`force_cloud`。
-  - `ProjectionBand::{MustLocal, LocalOk, PreferCloud}`；决策由投影 + 模式阈值合成。
-- `Router::route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。
+  - `RouteSignal`：`confidence`（兼容保留）、`complexity`、`context_tokens`/`context_limit`、`modality_unsupported_locally`、`consecutive_local_failures`、`privacy_sensitive`、`cloud_available`、`session_id`、`force_cloud`。
+  - `ProjectionBand::{MustLocal, LocalOk, PreferCloud}`；决策由投影 + 模式复杂度阈值合成。
+  - chat 路径用 `estimate_route_signals(prompt, context_limit)` 填充 `complexity` / `context_tokens`。
+- `Router::new() -> Result<Self, EngineError>`；`route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。
 - `CloudClient`：OpenAI 兼容 HTTP；`ARIA_HYBRID_CLOUD_API_KEY`；超时与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。
-- 单测：模式阈值、硬约束、粘性升级、投影、Outcome、Cloud mock 成功/失败。
+- 单测：模式复杂度阈值、硬约束、粘性升级、投影、Outcome、Cloud mock 成功/失败。
 
 ### 3.6 错误类型
 
@@ -134,7 +135,7 @@
 | `Quant` | 不支持的 bits / 码本布局 / pack 错误 |
 | `UnsupportedFamily` | 未注册或未实现的家族 |
 | `Cloud` | 云卸载失败（超时、非 2xx、JSON 解析） |
-| `InvalidParam` | 参数越界（阈值、max_tokens=0 等） |
+| `InvalidParam` | 参数越界（max_tokens=0、非法 `ARIA_HYBRID_EXECUTION` 等） |
 | `Unsupported` | 未实现算子 / 阶段未开通的 API |
 
 禁止 `panic` 作为预期错误路径；禁止吞掉错误。

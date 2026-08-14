@@ -1,8 +1,8 @@
 //! OpenAI-compatible HTTP surface (chat / embeddings / ASR / tools / RAG).
 
 use aria_hybrid::{
-    CloudChatRequest, CloudClient, CloudMessage, RouteAction, RouteOutcome, RouteSignal, Router,
-    CLOUD_GATEWAY_MODEL,
+    estimate_route_signals, CloudChatRequest, CloudClient, CloudMessage, RouteAction, RouteOutcome,
+    RouteSignal, Router, CLOUD_GATEWAY_MODEL,
 };
 use aria_inference::{rag_pack_context, GenerateOpts, Session, SessionBuilder};
 use aria_kernel::EngineError;
@@ -283,11 +283,19 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
     }
 
     let force_cloud = prompt_text.contains("FORCE_CLOUD");
+    let context_limit = {
+        let sess = st
+            .session
+            .lock()
+            .map_err(|e| EngineError::Io(e.to_string()))?;
+        sess.config().context_length as u32
+    };
+    let (complexity, context_tokens) = estimate_route_signals(&prompt_text, context_limit);
     let signal = RouteSignal {
-        confidence: if force_cloud { 0.0 } else { 0.95 },
-        complexity: 0.0,
-        context_tokens: 0,
-        context_limit: u32::MAX,
+        confidence: 0.95,
+        complexity,
+        context_tokens,
+        context_limit,
         modality_unsupported_locally: false,
         consecutive_local_failures: 0,
         privacy_sensitive: false,
@@ -513,7 +521,7 @@ mod tests {
         write_tiny_q4_bundle(dir.path()).unwrap();
         let state = build_state(
             dir.path(),
-            Router::new(0.5).unwrap(),
+            Router::new().unwrap(),
             CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"cloud"}}]
             }))),
@@ -584,7 +592,7 @@ mod tests {
         write_tiny_q4_bundle(dir.path()).unwrap();
         let state = build_state(
             dir.path(),
-            Router::new(0.5).unwrap(),
+            Router::new().unwrap(),
             CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({}))),
         )
         .unwrap();
@@ -681,7 +689,7 @@ mod tests {
         write_tiny_q4_bundle(dir.path()).unwrap();
         let state = build_state(
             dir.path(),
-            Router::new(0.5).unwrap(),
+            Router::new().unwrap(),
             CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"from-cloud"}}]
             }))),
@@ -710,7 +718,7 @@ mod tests {
         assert_eq!(v["choices"][0]["message"]["content"], "from-cloud");
 
         // device: FORCE_CLOUD still stays local
-        let router = Router::new(0.5)
+        let router = Router::new()
             .unwrap()
             .with_execution(aria_hybrid::ExecutionMode::Device);
         let state = build_state(
@@ -744,7 +752,7 @@ mod tests {
         assert_ne!(v["choices"][0]["message"]["content"], "from-cloud");
 
         // cloud: plain prompt (no FORCE_CLOUD) still handoffs
-        let router = Router::new(0.5)
+        let router = Router::new()
             .unwrap()
             .with_execution(aria_hybrid::ExecutionMode::Cloud);
         let state = build_state(
@@ -784,7 +792,7 @@ mod tests {
         write_tiny_q4_bundle(dir.path()).unwrap();
         let state = build_state(
             dir.path(),
-            Router::new(0.5).unwrap(),
+            Router::new().unwrap(),
             CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Timeout),
         )
         .unwrap();
@@ -840,7 +848,7 @@ mod tests {
         write_tiny_q4_bundle(dir.path()).unwrap();
         let state = build_state(
             dir.path(),
-            Router::new(0.5).unwrap(),
+            Router::new().unwrap(),
             CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"from-cloud"}}]
             }))),
@@ -908,7 +916,7 @@ mod tests {
         write_tiny_q4_bundle(dir.path()).unwrap();
         let state = build_state(
             dir.path(),
-            Router::new(0.5).unwrap(),
+            Router::new().unwrap(),
             CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"from-cloud"}}]
             }))),
@@ -992,8 +1000,8 @@ mod tests {
     async fn hybrid_intelligence_mode_handoff_without_force() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
-        // threshold 0.8 + Intelligence → effective 1.0 → conf 0.95 handoff
-        let router = Router::new(0.8)
+        // Keyword boost → complexity ≥ Intelligence cutoff (0.40), still < Balance (0.75).
+        let router = Router::new()
             .unwrap()
             .with_mode(ParetoMode::Intelligence);
         let state = build_state(
@@ -1013,7 +1021,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
-                            "messages":[{"role":"user","content":"ordinary question"}],
+                            "messages":[{"role":"user","content":"Please analyze and reason step-by-step about this plan"}],
                             "max_tokens": 2
                         })
                         .to_string(),
@@ -1031,12 +1039,15 @@ mod tests {
     async fn hybrid_cost_mode_stays_local_when_balance_would_handoff() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
-        // With FORCE_CLOUD, Cost mode still handoffs (force is hard). Use non-force +
-        // high threshold via Cost: threshold 0.5 Cost → 0.25; conf 0.95 → local.
-        // Contrast: Balance threshold 0.99 → conf 0.95 handoff.
+        // Length score 0.35 (80–239 chars) + 3 keywords → ~0.89: Balance handoffs,
+        // Cost stays local; keep under tiny fixture context_length (64 tokens).
+        let mut prompt = String::from("Please analyze and reason step-by-step. ");
+        while prompt.chars().count() < 100 {
+            prompt.push('x');
+        }
         let balance = build_state(
             dir.path(),
-            Router::new(0.99).unwrap(),
+            Router::new().unwrap(),
             CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"balance-cloud"}}]
             }))),
@@ -1050,7 +1061,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
-                            "messages":[{"role":"user","content":"q"}],
+                            "messages":[{"role":"user","content": prompt}],
                             "max_tokens": 2
                         })
                         .to_string(),
@@ -1064,13 +1075,12 @@ mod tests {
 
         let cost = build_state(
             dir.path(),
-            Router::new(0.99).unwrap().with_mode(ParetoMode::Cost),
+            Router::new().unwrap().with_mode(ParetoMode::Cost),
             CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"cost-cloud"}}]
             }))),
         )
         .unwrap();
-        // Cost effective = 0.495; conf 0.95 → Local
         let res = app(cost)
             .oneshot(
                 Request::builder()
@@ -1079,7 +1089,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
-                            "messages":[{"role":"user","content":"q"}],
+                            "messages":[{"role":"user","content": prompt}],
                             "max_tokens": 2
                         })
                         .to_string(),
@@ -1099,7 +1109,7 @@ mod tests {
         // No mock, no API key → cloud_available=false
         let state = build_state(
             dir.path(),
-            Router::new(0.5).unwrap(),
+            Router::new().unwrap(),
             CloudClient::from_env("http://127.0.0.1:9"),
         )
         .unwrap();
