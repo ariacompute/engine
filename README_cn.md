@@ -14,6 +14,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 ## HTTP 服务
 
 ```bash
+cargo run -p aria-openai --bin aria-engine -- -h
+# 亦可：--help | help
+
 cargo run -p aria-openai --bin aria-engine -- serve \
   --model /path/to/aria-bundle \
   --bind 127.0.0.1:8080

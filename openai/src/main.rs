@@ -2,6 +2,7 @@ use aria_hybrid::{CloudClient, ExecutionMode, ParetoMode, Router};
 use aria_openai::{app, build_state};
 use std::env;
 use std::net::SocketAddr;
+use std::process;
 
 fn parse_mode(raw: &str) -> ParetoMode {
     match raw.to_ascii_lowercase().as_str() {
@@ -11,23 +12,64 @@ fn parse_mode(raw: &str) -> ParetoMode {
     }
 }
 
+fn print_usage() {
+    eprintln!(
+        "\
+aria-engine — Aria Compute OpenAI-compatible inference server
+
+Usage:
+  aria-engine serve --model <bundle_dir> [--bind host:port]
+  aria-engine -h | --help | help
+
+Options:
+  serve                 Start HTTP server (OpenAI-compatible)
+  --model <bundle_dir>  Aria quant bundle directory (required)
+  --bind <host:port>    Listen address (default: 127.0.0.1:8080)
+  -h, --help, help      Show this help and exit
+
+Environment (hybrid cloud):
+  ARIA_HYBRID_CLOUD_URL       Cloud base URL (default: https://gateway.ariacompute.com)
+  ARIA_HYBRID_CLOUD_API_KEY   Bearer token for cloud calls
+  ARIA_HYBRID_THRESHOLD       Confidence threshold in [0,1] (default: 0.0)
+  ARIA_HYBRID_MODE            cost | balance | intelligence (default: balance)
+  ARIA_HYBRID_EXECUTION       hybrid | device | cloud (default: hybrid)
+"
+    );
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut model = None;
     let mut bind = "127.0.0.1:8080".to_string();
-    let mut args = env::args().skip(1);
+    let mut args = env::args().skip(1).peekable();
+    if args.peek().is_none() {
+        print_usage();
+        process::exit(2);
+    }
     while let Some(a) = args.next() {
         match a.as_str() {
+            "-h" | "--help" | "help" => {
+                print_usage();
+                process::exit(0);
+            }
             "serve" => {}
             "--model" => model = args.next(),
             "--bind" => bind = args.next().unwrap_or(bind),
             other => {
                 eprintln!("unknown arg: {other}");
-                std::process::exit(2);
+                print_usage();
+                process::exit(2);
             }
         }
     }
-    let model = model.ok_or("usage: aria-openai serve --model <bundle_dir> [--bind host:port]")?;
+    let model = match model {
+        Some(m) => m,
+        None => {
+            eprintln!("error: --model <bundle_dir> is required");
+            print_usage();
+            process::exit(2);
+        }
+    };
     let cloud_base = env::var("ARIA_HYBRID_CLOUD_URL")
         .unwrap_or_else(|_| "https://gateway.ariacompute.com".into());
     let threshold: f32 = env::var("ARIA_HYBRID_THRESHOLD")
