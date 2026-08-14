@@ -18,7 +18,7 @@ fn parse_mode(raw: &str) -> ParetoMode {
 fn print_usage() {
     eprintln!(
         "\
-aria-engine — Aria Compute OpenAI-compatible inference server
+aria-engine — Aria Compute inference engine
 
 Usage:
   aria-engine serve --model <bundle_dir> [--bind host:port]
