@@ -52,7 +52,15 @@ jobs:
         run: cargo clippy --all-targets -- -D warnings
 
       - name: Build release binary
-        run: cargo build --release -p aria-openai
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Embed release tag (sans leading v) into aria-engine -v/--version.
+          export ARIA_ENGINE_VERSION="${TAG_NAME#v}"
+          echo "ARIA_ENGINE_VERSION=$ARIA_ENGINE_VERSION"
+          cargo build --release -p aria-openai
 
       - name: Package release archive (Unix)
         if: matrix.archive == 'tar.gz'

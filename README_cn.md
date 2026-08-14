@@ -16,6 +16,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 ```bash
 cargo run -p aria-openai --bin aria-engine -- -h
 # 亦可：--help | help
+cargo run -p aria-openai --bin aria-engine -- -v
+# 亦可：--version | version（发版构建通过 ARIA_ENGINE_VERSION 写入 git tag）
 
 cargo run -p aria-openai --bin aria-engine -- serve \
   --model /path/to/aria-bundle \

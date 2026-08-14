@@ -4,6 +4,9 @@ use std::env;
 use std::net::SocketAddr;
 use std::process;
 
+/// Embedded at compile time; release builds set `ARIA_ENGINE_VERSION` from the git tag.
+const ENGINE_VERSION: &str = env!("ARIA_ENGINE_VERSION");
+
 fn parse_mode(raw: &str) -> ParetoMode {
     match raw.to_ascii_lowercase().as_str() {
         "cost" => ParetoMode::Cost,
@@ -20,12 +23,14 @@ aria-engine — Aria Compute OpenAI-compatible inference server
 Usage:
   aria-engine serve --model <bundle_dir> [--bind host:port]
   aria-engine -h | --help | help
+  aria-engine -v | --version | version
 
 Options:
   serve                 Start HTTP server (OpenAI-compatible)
   --model <bundle_dir>  Aria quant bundle directory (required)
   --bind <host:port>    Listen address (default: 127.0.0.1:8080)
   -h, --help, help      Show this help and exit
+  -v, --version, version  Print version and exit
 
 Environment (hybrid cloud):
   ARIA_HYBRID_CLOUD_URL       Cloud base URL (default: https://gateway.ariacompute.com)
@@ -34,6 +39,10 @@ Environment (hybrid cloud):
   ARIA_HYBRID_EXECUTION       hybrid | device | cloud (default: hybrid)
 "
     );
+}
+
+fn print_version() {
+    println!("aria-engine {ENGINE_VERSION}");
 }
 
 #[tokio::main]
@@ -49,6 +58,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         match a.as_str() {
             "-h" | "--help" | "help" => {
                 print_usage();
+                process::exit(0);
+            }
+            "-v" | "--version" | "version" => {
+                print_version();
                 process::exit(0);
             }
             "serve" => {}
