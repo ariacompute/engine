@@ -350,6 +350,22 @@ impl Bundle {
             None => Err(EngineError::Format(format!("missing tensor {name}"))),
         }
     }
+
+    /// Load the first tensor that exists among `names` (HF vs tiny/blk aliases).
+    pub fn weight_f32_any(&self, names: &[&str]) -> Result<Vec<f32>, EngineError> {
+        let mut tried = Vec::with_capacity(names.len());
+        for name in names {
+            match self.weight_f32(name) {
+                Ok(v) => return Ok(v),
+                Err(EngineError::Format(_)) => tried.push(*name),
+                Err(e) => return Err(e),
+            }
+        }
+        Err(EngineError::Format(format!(
+            "missing tensor (tried {})",
+            tried.join(", ")
+        )))
+    }
 }
 
 #[cfg(test)]

@@ -6,6 +6,7 @@ pub mod fixture;
 pub mod multimodal;
 mod pack;
 mod session;
+mod tensor_names;
 
 pub use aria_kernel::EngineError;
 pub use bundle::{dequantize, load_bundle, Bundle, ModelConfig, QuantTensor, TensorData};
