@@ -117,14 +117,42 @@ pub fn app(state: AppState) -> AxumRouter {
 }
 
 async fn list_models(State(st): State<AppState>) -> Json<Value> {
+    let ids = advertised_model_ids(&st);
+    let data: Vec<Value> = ids
+        .into_iter()
+        .map(|id| {
+            json!({
+                "id": id,
+                "object": "model",
+                "owned_by": "aria"
+            })
+        })
+        .collect();
     Json(json!({
         "object": "list",
-        "data": [{
-            "id": st.model_id,
-            "object": "model",
-            "owned_by": "aria"
-        }]
+        "data": data
     }))
+}
+
+/// Model ids exposed on `GET /v1/models`.
+/// - `cloud`: only gateway id `ariacompute/ariamodel`
+/// - `device`: local bundle id
+/// - `hybrid`: local + gateway id when cloud credentials are configured
+fn advertised_model_ids(st: &AppState) -> Vec<String> {
+    match st.router.execution {
+        ExecutionMode::Cloud => vec![CLOUD_GATEWAY_MODEL.to_string()],
+        ExecutionMode::Device => vec![st.model_id.clone()],
+        ExecutionMode::Hybrid => {
+            let mut ids = vec![st.model_id.clone()];
+            if st.cloud.is_available() {
+                let cloud = CLOUD_GATEWAY_MODEL.to_string();
+                if !ids.iter().any(|id| id == &cloud) {
+                    ids.push(cloud);
+                }
+            }
+            ids
+        }
+    }
 }
 
 async fn chat_completions(
@@ -464,15 +492,24 @@ pub fn build_state_with_family(
     router: Router,
     cloud: CloudClient,
 ) -> Result<AppState, EngineError> {
+    let model_dir = model_dir.as_ref();
     let session = SessionBuilder::new()
         .model(model_dir)
         .family(family)
         .build()?;
+    // Local OpenAI model id = bundle directory name (e.g. qwen3-0.6b_q4), not the
+    // internal family path used for graph wiring (often still stage-A gemma).
+    let local_id = model_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| session.model_id().to_string());
     // Cloud-only execution advertises the gateway model id (ariacompute/ariamodel).
     let model_id = if router.execution == ExecutionMode::Cloud {
         CLOUD_GATEWAY_MODEL.to_string()
     } else {
-        session.model_id().to_string()
+        local_id
     };
     Ok(AppState {
         session: Arc::new(Mutex::new(session)),
@@ -786,6 +823,7 @@ mod tests {
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
         let models = body_json(res).await;
+        assert_eq!(models["data"].as_array().unwrap().len(), 1);
         assert_eq!(models["data"][0]["id"], CLOUD_GATEWAY_MODEL);
 
         let res = svc
@@ -808,6 +846,60 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let v = body_json(res).await;
         assert_eq!(v["choices"][0]["message"]["content"], "from-cloud");
+    }
+
+    #[tokio::test]
+    async fn models_lists_cloud_gateway_id_not_family_path() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let local_name = dir.path().file_name().unwrap().to_str().unwrap().to_string();
+
+        // cloud execution → only ariacompute/ariamodel (never gemma family path)
+        let cloud_state = build_state(
+            dir.path(),
+            Router::new()
+                .unwrap()
+                .with_execution(ExecutionMode::Cloud),
+            CloudClient::new("http://127.0.0.1:9", "sk-test").with_mock(MockMode::Success(
+                json!({"choices":[{"message":{"content":"c"}}]}),
+            )),
+        )
+        .unwrap();
+        assert_eq!(cloud_state.model_id, CLOUD_GATEWAY_MODEL);
+        let models = body_json(
+            app(cloud_state)
+                .oneshot(Request::builder().uri("/v1/models").body(Body::empty()).unwrap())
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(models["data"].as_array().unwrap().len(), 1);
+        assert_eq!(models["data"][0]["id"], CLOUD_GATEWAY_MODEL);
+        assert_ne!(models["data"][0]["id"], "gemma/gemma-4-e2b-it");
+
+        // hybrid → local bundle dir name + gateway id
+        let hybrid_state = build_state(
+            dir.path(),
+            Router::new().unwrap(),
+            CloudClient::new("http://127.0.0.1:9", "sk-test"),
+        )
+        .unwrap();
+        assert_eq!(hybrid_state.model_id, local_name);
+        let models = body_json(
+            app(hybrid_state)
+                .oneshot(Request::builder().uri("/v1/models").body(Body::empty()).unwrap())
+                .await
+                .unwrap(),
+        )
+        .await;
+        let ids: Vec<&str> = models["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|m| m["id"].as_str().unwrap())
+            .collect();
+        assert_eq!(ids, vec![local_name.as_str(), CLOUD_GATEWAY_MODEL]);
+        assert!(!ids.contains(&"gemma/gemma-4-e2b-it"));
     }
 
     #[tokio::test]

@@ -104,7 +104,7 @@
 
 - `serve(bind, model_dir, hybrid_opts)`（axum）。
 - `POST /v1/chat/completions`：非流式 JSON + `stream: true` 时 SSE。
-- `GET /v1/models`：列出已加载 / 已注册模型 id。
+- `GET /v1/models`：按 `hybrid_execution` 列出模型 id——`cloud` 仅 `ariacompute/ariamodel`；`device` 为本地 bundle 目录名；`hybrid` 为本地目录名，若已配置 cloud 凭证则另附 `ariacompute/ariamodel`（不再用内部家族 path 如 `gemma/gemma-4-e2b-it` 冒充云端 id）。
 - 请求/响应字段对齐 OpenAI Chat Completions 常用子集（`messages`、`temperature`、`max_tokens`、`stream`）。
 - **CLI（`aria-engine`）**
   - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。

@@ -266,8 +266,10 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = bind.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     eprintln!(
-        "aria-openai listening on http://{addr} (model={})",
-        model_path.display()
+        "aria-openai listening on http://{addr} (model={} execution={:?} mode={:?})",
+        model_path.display(),
+        execution,
+        mode
     );
     axum::serve(listener, app).await?;
     Ok(())
