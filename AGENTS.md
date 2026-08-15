@@ -33,16 +33,17 @@
 
 ## 常用命令
 - `cargo test`
-- `cargo run -p aria-openai --bin aria-engine -- serve --model <bundle_dir>`
+- `cargo run -p aria-openai --bin aria-engine -- serve <model|bundle_dir>`
+- `aria-engine auth` / `download` / `list` / `clean`
 - `python -m unittest discover -s bench/tests -t .`
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8 评测）。`task.md` T0–T6 / T10–T11 / T20 / **T21** 均已完成。
+Spec 见 `requirements.md`（含 §8 评测）。`task.md` T0–T6 / T10–T11 / T20 / T21 / **T30–T34（CLI redesign）** 均已完成。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。
 - 全家族 §1.1：`ArchClass` + `graph_hook`；VL/VLA 见 `multimodal`。
 - 评测对齐 `model` `audit_cli`：缺后端 skip、`ci_fail: false`；不启动第三方引擎进程。
-- NEON：`SimdMode::Neon`；混合云：`ARIA_HYBRID_CLOUD_API_KEY` / `ARIA_HYBRID_MODE`（复杂度阈值）/ `ARIA_HYBRID_EXECUTION`。
+- NEON：`SimdMode::Neon`；混合云：`~/.ariacompute/config.yml`（`cloud_api_key` / `hybrid_mode` / `hybrid_execution`）；下载探针 Dashboard/HF/MS。
 - 与 **model** 协同 blocked Hadamard（`format_version=2`）。

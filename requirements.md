@@ -66,8 +66,8 @@
 | 1 | **kernel** | matmul、attention、RMSNorm、RoPE、Softmax、SwiGLU、码本查表反量化、FWHT；`SimdMode::{Scalar, Neon}`；阶段 A：scalar 完整 + NEON `#[cfg(target_arch="aarch64")]` 入口；阶段 C：NEON 与 scalar 数值对拍 |
 | 2 | **graph** | Layer → Op → Tensor IR；`BufferPool`；mmap / `external` 零拷贝输入；融合节点 **HDM**（Hadamard + Dequant + MatMul）；阶段 A：LLM decode 所需 ops 可调度；图序列化可选（阶段 B+） |
 | 3 | **inference** | `load_bundle`（mmap `weight.bin`）；KV cache；greedy / 基础 sampling；tokenizer；§1.1 家族注册与图构建钩子；阶段 A：`gemma-4-e2b-it` **tiny q4** 黄金路径；阶段 B/C：见上表 |
-| 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排 |
-| 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；`ARIA_HYBRID_CLOUD_API_KEY` + base URL；`ARIA_HYBRID_EXECUTION`=`hybrid`\|`device`\|`cloud`；阶段 A：mock + 单测；`device` / privacy 强制 Local，`cloud` 强制 Handoff |
+| 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排；CLI：`auth` / `download` / `list` / `clean` / `serve` |
+| 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；凭证与模式来自 `~/.ariacompute/config.yml`（`CloudClient::new`）；`execution`=`hybrid`\|`device`\|`cloud`；阶段 A：mock + 单测；`device` / privacy 强制 Local，`cloud` 强制 Handoff |
 | 6 | **反量化语义** | 与 Python `model.common.quant.dequantize` 一致：**rotated-space** 重建；推理优先融合 HDM，**不**要求加载时整表逆 Hadamard 物化 |
 | 7 | **HTTP** | **axum** 实现本地 serve |
 
@@ -106,13 +106,35 @@
 - `POST /v1/chat/completions`：非流式 JSON + `stream: true` 时 SSE。
 - `GET /v1/models`：列出已加载 / 已注册模型 id。
 - 请求/响应字段对齐 OpenAI Chat Completions 常用子集（`messages`、`temperature`、`max_tokens`、`stream`）。
+- **CLI（`aria-engine`）**
+  - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。
+  - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution]`；`-h` / `-v`。
+  - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。
+  - **禁止** `ARIA_HYBRID_*` 环境变量；仅保留编译期 `ARIA_ENGINE_VERSION`。
+  - **下载源**（恰三）：Dashboard 认证 API、Hugging Face、ModelScope；**禁止**引擎直连公开 S3/COS registry URL。
+  - 每次 `download` 探测连通性 + 短速率采样，选最优可达源；中途失败回退次优已探测源；不持久化强制源。
+  - HF/MS 布局对齐 `serve/scripts/upload-model-hub.sh`：`{sdk}/{bundle}/{file}`，默认 `sdk=v1.0`。
+  - Bundle 名解析：`*_q4`→int4、`*_q8`→int8、`*_q326`/`*_q3.26`→int326；否则整名 + 默认 int4。
+
+### 3.4.1 Config（`~/.ariacompute/config.yml`）
+
+| 字段 | 含义 |
+|------|------|
+| `cloud_api_key` | Dashboard / hybrid 同一 API key |
+| `cloud_url` | Gateway base（`.com` 或 `.cn`） |
+| `site_url` | Dashboard site（`.com` 或 `.cn`） |
+| `hybrid_mode` | `cost` \| `balance` \| `intelligence` |
+| `hybrid_execution` | `hybrid` \| `device` \| `cloud` |
+
+- `auth`：提示 API key → 按 locale + 连通性写入 `cloud_url`/`site_url` → 提示 mode/execution → 写盘。
+- Gateway / site 探测不依赖用户选源；下载源每次运行时探针选择。
 
 ### 3.5 `aria-hybrid`
 
 - **P0**
   - `RouteAction::{Local, CloudHandoff}`；`RouteDecision` 含 `action` / `reason` / `policy_version` / `fallback` / `projection` / `mode`。
   - `ParetoMode::{Cost, Balance, Intelligence}`：调节复杂度 handoff 阈值（Cost=`0.90` 偏 Local，Balance=`0.75`，Intelligence=`0.40` 更易 Handoff）；`confidence` 保留字段但不参与 handoff。
-  - 硬约束：`ARIA_HYBRID_EXECUTION=device`、`privacy_sensitive` → 强制 Local；`=cloud` → 强制 CloudHandoff（云不可用时仍走 handoff 路径并报错，禁止静默本地）；`!cloud_available` 时 hybrid 模式不得 Handoff；本地不支持 modality / 上下文超限且云可用 → PreferCloud。
+  - 硬约束：`execution=device`、`privacy_sensitive` → 强制 Local；`=cloud` → 强制 CloudHandoff（云不可用时仍走 handoff 路径并报错，禁止静默本地）；`!cloud_available` 时 hybrid 模式不得 Handoff；本地不支持 modality / 上下文超限且云可用 → PreferCloud。
   - 会话粘性：同 `session_id` 默认保持上次 `action`；仅硬约束或 `consecutive_local_failures >= upgrade_after_failures` 允许 Local→Cloud 升级（高复杂度为软升级，粘性可拦住）。
   - `RouteOutcome` + `OutcomeStore`（进程内）：记录 action、reason、tokens、latency、handoff、可选 user_corrected。
 - **P1（薄信号面）**
@@ -120,7 +142,7 @@
   - `ProjectionBand::{MustLocal, LocalOk, PreferCloud}`；决策由投影 + 模式复杂度阈值合成。
   - chat 路径用 `estimate_route_signals(prompt, context_limit)` 填充 `complexity` / `context_tokens`。
 - `Router::new() -> Result<Self, EngineError>`；`route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。
-- `CloudClient`：OpenAI 兼容 HTTP；`ARIA_HYBRID_CLOUD_API_KEY`；超时与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。
+- `CloudClient::new(base_url, api_key)`：OpenAI 兼容 HTTP；超时与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。**无** `from_env` / `ARIA_HYBRID_*`。
 - 单测：模式复杂度阈值、硬约束、粘性升级、投影、Outcome、Cloud mock 成功/失败。
 
 ### 3.6 错误类型
@@ -135,7 +157,7 @@
 | `Quant` | 不支持的 bits / 码本布局 / pack 错误 |
 | `UnsupportedFamily` | 未注册或未实现的家族 |
 | `Cloud` | 云卸载失败（超时、非 2xx、JSON 解析） |
-| `InvalidParam` | 参数越界（max_tokens=0、非法 `ARIA_HYBRID_EXECUTION` 等） |
+| `InvalidParam` | 参数越界（max_tokens=0、非法 `hybrid_execution` 等） |
 | `Unsupported` | 未实现算子 / 阶段未开通的 API |
 
 禁止 `panic` 作为预期错误路径；禁止吞掉错误。
@@ -212,7 +234,7 @@
 ### 6.3 阶段 B / C（后续验收，写入 Spec 以免范围漂移）
 
 - **B**：每个 text/MoE 家族具备 loader/graph 钩子并通过该类 tiny 或全量文本生成测试。
-- **C**：VL/VLA、ASR、embeddings/RAG、tool_calls 的 OpenAI 面；NEON vs scalar 对拍；`ARIA_HYBRID_EXECUTION=device` 禁止云卸载、`=cloud` 强制云端。
+- **C**：VL/VLA、ASR、embeddings/RAG、tool_calls 的 OpenAI 面；NEON vs scalar 对拍；`hybrid_execution=device` 禁止云卸载、`=cloud` 强制云端。
 
 ## 7. 目录与依赖约定
 
@@ -232,7 +254,8 @@ engine/
 ```
 
 - HTTP：**axum**。
-- 混合云：可配置 base URL + `ARIA_HYBRID_CLOUD_API_KEY`；阶段 A 测试用 mock。
+- 混合云：`~/.ariacompute/config.yml` 的 `cloud_url` + `cloud_api_key`；阶段 A 测试用 mock。
+- CLI 下载：Dashboard / HF / ModelScope 探针择优；无公开 S3 客户端。
 - 权重与多 GB 产物 **不入 Git**。
 - 评测：`bench/` 为 **Python ≥3.10、标准库为主**（对齐 `model` 的 `audit_cli` 风格）；不解析 GGUF。本增量与 **model** 协同 blocked Hadamard（`format_version=2`）。
 
@@ -249,7 +272,7 @@ engine/
 
 | id | 典型服务 | 约定 |
 |----|----------|------|
-| `aria` | `aria-engine serve` | Aria bundle；`--model` 为家族 path 或服务端已加载 id |
+| `aria` | `aria-engine serve` | Aria bundle；`serve <model>` 为路径或 `~/.ariacompute/models/<model>` |
 | `llamacpp` | `llama-server` OpenAI 兼容 | 仅 HTTP 调用；本仓不解析 GGUF |
 | `ollama` | Ollama `/v1` | 同上 |
 | `vllm` | vLLM OpenAI 兼容 | 同上 |
@@ -310,7 +333,8 @@ python -m bench run \
 - [x] 阶段 A 黄金路径 = `gemma-4-e2b-it` tiny q4 可接受
 - [x] 全家族在 Spec 内、E2E 分 A/B/C 可接受
 - [x] OpenAI：阶段 A 仅 chat(+SSE)/models；ASR/RAG/Tool 属阶段 C 可接受
-- [x] Hybrid：阶段 A mock + `ARIA_HYBRID_CLOUD_API_KEY` 可接受
+- [x] Hybrid：阶段 A mock + config/`CloudClient::new` 可接受
+- [x] CLI：`~/.ariacompute` + auth/download/list/clean/serve；无 `ARIA_HYBRID_*`；三源探针下载可接受
 - [x] Kernel：NEON 主路径 + x86 scalar CI 可接受
 - [x] 反量化 = rotated-space + 融合 HDM、不强制加载期逆 H 可接受
 - [x] 五 crate 命名与目录映射可接受

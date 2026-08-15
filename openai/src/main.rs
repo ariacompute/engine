@@ -1,17 +1,24 @@
 use aria_hybrid::{CloudClient, ExecutionMode, ParetoMode, Router};
+use aria_openai::config::{self, AriaConfig};
+use aria_openai::download;
+use aria_openai::gateway_detect;
 use aria_openai::{app, build_state};
 use std::env;
+use std::io::{self, BufRead, Write};
 use std::net::SocketAddr;
 use std::process;
 
 /// Embedded at compile time; release builds set `ARIA_ENGINE_VERSION` from the git tag.
 const ENGINE_VERSION: &str = env!("ARIA_ENGINE_VERSION");
 
-fn parse_mode(raw: &str) -> ParetoMode {
+fn parse_mode(raw: &str) -> Result<ParetoMode, String> {
     match raw.to_ascii_lowercase().as_str() {
-        "cost" => ParetoMode::Cost,
-        "intelligence" | "intel" => ParetoMode::Intelligence,
-        _ => ParetoMode::Balance,
+        "cost" => Ok(ParetoMode::Cost),
+        "balance" => Ok(ParetoMode::Balance),
+        "intelligence" | "intel" => Ok(ParetoMode::Intelligence),
+        other => Err(format!(
+            "hybrid_mode must be cost|balance|intelligence, got {other:?}"
+        )),
     }
 }
 
@@ -21,22 +28,28 @@ fn print_usage() {
 aria-engine — Aria Compute inference engine
 
 Usage:
-  aria-engine serve --model <bundle_dir> [--bind host:port]
+  aria-engine auth [--status|--clear]
+  aria-engine download <model>
+  aria-engine list
+  aria-engine clean [model]
+  aria-engine serve <model> [--bind host:port] [--hybrid-mode MODE] [--hybrid-execution MODE]
   aria-engine -h | --help | help
   aria-engine -v | --version | version
 
-Options:
-  serve                 Start HTTP server (OpenAI-compatible)
-  --model <bundle_dir>  Aria quant bundle directory (required)
-  --bind <host:port>    Listen address (default: 127.0.0.1:8080)
-  -h, --help, help      Show this help and exit
-  -v, --version, version  Print version and exit
+Cache:
+  ~/.ariacompute/config.yml
+  ~/.ariacompute/models/<model>/
 
-Environment (hybrid cloud):
-  ARIA_HYBRID_CLOUD_URL       Cloud base URL (default: https://gateway.ariacompute.com)
-  ARIA_HYBRID_CLOUD_API_KEY   Bearer token for cloud calls
-  ARIA_HYBRID_MODE            cost | balance | intelligence (default: balance)
-  ARIA_HYBRID_EXECUTION       hybrid | device | cloud (default: hybrid)
+auth                 Prompt for API key + hybrid prefs; auto-detect gateway/site
+  --status           Show config status (key redacted)
+  --clear            Remove config.yml
+download <model>     Probe dashboard / Hugging Face / ModelScope; fetch best source
+list                 List cached models
+clean [model]        Remove one cached model or all
+serve <model>        Start OpenAI-compatible HTTP server
+  --bind             Listen address (default: 127.0.0.1:8080)
+  --hybrid-mode      cost | balance | intelligence (overrides config for this process)
+  --hybrid-execution hybrid | device | cloud (overrides config for this process)
 "
     );
 }
@@ -45,61 +58,239 @@ fn print_version() {
     println!("aria-engine {ENGINE_VERSION}");
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+fn prompt(label: &str) -> io::Result<String> {
+    eprint!("{label}");
+    io::stderr().flush()?;
+    let mut line = String::new();
+    io::stdin().lock().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
+fn prompt_choice(label: &str, allowed: &[&str], default: &str) -> io::Result<String> {
+    let joined = allowed.join("|");
+    loop {
+        let raw = prompt(&format!("{label} [{joined}] (default: {default}): "))?;
+        if raw.is_empty() {
+            return Ok(default.to_string());
+        }
+        let lower = raw.to_ascii_lowercase();
+        if allowed.iter().any(|a| *a == lower) {
+            return Ok(lower);
+        }
+        eprintln!("invalid choice: {raw}");
+    }
+}
+
+async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if args.iter().any(|a| a == "--status") {
+        let cfg = config::load_config()?;
+        let key = if cfg.cloud_api_key.is_empty() {
+            "(not set)".into()
+        } else if cfg.cloud_api_key.len() <= 8 {
+            "********".into()
+        } else {
+            format!(
+                "{}…{}",
+                &cfg.cloud_api_key[..4],
+                &cfg.cloud_api_key[cfg.cloud_api_key.len() - 4..]
+            )
+        };
+        println!("cloud_api_key: {key}");
+        println!(
+            "cloud_url: {}",
+            if cfg.cloud_url.is_empty() {
+                "(not set)"
+            } else {
+                &cfg.cloud_url
+            }
+        );
+        println!(
+            "site_url: {}",
+            if cfg.site_url.is_empty() {
+                "(not set)"
+            } else {
+                &cfg.site_url
+            }
+        );
+        println!("hybrid_mode: {}", cfg.hybrid_mode);
+        println!("hybrid_execution: {}", cfg.hybrid_execution);
+        println!("config: {}", config::config_path()?.display());
+        return Ok(());
+    }
+    if args.iter().any(|a| a == "--clear") {
+        config::clear_config()?;
+        println!("cleared {}", config::config_path()?.display());
+        return Ok(());
+    }
+
+    let api_key = prompt("API key (sk-… / bfvk-…): ")?;
+    if api_key.is_empty() {
+        return Err("API key required".into());
+    }
+    eprintln!("detecting gateway / site…");
+    let pair = gateway_detect::detect_gateway_and_site().await;
+    eprintln!("using cloud_url={} site_url={}", pair.cloud_url, pair.site_url);
+    let hybrid_mode = prompt_choice(
+        "hybrid_mode",
+        &["cost", "balance", "intelligence"],
+        "balance",
+    )?;
+    let hybrid_execution =
+        prompt_choice("hybrid_execution", &["hybrid", "device", "cloud"], "hybrid")?;
+
+    let cfg = AriaConfig {
+        cloud_api_key: api_key,
+        cloud_url: pair.cloud_url.to_string(),
+        site_url: pair.site_url.to_string(),
+        hybrid_mode,
+        hybrid_execution,
+    };
+    config::save_config(&cfg)?;
+    println!("wrote {}", config::config_path()?.display());
+    Ok(())
+}
+
+async fn cmd_download(model: &str) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = config::load_config()?;
+    let path = download::download_model(model, &cfg).await?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
+    let models = download::list_models()?;
+    if models.is_empty() {
+        println!("(no cached models in {})", config::models_dir()?.display());
+    } else {
+        for m in models {
+            println!("{m}");
+        }
+    }
+    Ok(())
+}
+
+fn cmd_clean(model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    download::clean_models(model)?;
+    match model {
+        Some(m) => println!("cleaned {m}"),
+        None => println!("cleaned all models under {}", config::models_dir()?.display()),
+    }
+    Ok(())
+}
+
+async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut model = None;
     let mut bind = "127.0.0.1:8080".to_string();
-    let mut args = env::args().skip(1).peekable();
-    if args.peek().is_none() {
-        print_usage();
-        process::exit(2);
-    }
-    while let Some(a) = args.next() {
-        match a.as_str() {
-            "-h" | "--help" | "help" => {
-                print_usage();
-                process::exit(0);
+    let mut mode_override = None;
+    let mut exec_override = None;
+    let mut i = 0;
+    while i < args.len() {
+        match args[i].as_str() {
+            "--bind" => {
+                i += 1;
+                bind = args
+                    .get(i)
+                    .cloned()
+                    .ok_or("--bind requires host:port")?;
             }
-            "-v" | "--version" | "version" => {
-                print_version();
-                process::exit(0);
+            "--hybrid-mode" => {
+                i += 1;
+                mode_override = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("--hybrid-mode requires a value")?,
+                );
             }
-            "serve" => {}
-            "--model" => model = args.next(),
-            "--bind" => bind = args.next().unwrap_or(bind),
+            "--hybrid-execution" => {
+                i += 1;
+                exec_override = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("--hybrid-execution requires a value")?,
+                );
+            }
+            other if other.starts_with('-') => {
+                return Err(format!("unknown flag: {other}").into());
+            }
             other => {
-                eprintln!("unknown arg: {other}");
-                print_usage();
-                process::exit(2);
+                if model.is_some() {
+                    return Err(format!("unexpected argument: {other}").into());
+                }
+                model = Some(other.to_string());
             }
         }
+        i += 1;
     }
-    let model = match model {
-        Some(m) => m,
-        None => {
-            eprintln!("error: --model <bundle_dir> is required");
-            print_usage();
-            process::exit(2);
-        }
-    };
-    let cloud_base = env::var("ARIA_HYBRID_CLOUD_URL")
-        .unwrap_or_else(|_| "https://gateway.ariacompute.com".into());
-    let mode = env::var("ARIA_HYBRID_MODE")
-        .ok()
-        .map(|s| parse_mode(&s))
-        .unwrap_or_default();
-    let execution = match env::var("ARIA_HYBRID_EXECUTION") {
-        Ok(s) => ExecutionMode::parse(&s)?,
-        Err(_) => ExecutionMode::Hybrid,
+    let model = model.ok_or("serve requires <model>")?;
+    let model_path = config::resolve_model_path(&model)?;
+
+    let cfg = config::load_config().unwrap_or_default();
+    let mode = parse_mode(
+        mode_override
+            .as_deref()
+            .unwrap_or(cfg.hybrid_mode.as_str()),
+    )?;
+    let execution = ExecutionMode::parse(
+        exec_override
+            .as_deref()
+            .unwrap_or(cfg.hybrid_execution.as_str()),
+    )?;
+    let cloud_url = if cfg.cloud_url.is_empty() {
+        "https://gateway.ariacompute.com".to_string()
+    } else {
+        cfg.cloud_url.clone()
     };
     let router = Router::new()?
         .with_mode(mode)
         .with_execution(execution);
-    let state = build_state(&model, router, CloudClient::from_env(cloud_base))?;
+    let state = build_state(
+        model_path.to_str().ok_or("invalid model path")?,
+        router,
+        CloudClient::new(cloud_url, cfg.cloud_api_key.clone()),
+    )?;
     let app = app(state);
     let addr: SocketAddr = bind.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
-    eprintln!("aria-openai listening on http://{addr}");
+    eprintln!(
+        "aria-openai listening on http://{addr} (model={})",
+        model_path.display()
+    );
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+#[tokio::main]
+async fn main() {
+    let args: Vec<String> = env::args().skip(1).collect();
+    if args.is_empty() {
+        print_usage();
+        process::exit(2);
+    }
+    let result = match args[0].as_str() {
+        "-h" | "--help" | "help" => {
+            print_usage();
+            Ok(())
+        }
+        "-v" | "--version" | "version" => {
+            print_version();
+            Ok(())
+        }
+        "auth" => cmd_auth(&args[1..]).await,
+        "download" => {
+            let model = args.get(1).map(|s| s.as_str()).unwrap_or("");
+            if model.is_empty() {
+                Err("download requires <model>".into())
+            } else {
+                cmd_download(model).await
+            }
+        }
+        "list" => cmd_list(),
+        "clean" => cmd_clean(args.get(1).map(|s| s.as_str())),
+        "serve" => cmd_serve(&args[1..]).await,
+        other => Err(format!("unknown command: {other}").into()),
+    };
+    if let Err(e) = result {
+        eprintln!("error: {e}");
+        process::exit(1);
+    }
 }

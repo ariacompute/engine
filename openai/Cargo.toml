@@ -22,6 +22,12 @@ http-body-util = { workspace = true }
 bytes = { workspace = true }
 futures-util = { workspace = true }
 
+reqwest = { workspace = true }
+serde_yaml = "0.9"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+dirs = "5"
+urlencoding = "2"
+
 [dev-dependencies]
 tempfile = { workspace = true }
 tower = { workspace = true }

@@ -11,46 +11,41 @@ cargo test
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## HTTP Serve
+## Config / Run
+
+Credentials and hybrid prefs live in `~/.ariacompute/config.yml` (via `aria-engine auth`). 
+
+| Field | Meaning | Default |
+|-------|---------|---------|
+| `cloud_api_key` | Hybrid Bearer key | _(empty → cloud errors)_ |
+| `cloud_url` | Gateway base URL (auto-detected on auth) | — |
+| `site_url` | Site for downloads  (auto-detected on download) | — |
+| `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
+| `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
 
 ```bash
-cargo run -p aria-openai --bin aria-engine -- -h
-# also: --help | help
-cargo run -p aria-openai --bin aria-engine -- -v
-# also: --version | version (release builds embed the git tag via ARIA_ENGINE_VERSION)
+# Auth
+aria-engine auth
+aria-engine auth --status
 
-cargo run -p aria-openai --bin aria-engine -- serve \
-  --model /path/to/aria-bundle \
-  --bind 127.0.0.1:8080
+# Download
+aria-engine download gemma-4-e2b-it_q4
+aria-engine list
+aria-engine clean gemma-4-e2b-it_q4
+
+# Serve
+# or: serve /path/to/aria-bundle
+aria-engine serve gemma-4-e2b-it_q4 \
+  --bind 127.0.0.1:8080 \
+  --hybrid-mode balance \
+  --hybrid-execution hybrid
 ```
 
-Default bind is `127.0.0.1:8080`. The process listens for OpenAI-compatible HTTP.
+`download` probes Serve (if keyed) / HuggingFace / ModelScope each run and picks the fastest reachable source.
 
-## Hybrid Cloud
+`serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`.
 
-Configure via environment variables (no CLI flags):
-
-| Variable | Meaning | Default |
-|----------|---------|---------|
-| `ARIA_HYBRID_CLOUD_URL` | Cloud OpenAI-compatible **base URL** (engine appends `/v1/chat/completions`) | `https://gateway.ariacompute.com` |
-| `ARIA_HYBRID_CLOUD_API_KEY` | Bearer token; required for real cloud calls | _(empty → cloud errors)_ |
-| `ARIA_HYBRID_MODE` | `cost` / `balance` / `intelligence` | `balance` |
-| `ARIA_HYBRID_EXECUTION` | `hybrid` (default) / `device` (on-device only) / `cloud` (cloud only) | `hybrid` |
-
-```bash
-export ARIA_HYBRID_CLOUD_URL=https://gateway.ariacompute.com
-export ARIA_HYBRID_CLOUD_API_KEY=sk-...
-export ARIA_HYBRID_MODE=balance
-# optional: force device-only or cloud-only
-# export ARIA_HYBRID_EXECUTION=device
-# export ARIA_HYBRID_EXECUTION=cloud
-
-cargo run -p aria-openai --bin aria-engine -- serve \
-  --model /path/to/aria-bundle \
-  --bind 127.0.0.1:8080
-```
-
-In `hybrid` execution, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `ARIA_HYBRID_EXECUTION=device` never handoffs; `=cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.
+In `--hybrid-execution hybrid`, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `--hybrid-execution device` never handoffs; `--hybrid-execution cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.
 
 ## OpenAI API
 

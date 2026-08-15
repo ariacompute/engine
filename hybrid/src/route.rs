@@ -22,14 +22,14 @@ pub enum ExecutionMode {
 }
 
 impl ExecutionMode {
-    /// Parse `ARIA_HYBRID_EXECUTION`: `hybrid` (default) | `device` | `cloud`.
+    /// Parse execution mode: `hybrid` (default) | `device` | `cloud`.
     pub fn parse(raw: &str) -> Result<Self, EngineError> {
         match raw.trim().to_ascii_lowercase().as_str() {
             "" | "hybrid" => Ok(Self::Hybrid),
             "device" => Ok(Self::Device),
             "cloud" => Ok(Self::Cloud),
             other => Err(EngineError::InvalidParam(format!(
-                "ARIA_HYBRID_EXECUTION must be hybrid|device|cloud, got {other:?}"
+                "hybrid_execution must be hybrid|device|cloud, got {other:?}"
             ))),
         }
     }

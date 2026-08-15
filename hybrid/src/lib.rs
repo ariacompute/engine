@@ -11,7 +11,7 @@ use aria_kernel::EngineError;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Model id posted to Aria gateway (`ARIA_HYBRID_CLOUD_URL`) on cloud handoff.
+/// Model id posted to Aria gateway on cloud handoff.
 pub const CLOUD_GATEWAY_MODEL: &str = "ariacompute/ariamodel";
 
 /// Estimate hybrid routing signals from prompt text and model context limit.
@@ -104,11 +104,10 @@ pub struct CloudMessage {
 }
 
 impl CloudClient {
-    pub fn from_env(base_url: impl Into<String>) -> Self {
-        let api_key = std::env::var("ARIA_HYBRID_CLOUD_API_KEY").unwrap_or_default();
+    pub fn new(base_url: impl Into<String>, api_key: impl Into<String>) -> Self {
         Self {
             base_url: base_url.into(),
-            api_key,
+            api_key: api_key.into(),
             timeout_ms: 5_000,
             mock: None,
         }
@@ -135,9 +134,7 @@ impl CloudClient {
             };
         }
         if self.api_key.is_empty() {
-            return Err(EngineError::Cloud(
-                "ARIA_HYBRID_CLOUD_API_KEY not set".into(),
-            ));
+            return Err(EngineError::Cloud("cloud API key not set".into()));
         }
         let url = format!(
             "{}/v1/chat/completions",
@@ -427,7 +424,7 @@ mod tests {
 
     #[tokio::test]
     async fn mock_cloud_ok_and_fail() {
-        let ok = CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(
+        let ok = CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(
             json!({"choices":[{"message":{"content":"hi"}}]}),
         ));
         assert!(ok.is_available());
@@ -444,7 +441,7 @@ mod tests {
             .unwrap();
         assert!(v["choices"][0]["message"]["content"].is_string());
 
-        let bad = CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::FailStatus(503));
+        let bad = CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::FailStatus(503));
         let err = bad
             .chat(&CloudChatRequest {
                 model: "x".into(),
@@ -455,7 +452,7 @@ mod tests {
             .unwrap_err();
         assert!(matches!(err, EngineError::Cloud(_)));
 
-        let to = CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Timeout);
+        let to = CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Timeout);
         let err = to
             .chat(&CloudChatRequest {
                 model: "x".into(),
@@ -619,13 +616,13 @@ mod tests {
 
     #[test]
     fn cloud_client_availability_without_credentials() {
-        let c = CloudClient::from_env("http://127.0.0.1:9");
+        let c = CloudClient::new("http://127.0.0.1:9", "");
         assert!(!c.is_available());
     }
 
     #[tokio::test]
     async fn cloud_client_missing_api_key() {
-        let c = CloudClient::from_env("http://127.0.0.1:9");
+        let c = CloudClient::new("http://127.0.0.1:9", "");
         let err = c
             .chat(&CloudChatRequest {
                 model: "x".into(),
@@ -635,6 +632,6 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, EngineError::Cloud(_)));
-        assert!(err.to_string().contains("ARIA_HYBRID_CLOUD_API_KEY"));
+        assert!(err.to_string().contains("cloud API key not set"));
     }
 }

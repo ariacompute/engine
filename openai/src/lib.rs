@@ -1,5 +1,9 @@
 //! OpenAI-compatible HTTP surface (chat / embeddings / ASR / tools / RAG).
 
+pub mod config;
+pub mod download;
+pub mod gateway_detect;
+
 use aria_hybrid::{
     estimate_route_signals, CloudChatRequest, CloudClient, CloudMessage, ExecutionMode, RouteAction,
     RouteOutcome, RouteSignal, Router, CLOUD_GATEWAY_MODEL,
@@ -527,7 +531,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             Router::new().unwrap(),
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"cloud"}}]
             }))),
         )
@@ -598,7 +602,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             Router::new().unwrap(),
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({}))),
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({}))),
         )
         .unwrap();
         let app = app(state);
@@ -695,7 +699,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             Router::new().unwrap(),
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"from-cloud"}}]
             }))),
         )
@@ -729,7 +733,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             router,
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"from-cloud"}}]
             }))),
         )
@@ -763,7 +767,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             router,
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"from-cloud"}}]
             }))),
         )
@@ -813,7 +817,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             Router::new().unwrap(),
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Timeout),
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Timeout),
         )
         .unwrap();
         let app = app(state);
@@ -869,7 +873,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             Router::new().unwrap(),
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"from-cloud"}}]
             }))),
         )
@@ -937,7 +941,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             Router::new().unwrap(),
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"from-cloud"}}]
             }))),
         )
@@ -1027,7 +1031,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             router,
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"intel-cloud"}}]
             }))),
         )
@@ -1068,7 +1072,7 @@ mod tests {
         let balance = build_state(
             dir.path(),
             Router::new().unwrap(),
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"balance-cloud"}}]
             }))),
         )
@@ -1096,7 +1100,7 @@ mod tests {
         let cost = build_state(
             dir.path(),
             Router::new().unwrap().with_mode(ParetoMode::Cost),
-            CloudClient::from_env("http://127.0.0.1:9").with_mock(MockMode::Success(json!({
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
                 "choices":[{"message":{"content":"cost-cloud"}}]
             }))),
         )
@@ -1130,7 +1134,7 @@ mod tests {
         let state = build_state(
             dir.path(),
             Router::new().unwrap(),
-            CloudClient::from_env("http://127.0.0.1:9"),
+            CloudClient::new("http://127.0.0.1:9", ""),
         )
         .unwrap();
         assert!(!state.cloud.is_available());

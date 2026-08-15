@@ -11,46 +11,41 @@ cargo test
 cargo clippy --workspace --all-targets -- -D warnings
 ```
 
-## HTTP 服务
+## 配置 / 运行
 
-```bash
-cargo run -p aria-openai --bin aria-engine -- -h
-# 亦可：--help | help
-cargo run -p aria-openai --bin aria-engine -- -v
-# 亦可：--version | version（发版构建通过 ARIA_ENGINE_VERSION 写入 git tag）
+凭证与 hybrid 偏好保存在 `~/.ariacompute/config.yml`（通过 `aria-engine auth` 写入）。
 
-cargo run -p aria-openai --bin aria-engine -- serve \
-  --model /path/to/aria-bundle \
-  --bind 127.0.0.1:8080
-```
-
-默认监听 `127.0.0.1:8080`，对外提供 OpenAI 兼容 HTTP。
-
-## Hybrid 云端
-
-通过环境变量配置（无 CLI 参数）：
-
-| 变量 | 含义 | 默认 |
+| 字段 | 含义 | 默认 |
 |------|------|------|
-| `ARIA_HYBRID_CLOUD_URL` | 云端 OpenAI 兼容 **base URL**（引擎会追加 `/v1/chat/completions`） | `https://gateway.ariacompute.com` |
-| `ARIA_HYBRID_CLOUD_API_KEY` | Bearer Token；真实云调用必填 | _(空 → 云调用报错)_ |
-| `ARIA_HYBRID_MODE` | `cost` / `balance` / `intelligence` | `balance` |
-| `ARIA_HYBRID_EXECUTION` | `hybrid`（默认）/ `device`（仅端侧）/ `cloud`（仅云端） | `hybrid` |
+| `cloud_api_key` | Hybrid Bearer 密钥 | _(空 → 云调用报错)_ |
+| `cloud_url` | Gateway base URL（auth 时自动探测） | — |
+| `site_url` | 下载用站点（download 时自动探测） | — |
+| `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
+| `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
 
 ```bash
-export ARIA_HYBRID_CLOUD_URL=https://gateway.ariacompute.com
-export ARIA_HYBRID_CLOUD_API_KEY=sk-...
-export ARIA_HYBRID_MODE=balance
-# 可选：强制仅端侧或仅云端
-# export ARIA_HYBRID_EXECUTION=device
-# export ARIA_HYBRID_EXECUTION=cloud
+# 认证
+aria-engine auth
+aria-engine auth --status
 
-cargo run -p aria-openai --bin aria-engine -- serve \
-  --model /path/to/aria-bundle \
-  --bind 127.0.0.1:8080
+# 下载
+aria-engine download gemma-4-e2b-it_q4
+aria-engine list
+aria-engine clean gemma-4-e2b-it_q4
+
+# 服务
+# 或：serve /path/to/aria-bundle
+aria-engine serve gemma-4-e2b-it_q4 \
+  --bind 127.0.0.1:8080 \
+  --hybrid-mode balance \
+  --hybrid-execution hybrid
 ```
 
-`hybrid` 执行下按提示复杂度 / 上下文溢出 / modality / 本地失败 / `FORCE_CLOUD` 路由。`cost` 更偏端侧，`intelligence` 更偏云端，`balance` 为中性自动。用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`ARIA_HYBRID_EXECUTION=device` 永不切换云端；`=cloud` 始终云端推理（隐私敏感请求仍留本地）。云端请求的 `model` 固定为 `ariacompute/ariamodel`。
+`download` 每次运行会探测 Serve（若已配置密钥）/ HuggingFace / ModelScope，并选择当前可达且最快的源。
+
+`serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。
+
+在 `--hybrid-execution hybrid` 下，路由依据提示复杂度 / 上下文溢出 / modality / 本地失败 / `FORCE_CLOUD`。`cost` 更偏端侧；`intelligence` 更偏云端；`balance` 为中性自动。用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`--hybrid-execution device` 永不切换云端；`--hybrid-execution cloud` 始终云端推理（隐私敏感请求仍留本地）。云端 handoff 请求的 `model` 固定为 `ariacompute/ariamodel`。
 
 ## OpenAI API
 
@@ -64,7 +59,7 @@ curl -s http://127.0.0.1:8080/v1/models | jq .
 curl -s http://127.0.0.1:8080/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "messages":[{"role":"user","content":"你好"}],
+    "messages":[{"role":"user","content":"Hello"}],
     "max_tokens": 32,
     "temperature": 0
   }' | jq .
@@ -73,7 +68,7 @@ curl -s http://127.0.0.1:8080/v1/chat/completions \
 curl -sN http://127.0.0.1:8080/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
-    "messages":[{"role":"user","content":"你好"}],
+    "messages":[{"role":"user","content":"Hello"}],
     "max_tokens": 32,
     "stream": true
   }'
@@ -83,16 +78,16 @@ curl -s http://127.0.0.1:8080/v1/embeddings \
   -H 'content-type: application/json' \
   -d '{"input":"hello embedding"}' | jq .
 
-# ASR stub（PCM16 LE 字节的 base64）
+# ASR stub（PCM16 LE 字节，base64）
 curl -s http://127.0.0.1:8080/v1/audio/transcriptions \
   -H 'content-type: application/json' \
   -d '{"file_b64":"AAECAwQFBgc="}' | jq .
 ```
 
-## 评测
+## 评测（Bench）
 
 ```bash
-# 请先自行启动各推理服务，然后：
+# 请自行启动各后端服务，然后：
 python -m unittest discover -s bench/tests -t .
 python -m bench list-families
 python -m bench run \
@@ -102,15 +97,15 @@ python -m bench run \
   --backend vllm=http://127.0.0.1:8000 \
   --max-tokens 64 --warmup 1 --runs 3 \
   --report ./out/bench_report.json
-# 同时会写出 ./out/bench_report.md
+# 同时会写入 ./out/bench_report.md
 ```
 
 可用 `--model-id family=path=id` 或 `backend:family=id` 覆盖模型 id。aria 默认使用家族 path；其余后端默认使用 HF `base_model`。
 
-## 工程规范
+## 工程约定
 
 本仓库遵循 Harness Engineering 理念：
 
 - [`AGENTS.md`](AGENTS.md)：Agent 工程上下文入口与目录索引
-- [`requirements.md`](requirements.md)：需求规格（功能边界/异常/验收标准，人工审核制）
+- [`requirements.md`](requirements.md)：需求 Spec（功能边界 / 例外 / 验收标准，需人工审核）
 - [`task.md`](task.md)：实施任务清单

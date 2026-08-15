@@ -76,3 +76,25 @@
 - [x] 性能：latency p50/p95、tok/s、可选 TTFT；质量：token_overlap + exact_match vs ref
 - [x] CLI：`python -m bench run` → JSON + MD；缺后端 skip；默认 exit 0
 - [x] `unittest` mock；更新 AGENTS / README
+
+## CLI redesign（config + 下载源）
+
+### T30 — Spec / harness
+- [x] `requirements.md`：CLI、config.yml、三源探针、无 `ARIA_HYBRID_*` / 无公开 S3
+- [x] 本文件 T30–T34 清单
+
+### T31 — `~/.ariacompute` + auth
+- [x] `config.rs`：路径、YAML roundtrip
+- [x] `gateway_detect.rs`：locale + 连通性 → `cloud_url` / `site_url`
+- [x] `auth` / `--status` / `--clear`
+
+### T32 — download / list / clean
+- [x] 探针 + 自动选 Dashboard / HF / ModelScope；失败回退
+- [x] `list` / `clean [model]`；bundle 校验
+
+### T33 — serve CLI + CloudClient
+- [x] `serve <model> [--bind] [--hybrid-mode] [--hybrid-execution]`
+- [x] `CloudClient::new`；删除 `from_env` 与 `ARIA_HYBRID_*`
+
+### T34 — Docs / 测试
+- [x] engine + serve 文档；`cargo test` / clippy；serve Go 下载 API-key + JSON 测
