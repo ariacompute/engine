@@ -26,7 +26,8 @@ tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
 bytes = "1"
 futures-util = "0.3"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+indicatif = "0.17"
 tempfile = "3"
 aria-kernel = { path = "kernel" }
 aria-graph = { path = "graph" }

@@ -27,6 +27,7 @@ serde_yaml = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 dirs = "5"
 urlencoding = "2"
+indicatif = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

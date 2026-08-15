@@ -1,9 +1,11 @@
 //! Probe Dashboard / Hugging Face / ModelScope and download Aria bundles.
 
 use crate::config::{self, AriaConfig};
+use futures_util::StreamExt;
+use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use std::fs;
-use std::io::{self, Cursor};
+use std::io::{self, Read, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use zip::ZipArchive;
@@ -278,33 +280,40 @@ async fn fetch_dashboard(bundle: &BundleRef, cfg: &AriaConfig, dest: &Path) -> i
         )));
     }
     let meta: DashboardJsonMeta = meta_resp.json().await.map_err(io_err)?;
-    let bytes = client
+
+    let staging = dest.with_extension("partial");
+    let _ = fs::remove_dir_all(&staging);
+    fs::create_dir_all(&staging)?;
+    let zip_path = staging.join("bundle.zip");
+
+    let resp = client
         .get(&meta.url)
         .bearer_auth(&cfg.cloud_api_key)
         .send()
         .await
         .map_err(io_err)?
         .error_for_status()
-        .map_err(io_err)?
-        .bytes()
-        .await
         .map_err(io_err)?;
+    stream_response_to_file(resp, &zip_path, &format!("download {}", bundle.model)).await?;
 
-    let staging = dest.with_extension("partial");
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging)?;
-    if meta.mode == "zip" || looks_like_zip(&bytes) {
-        extract_zip(&bytes, &staging)?;
-    } else {
-        // Single-file redirect: write as weight.bin is wrong; expect zip for bundles.
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!(
-                "dashboard returned mode={} (expected zip for Aria bundle); filename={}",
-                meta.mode, meta.filename
-            ),
-        ));
+    // Confirm zip magic after stream (redirect/zip modes both deliver a zip body).
+    let mut magic = [0u8; 4];
+    {
+        let mut f = fs::File::open(&zip_path)?;
+        let n = f.read(&mut magic)?;
+        if n < 4 || !looks_like_zip(&magic) {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "dashboard returned mode={} (expected zip for Aria bundle); filename={}",
+                    meta.mode, meta.filename
+                ),
+            ));
+        }
     }
+    extract_zip_path(&zip_path, &staging)?;
+    let _ = fs::remove_file(&zip_path);
     atomic_replace(&staging, dest)?;
     Ok(())
 }
@@ -316,7 +325,6 @@ async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> i
     fs::create_dir_all(&staging)?;
     let client = http_client(Duration::from_secs(600)).map_err(io_err)?;
 
-    let mut used_repo = None;
     for file in files {
         let mut fetched = false;
         for url in hub_file_urls(source, bundle, file) {
@@ -326,10 +334,9 @@ async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> i
             }
             match req.send().await {
                 Ok(r) if r.status().is_success() => {
-                    let bytes = r.bytes().await.map_err(io_err)?;
                     let out = staging.join(file);
-                    fs::write(&out, &bytes)?;
-                    used_repo = Some(url);
+                    let label = format!("download {} ({file})", bundle.model);
+                    stream_response_to_file(r, &out, &label).await?;
                     fetched = true;
                     break;
                 }
@@ -344,8 +351,7 @@ async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> i
             ));
         }
     }
-    let _ = used_repo;
-    // Best-effort tokenizer sidecars (optional).
+    // Best-effort tokenizer sidecars (optional; quiet, no progress).
     for extra in [
         "tokenizer.json",
         "tokenizer.model",
@@ -361,9 +367,8 @@ async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> i
             }
             if let Ok(r) = req.send().await {
                 if r.status().is_success() {
-                    if let Ok(bytes) = r.bytes().await {
-                        let _ = fs::write(staging.join(extra), bytes);
-                    }
+                    let out = staging.join(extra);
+                    let _ = stream_response_to_file(r, &out, "").await;
                     break;
                 }
             }
@@ -453,10 +458,57 @@ fn looks_like_zip(bytes: &[u8]) -> bool {
     bytes.len() >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4b
 }
 
-fn extract_zip(bytes: &[u8], dest: &Path) -> io::Result<()> {
-    let cursor = Cursor::new(bytes);
-    let mut archive = ZipArchive::new(cursor)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+/// Stream an HTTP body to `path`, showing a green progress bar when stderr is a TTY
+/// and `label` is non-empty.
+async fn stream_response_to_file(
+    resp: reqwest::Response,
+    path: &Path,
+    label: &str,
+) -> io::Result<u64> {
+    let total = resp.content_length();
+    let show = !label.is_empty() && io::IsTerminal::is_terminal(&io::stderr());
+    let pb = if !show {
+        ProgressBar::hidden()
+    } else if let Some(n) = total {
+        let pb = ProgressBar::new(n);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{msg} [{bar:40.green/bright.black}] {bytes}/{total_bytes} ({bytes_per_sec}, ETA {eta})",
+            )
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("█▉▊▋▌▍▎▏ "),
+        );
+        pb.set_message(label.to_string());
+        pb
+    } else {
+        let pb = ProgressBar::new_spinner();
+        pb.set_style(
+            ProgressStyle::with_template("{msg} {spinner:.green} {bytes} ({bytes_per_sec})")
+                .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+        );
+        pb.set_message(label.to_string());
+        pb.enable_steady_tick(Duration::from_millis(100));
+        pb
+    };
+
+    let mut file = fs::File::create(path)?;
+    let mut stream = resp.bytes_stream();
+    let mut downloaded = 0u64;
+    while let Some(chunk) = stream.next().await {
+        let chunk = chunk.map_err(io_err)?;
+        file.write_all(&chunk)?;
+        downloaded += chunk.len() as u64;
+        pb.set_position(downloaded);
+    }
+    file.flush()?;
+    pb.finish_and_clear();
+    Ok(downloaded)
+}
+
+fn extract_zip_path(zip_path: &Path, dest: &Path) -> io::Result<()> {
+    let file = fs::File::open(zip_path)?;
+    let mut archive =
+        ZipArchive::new(file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     for i in 0..archive.len() {
         let mut file = archive
             .by_index(i)
@@ -476,7 +528,6 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> io::Result<()> {
         let mut out = fs::File::create(&out_path)?;
         io::copy(&mut file, &mut out)?;
     }
-    // If zip nested a single top-level dir matching the bundle, flatten.
     flatten_single_subdir(dest)?;
     Ok(())
 }
