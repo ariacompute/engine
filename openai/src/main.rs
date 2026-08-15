@@ -40,7 +40,7 @@ Cache:
   ~/.ariacompute/config.yml
   ~/.ariacompute/models/<model>/
 
-auth                 Prompt for API key + hybrid prefs; auto-detect gateway/site
+auth                 Prompt for API key + hybrid prefs; detect .com/.cn from key
   --status           Show config status (key redacted)
   --clear            Remove config.yml
 download <model>     Probe dashboard / Hugging Face / ModelScope; fetch best source
@@ -127,8 +127,8 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if api_key.is_empty() {
         return Err("API key required".into());
     }
-    eprintln!("detecting gateway / site…");
-    let pair = gateway_detect::detect_gateway_and_site().await;
+    eprintln!("detecting gateway / site from API key…");
+    let pair = gateway_detect::detect_gateway_and_site(&api_key).await;
     eprintln!("using cloud_url={} site_url={}", pair.cloud_url, pair.site_url);
     let hybrid_mode = prompt_choice(
         "hybrid_mode",
@@ -150,15 +150,27 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn load_config_reconciled() -> Result<AriaConfig, Box<dyn std::error::Error>> {
+    let mut cfg = config::load_config()?;
+    if gateway_detect::reconcile_config_urls(&mut cfg).await {
+        config::save_config(&cfg)?;
+        eprintln!(
+            "updated region: cloud_url={} site_url={}",
+            cfg.cloud_url, cfg.site_url
+        );
+    }
+    Ok(cfg)
+}
+
 async fn cmd_download(model: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = config::load_config()?;
+    let cfg = load_config_reconciled().await?;
     let path = download::download_model(model, &cfg).await?;
     println!("{}", path.display());
     Ok(())
 }
 
 async fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = config::load_config()?;
+    let cfg = load_config_reconciled().await?;
     let models = download::list_models_with_catalog(&cfg).await?;
     if models.is_empty() {
         println!("(no models in catalog)");
@@ -226,7 +238,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let model = model.ok_or("serve requires <model>")?;
     let model_path = config::resolve_model_path(&model)?;
 
-    let cfg = config::load_config().unwrap_or_default();
+    let cfg = load_config_reconciled().await.unwrap_or_default();
     let mode = parse_mode(
         mode_override
             .as_deref()

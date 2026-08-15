@@ -127,8 +127,8 @@
 | `hybrid_mode` | `cost` \| `balance` \| `intelligence` |
 | `hybrid_execution` | `hybrid` \| `device` \| `cloud` |
 
-- `auth`：提示 API key → 按 locale + 连通性写入 `cloud_url`/`site_url` → 提示 mode/execution → 写盘。
-- Gateway / site 探测不依赖用户选源；下载源每次运行时探针选择。
+- `auth`：提示 API key → **用 key 探测** Dashboard（`GET /api/dashboard/models`）判定 `.com` / `.cn`，写入匹配的 `cloud_url`/`site_url`（同 TLD）；两端均失败时回退 locale + 连通性。`list`/`download` 启动时若 URL 不一致或 key 被当前 site 拒绝会自动纠偏并回写 config。
+- Gateway / site 始终成对（同为 `.com` 或同为 `.cn`）；下载源每次运行时探针选择。
 
 ### 3.5 `aria-hybrid`
 

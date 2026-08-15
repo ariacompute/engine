@@ -18,8 +18,8 @@ Credentials and hybrid prefs live in `~/.ariacompute/config.yml` (via `aria-engi
 | Field | Meaning | Default |
 |-------|---------|---------|
 | `cloud_api_key` | Hybrid Bearer key | _(empty → cloud errors)_ |
-| `cloud_url` | Gateway base URL (auto-detected on auth) | — |
-| `site_url` | Site for downloads  (auto-detected on download) | — |
+| `cloud_url` | Gateway base URL (auto-detected from API key region) | — |
+| `site_url` | Site for downloads (same region as `cloud_url`) | — |
 | `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
 | `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
 

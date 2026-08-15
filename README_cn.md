@@ -18,8 +18,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 | 字段 | 含义 | 默认 |
 |------|------|------|
 | `cloud_api_key` | Hybrid Bearer 密钥 | _(空 → 云调用报错)_ |
-| `cloud_url` | Gateway base URL（auth 时自动探测） | — |
-| `site_url` | 下载用站点（download 时自动探测） | — |
+| `cloud_url` | Gateway base URL（由 API key 所属区域自动探测） | — |
+| `site_url` | 下载用站点（与 `cloud_url` 同区） | — |
 | `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
 | `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
 
