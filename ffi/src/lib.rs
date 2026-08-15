@@ -52,7 +52,7 @@ fn write_out(out: *mut c_char, out_len: usize, s: &str) -> c_int {
         return -1;
     }
     unsafe {
-        ptr::copy_nonoverlapping(bytes.as_ptr(), out as *mut u8, bytes.len());
+        ptr::copy_nonoverlapping(bytes.as_ptr(), out.cast::<u8>(), bytes.len());
         *out.add(bytes.len()) = 0;
     }
     0
