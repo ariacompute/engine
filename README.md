@@ -110,7 +110,7 @@ Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`:
 
 | Binding | Path | Registry |
 |---------|------|----------|
-| Rust | `bindings/rust` (`aria-sdk`) | crates.io |
+| Rust | `bindings/rust` (`aria-engine`) | crates.io |
 | Python | `bindings/python` | PyPI |
 | Go | `bindings/go` | Go module |
 | TypeScript | `bindings/typescript` | npm `@ariacompute/engine-ts` |
@@ -122,7 +122,7 @@ Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`:
 C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_complete` / stream, `aria_embed`, `aria_transcribe`, tools JSON, `aria_model_destroy`, `aria_last_error`.
 
 ```bash
-cargo test -p aria-ffi -p aria-sdk
+cargo test -p aria-ffi -p aria-engine
 ./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS)
 ```
 

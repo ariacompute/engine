@@ -178,7 +178,7 @@
 | `aria_transcribe(…, pcm, len, options_json, out)` | ASR |
 | `aria_model_destroy` / `aria_last_error` | 生命周期 / 错误 |
 
-**语言包：** Python、Go、Rust（`aria-sdk`）、Swift、Kotlin、Flutter、React Native（npm `@ariacompute/engine-rn`）、TypeScript（npm `@ariacompute/engine-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
+**语言包：** Python、Go、Rust（`aria-engine`）、Swift、Kotlin、Flutter、React Native（npm `@ariacompute/engine-rn`）、TypeScript（npm `@ariacompute/engine-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
 
 **测试：** 共享 `cases.json`（lifecycle / chat / stream / tools / embed / ASR）；`cargo test -p aria-ffi`；`./scripts/run-binding-tests.sh`。Flutter/RN：iOS+Android device-farm/emulator CI（`.github/workflows/bindings-mobile.yml`）。
 

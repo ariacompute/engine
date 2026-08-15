@@ -18,6 +18,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "aria-engine"
+version = "0.1.0"
+dependencies = [
+ "aria-ffi",
+ "aria-inference",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "aria-ffi"
 version = "0.1.0"
 dependencies = [
@@ -90,16 +100,6 @@ dependencies = [
  "tower",
  "urlencoding",
  "zip",
-]
-
-[[package]]
-name = "aria-sdk"
-version = "0.1.0"
-dependencies = [
- "aria-ffi",
- "aria-inference",
- "serde_json",
- "tempfile",
 ]
 
 [[package]]

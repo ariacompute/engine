@@ -1,13 +1,12 @@
-# aria-sdk (Rust)
+# aria-engine (Rust)
 
-Rust binding for Aria Engine.
+Thin SDK over `aria-inference` (and re-exports of `aria-ffi` for embedding tests).
 
 ```rust
-use aria_sdk::{Engine, GenerateOpts};
+use aria_engine::{Engine, GenerateOpts};
 
-let mut eng = Engine::open("/path/to/aria-bundle")?;
-let out = eng.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?;
-println!("{}", out.text);
+let mut eng = Engine::open("/path/to/bundle")?;
+let g = eng.complete("hi", &GenerateOpts { max_tokens: 16, temperature: 0.0 })?;
 ```
 
-Publish: `cargo publish -p aria-sdk` (via `release.yml` on GitHub Release).
+Publish: `cargo publish -p aria-engine` (via `release.yml` on GitHub Release).

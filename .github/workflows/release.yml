@@ -150,13 +150,13 @@ jobs:
         run: |
           echo "Configure COCOAPODS_TRUNK_TOKEN then: pod trunk push bindings/swift/AriaEngine.podspec"
           echo "CocoaPods publish stub (fail-pass)"
-      - name: crates.io aria-sdk
+      - name: crates.io aria-engine
         continue-on-error: true
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: |
-          cargo publish -p aria-sdk --dry-run || true
-          cargo publish -p aria-sdk || echo "crates.io publish failed (fail-pass)"
+          cargo publish -p aria-engine --dry-run || true
+          cargo publish -p aria-engine || echo "crates.io publish failed (fail-pass)"
       - name: PyPI aria-engine
         continue-on-error: true
         env:

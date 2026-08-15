@@ -110,7 +110,7 @@ python -m bench run \
 
 | Binding | 路径 | Registry |
 |---------|------|----------|
-| Rust | `bindings/rust`（`aria-sdk`） | crates.io |
+| Rust | `bindings/rust`（`aria-engine`） | crates.io |
 | Python | `bindings/python` | PyPI |
 | Go | `bindings/go` | Go module |
 | TypeScript | `bindings/typescript` | npm `@ariacompute/engine-ts` |
@@ -122,7 +122,7 @@ python -m bench run \
 C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`、`aria_complete` / stream、`aria_embed`、`aria_transcribe`、tools JSON、`aria_model_destroy`、`aria_last_error`。
 
 ```bash
-cargo test -p aria-ffi -p aria-sdk
+cargo test -p aria-ffi -p aria-engine
 ./scripts/run-binding-tests.sh   # 主机矩阵（Rust / Python / Go / TS）
 ```
 
