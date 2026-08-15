@@ -43,6 +43,8 @@ aria-engine serve gemma-4-e2b-it_q4 \
 
 `download` probes Serve (if keyed) / HuggingFace / ModelScope each run and picks the fastest reachable source.
 
+`list` queries `{site_url}/api/dashboard/models` (requires `aria-engine auth`) and prints each downloadable bundle as `downloaded` / `not downloaded` (plus local-only caches).
+
 `serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`.
 
 In `--hybrid-execution hybrid`, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `--hybrid-execution device` never handoffs; `--hybrid-execution cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.

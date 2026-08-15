@@ -532,23 +532,166 @@ pub fn is_valid_bundle(dir: &Path) -> bool {
     v.get("format").and_then(|x| x.as_str()) == Some("aria-quant-bundle")
 }
 
-pub fn list_models() -> io::Result<Vec<String>> {
-    let dir = config::models_dir()?;
-    if !dir.exists() {
-        return Ok(vec![]);
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ListedModel {
+    pub name: String,
+    pub status: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct CatalogModel {
+    slug: String,
+    #[serde(default)]
+    available: bool,
+    #[serde(default, rename = "int4DownloadUrl")]
+    int4_download_url: String,
+    #[serde(default, rename = "int8DownloadUrl")]
+    int8_download_url: String,
+    #[serde(default, rename = "int326DownloadUrl")]
+    int326_download_url: String,
+}
+
+const CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
+
+/// Fetch Dashboard catalog and merge with local `~/.ariacompute/models` status.
+pub async fn list_models_with_catalog(cfg: &AriaConfig) -> io::Result<Vec<ListedModel>> {
+    if cfg.site_url.trim().is_empty() || cfg.cloud_api_key.trim().is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "list requires site_url and cloud_api_key; run `aria-engine auth`",
+        ));
     }
+    let catalog = fetch_dashboard_catalog(cfg).await?;
+    let local = local_model_status()?;
+    let mut seen = std::collections::HashSet::new();
+    let mut rows = Vec::new();
+
+    for bundle in expand_catalog_bundles(&catalog) {
+        seen.insert(bundle.clone());
+        let status = match local.get(&bundle) {
+            Some(LocalStatus::Valid) => "downloaded",
+            Some(LocalStatus::Incomplete) => "incomplete",
+            None => "not downloaded",
+        };
+        rows.push(ListedModel {
+            name: bundle,
+            status: status.into(),
+        });
+    }
+
+    let mut orphans: Vec<_> = local
+        .into_iter()
+        .filter(|(name, _)| !seen.contains(name))
+        .collect();
+    orphans.sort_by(|a, b| a.0.cmp(&b.0));
+    for (name, st) in orphans {
+        rows.push(ListedModel {
+            name,
+            status: match st {
+                LocalStatus::Valid => "downloaded".into(),
+                LocalStatus::Incomplete => "incomplete".into(),
+            },
+        });
+    }
+    Ok(rows)
+}
+
+fn expand_catalog_bundles(catalog: &[CatalogModel]) -> Vec<String> {
     let mut names = Vec::new();
-    for entry in fs::read_dir(dir)? {
-        let entry = entry?;
-        if entry.file_type()?.is_dir() {
-            let name = entry.file_name().to_string_lossy().into_owned();
-            if is_valid_bundle(&entry.path()) {
-                names.push(name);
-            } else {
-                names.push(format!("{name} (incomplete)"));
-            }
+    for item in catalog {
+        if !item.available {
+            continue;
+        }
+        let slug = item.slug.trim();
+        if slug.is_empty() {
+            continue;
+        }
+        if !item.int4_download_url.trim().is_empty() {
+            names.push(format!("{slug}_q4"));
+        }
+        if !item.int8_download_url.trim().is_empty() {
+            names.push(format!("{slug}_q8"));
+        }
+        if !item.int326_download_url.trim().is_empty() {
+            names.push(format!("{slug}_q326"));
         }
     }
+    names.sort();
+    names.dedup();
+    names
+}
+
+async fn fetch_dashboard_catalog(cfg: &AriaConfig) -> io::Result<Vec<CatalogModel>> {
+    let base = cfg.site_url.trim_end_matches('/');
+    let url = format!("{base}/api/dashboard/models");
+    let client = http_client(CATALOG_TIMEOUT).map_err(io_err)?;
+    let resp = client
+        .get(&url)
+        .bearer_auth(&cfg.cloud_api_key)
+        .header("Accept", "application/json")
+        .send()
+        .await
+        .map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::NotConnected,
+                format!("catalog fetch failed ({e}); check site_url / network or re-run `aria-engine auth`"),
+            )
+        })?;
+    if !resp.status().is_success() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!(
+                "catalog HTTP {}; check cloud_api_key or re-run `aria-engine auth`",
+                resp.status()
+            ),
+        ));
+    }
+    resp.json::<Vec<CatalogModel>>().await.map_err(|e| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("catalog JSON parse failed: {e}"),
+        )
+    })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LocalStatus {
+    Valid,
+    Incomplete,
+}
+
+fn local_model_status() -> io::Result<std::collections::HashMap<String, LocalStatus>> {
+    let dir = config::models_dir()?;
+    let mut map = std::collections::HashMap::new();
+    if !dir.exists() {
+        return Ok(map);
+    }
+    for entry in fs::read_dir(dir)? {
+        let entry = entry?;
+        if !entry.file_type()?.is_dir() {
+            continue;
+        }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let status = if is_valid_bundle(&entry.path()) {
+            LocalStatus::Valid
+        } else {
+            LocalStatus::Incomplete
+        };
+        map.insert(name, status);
+    }
+    Ok(map)
+}
+
+/// Local-only listing (no catalog). Kept for tests / callers that do not need remote.
+pub fn list_models() -> io::Result<Vec<String>> {
+    let local = local_model_status()?;
+    let mut names: Vec<String> = local
+        .into_iter()
+        .map(|(name, st)| match st {
+            LocalStatus::Valid => name,
+            LocalStatus::Incomplete => format!("{name} (incomplete)"),
+        })
+        .collect();
     names.sort();
     Ok(names)
 }
@@ -605,6 +748,41 @@ mod tests {
         let ms = hub_file_urls(DownloadSource::ModelScope, &b, "weight.bin");
         assert!(ms[0].contains("AriaCompute/gemma-4-e2b-it_q4"));
         assert!(ms[0].contains("/v1.0/gemma-4-e2b-it_q4/weight.bin"));
+    }
+
+    #[test]
+    fn expand_available_quants_to_bundles() {
+        let catalog = vec![
+            CatalogModel {
+                slug: "gemma-4-e2b-it".into(),
+                available: true,
+                int4_download_url: "https://x/int4".into(),
+                int8_download_url: "https://x/int8".into(),
+                int326_download_url: String::new(),
+            },
+            CatalogModel {
+                slug: "hidden".into(),
+                available: false,
+                int4_download_url: "https://x/int4".into(),
+                int8_download_url: String::new(),
+                int326_download_url: String::new(),
+            },
+            CatalogModel {
+                slug: "only326".into(),
+                available: true,
+                int4_download_url: String::new(),
+                int8_download_url: String::new(),
+                int326_download_url: "https://x/int326".into(),
+            },
+        ];
+        assert_eq!(
+            expand_catalog_bundles(&catalog),
+            vec![
+                "gemma-4-e2b-it_q4".to_string(),
+                "gemma-4-e2b-it_q8".to_string(),
+                "only326_q326".to_string(),
+            ]
+        );
     }
 
     #[test]

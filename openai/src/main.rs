@@ -44,7 +44,7 @@ auth                 Prompt for API key + hybrid prefs; auto-detect gateway/site
   --status           Show config status (key redacted)
   --clear            Remove config.yml
 download <model>     Probe dashboard / Hugging Face / ModelScope; fetch best source
-list                 List cached models
+list                 Query site catalog; mark each bundle downloaded / not downloaded
 clean [model]        Remove one cached model or all
 serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
@@ -157,14 +157,16 @@ async fn cmd_download(model: &str) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
-    let models = download::list_models()?;
+async fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = config::load_config()?;
+    let models = download::list_models_with_catalog(&cfg).await?;
     if models.is_empty() {
-        println!("(no cached models in {})", config::models_dir()?.display());
-    } else {
-        for m in models {
-            println!("{m}");
-        }
+        println!("(no models in catalog)");
+        return Ok(());
+    }
+    let width = models.iter().map(|m| m.name.len()).max().unwrap_or(0);
+    for m in &models {
+        println!("{:<width$}  {}", m.name, m.status, width = width);
     }
     Ok(())
 }
@@ -284,7 +286,7 @@ async fn main() {
                 cmd_download(model).await
             }
         }
-        "list" => cmd_list(),
+        "list" => cmd_list().await,
         "clean" => cmd_clean(args.get(1).map(|s| s.as_str())),
         "serve" => cmd_serve(&args[1..]).await,
         other => Err(format!("unknown command: {other}").into()),

@@ -43,6 +43,8 @@ aria-engine serve gemma-4-e2b-it_q4 \
 
 `download` 每次运行会探测 Serve（若已配置密钥）/ HuggingFace / ModelScope，并选择当前可达且最快的源。
 
+`list` 查询 `{site_url}/api/dashboard/models`（需先 `aria-engine auth`），按可下载 bundle 列出并标记 `downloaded` / `not downloaded`（另附仅本地缓存项）。
+
 `serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。
 
 在 `--hybrid-execution hybrid` 下，路由依据提示复杂度 / 上下文溢出 / modality / 本地失败 / `FORCE_CLOUD`。`cost` 更偏端侧；`intelligence` 更偏云端；`balance` 为中性自动。用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`--hybrid-execution device` 永不切换云端；`--hybrid-execution cloud` 始终云端推理（隐私敏感请求仍留本地）。云端 handoff 请求的 `model` 固定为 `ariacompute/ariamodel`。

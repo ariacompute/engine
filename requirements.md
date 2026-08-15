@@ -109,6 +109,7 @@
 - **CLI（`aria-engine`）**
   - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。
   - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution]`；`-h` / `-v`。
+  - `list`：`GET {site_url}/api/dashboard/models`（Bearer `cloud_api_key`）展开为可下载 bundle（`_q4`/`_q8`/`_q326`），对照本地缓存标记 `downloaded` / `not downloaded` / `incomplete`；另附 catalog 外本地项。
   - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。
   - **禁止** `ARIA_HYBRID_*` 环境变量；仅保留编译期 `ARIA_ENGINE_VERSION`。
   - **下载源**（恰三）：Dashboard 认证 API、Hugging Face、ModelScope；**禁止**引擎直连公开 S3/COS registry URL。
