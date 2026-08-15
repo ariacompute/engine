@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "cases": [
+    {"id": "init_ok", "intent": "Valid bundle path", "assert": "handle non-null; destroy succeeds"},
+    {"id": "init_missing_path", "intent": "Bad path", "assert": "null/err; last_error non-empty"},
+    {"id": "complete_ok", "intent": "Minimal messages + max_tokens", "assert": "success and non-empty response"},
+    {"id": "complete_bad_json", "intent": "Malformed messages", "assert": "error path; no crash"},
+    {"id": "complete_after_destroy", "intent": "Null model complete", "assert": "error/safe fail"},
+    {"id": "double_destroy", "intent": "Destroy null", "assert": "no crash"},
+    {"id": "options_max_tokens", "intent": "Options round-trip", "assert": "max_tokens honored"},
+    {"id": "complete_stream_ok", "intent": "Streaming callback", "assert": ">=1 chunk"},
+    {"id": "complete_tools_ok", "intent": "Tools JSON accepted", "assert": "function_calls field present"},
+    {"id": "embed_ok", "intent": "Embedding", "assert": "vector length > 0"},
+    {"id": "embed_bad_input", "intent": "Empty embed", "assert": "error, no crash"},
+    {"id": "transcribe_ok", "intent": "ASR stub", "assert": "text field present"},
+    {"id": "transcribe_bad_audio", "intent": "Empty pcm", "assert": "error, no crash"}
+  ]
+}

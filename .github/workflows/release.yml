@@ -93,3 +93,77 @@ jobs:
           tag_name: ${{ github.event.release.tag_name }}
           files: ${{ env.ASSET_PATH }}
           token: ${{ secrets.ARIACOMPUTE_TOKEN }}
+
+  # Language package publishes are fail-pass: must not block CLI/assets.
+  publish-packages:
+    name: Publish language packages (fail-pass)
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build release libaria_ffi
+        run: |
+          cargo build --release -p aria-ffi
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          tar -czf "libaria_ffi_${VERSION}_linux_x86_64.tar.gz" -C target/release libaria_ffi.so || \
+            tar -czf "libaria_ffi_${VERSION}_linux_x86_64.tar.gz" -C target/release libaria_ffi.a
+      - name: Upload libaria_ffi asset
+        continue-on-error: true
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: libaria_ffi_*.tar.gz
+          token: ${{ secrets.ARIACOMPUTE_TOKEN }}
+      - name: npm @ariacompute/engine-ts
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd bindings/typescript
+          npm version "${VERSION}" --no-git-tag-version || true
+          npm publish --access public || echo "npm engine-ts publish failed (fail-pass)"
+      - name: npm @ariacompute/engine-rn
+        continue-on-error: true
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          cd bindings/react-native
+          npm version "${VERSION}" --no-git-tag-version || true
+          npm publish --access public || echo "npm engine-rn publish failed (fail-pass)"
+      - name: pub.dev Flutter
+        continue-on-error: true
+        run: |
+          echo "Configure PUB_CREDENTIALS secret then: cd bindings/flutter && dart pub publish --force"
+          echo "pub.dev publish stub (fail-pass)"
+      - name: Maven Kotlin
+        continue-on-error: true
+        run: |
+          echo "Configure Maven Central / GPG then: cd bindings/kotlin && ./gradlew publish"
+          echo "Maven publish stub (fail-pass)"
+      - name: CocoaPods Swift
+        continue-on-error: true
+        run: |
+          echo "Configure COCOAPODS_TRUNK_TOKEN then: pod trunk push bindings/swift/AriaEngine.podspec"
+          echo "CocoaPods publish stub (fail-pass)"
+      - name: crates.io aria-sdk
+        continue-on-error: true
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          cargo publish -p aria-sdk --dry-run || true
+          cargo publish -p aria-sdk || echo "crates.io publish failed (fail-pass)"
+      - name: PyPI aria-engine
+        continue-on-error: true
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          cd bindings/python
+          pip install build twine || true
+          python -m build || true
+          twine upload dist/* || echo "PyPI publish failed (fail-pass)"

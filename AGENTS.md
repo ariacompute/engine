@@ -21,6 +21,7 @@
 - `inference/`：`aria-inference` — Bundle 加载、Prefill/Decode、家族注册表
 - `graph/`：`aria-graph` — Op DAG、BufferPool、mmap / external 零拷贝
 - `kernel/`：`aria-kernel` — matmul / attention / norm / RoPE / dequant / FWHT
+- `ffi/`：`aria-ffi` — C ABI（cdylib/staticlib）；`bindings/` 八语言 SDK
 - `bench/`：Python 引擎对标评测（§1.1 全家族；性能+质量；JSON+MD）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
 
@@ -35,15 +36,16 @@
 - `cargo test`
 - `cargo run -p aria-openai --bin aria-engine -- serve <model|bundle_dir>`
 - `aria-engine auth` / `download` / `list` / `clean`
+- `./scripts/run-binding-tests.sh`
 - `python -m unittest discover -s bench/tests -t .`
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8 评测）。`task.md` T0–T6 / T10–T11 / T20 / T21 / **T30–T34（CLI redesign）** 均已完成。
+Spec 见 `requirements.md`（含 §8 评测、§3.7 SDK bindings）。`task.md` T0–T6 / T10–T11 / T20 / T21 / T30–T34 / **T40–T47 SDK bindings** 已完成。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。
 - 全家族 §1.1：`ArchClass` + `graph_hook`；VL/VLA 见 `multimodal`。
 - 评测对齐 `model` `audit_cli`：缺后端 skip、`ci_fail: false`；不启动第三方引擎进程。
-- NEON：`SimdMode::Neon`；混合云：`~/.ariacompute/config.yml`（`cloud_api_key` / `hybrid_mode` / `hybrid_execution`）；下载探针 Dashboard/HF/MS。
-- 与 **model** 协同 blocked Hadamard（`format_version=2`）。
+- NEON：`SimdMode::Neon`；混合云：`~/.ariacompute/config.yml`；下载探针 Dashboard/HF/MS。
+- 与 **model** 协同 blocked Hadamard（`format_version=2`）。C ABI 变更须更新 `bindings/testdata/cases.json` 与宿主测。

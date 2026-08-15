@@ -1,0 +1,20 @@
+[package]
+name = "aria-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "C ABI for Aria engine (cdylib/staticlib)"
+publish = false
+
+[lib]
+name = "aria_ffi"
+crate-type = ["cdylib", "staticlib", "rlib"]
+path = "src/lib.rs"
+
+[dependencies]
+aria-inference = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

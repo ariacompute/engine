@@ -1,0 +1,10 @@
+{
+  "name": "@ariacompute/engine-rn",
+  "version": "0.1.0",
+  "description": "React Native binding for Aria Engine",
+  "main": "src/index.js",
+  "license": "MIT",
+  "peerDependencies": {
+    "react-native": ">=0.72.0"
+  }
+}

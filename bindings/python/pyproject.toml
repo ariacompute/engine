@@ -1,0 +1,15 @@
+[project]
+name = "aria-engine"
+version = "0.1.0"
+description = "Python SDK for Aria Engine (ctypes over libaria_ffi)"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [{ name = "Aria Compute" }]
+readme = "README.md"
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["aria_engine*"]

@@ -163,6 +163,29 @@
 
 禁止 `panic` 作为预期错误路径；禁止吞掉错误。
 
+### 3.7 SDK / Bindings（C ABI）
+
+跨语言唯一契约为 **C ABI**（`aria-ffi`：`cdylib` + `staticlib`，头文件 `ffi/include/aria.h`）。禁止嵌入 Cactus C++（§2.1）；本仓自有 ABI 允许。
+
+**入口（OpenAI 面 parity）：**
+
+| C API | 语义 |
+|------|------|
+| `aria_model_init(path)` | 加载 Aria bundle → opaque handle |
+| `aria_complete(…, messages_json, options_json, tools_json, out, …)` | chat；可选 tools；JSON 出参 |
+| `aria_complete_stream(…, callback)` | 流式 token/chunk 回调 |
+| `aria_embed(…, input_json, out)` | embeddings |
+| `aria_transcribe(…, pcm, len, options_json, out)` | ASR |
+| `aria_model_destroy` / `aria_last_error` | 生命周期 / 错误 |
+
+**语言包：** Python、Go、Rust（`aria-sdk`）、Swift、Kotlin、Flutter、React Native（npm `@ariacompute/engine-rn`）、TypeScript（npm `@ariacompute/engine-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
+
+**测试：** 共享 `cases.json`（lifecycle / chat / stream / tools / embed / ASR）；`cargo test -p aria-ffi`；`./scripts/run-binding-tests.sh`。Flutter/RN：iOS+Android device-farm/emulator CI（`.github/workflows/bindings-mobile.yml`）。
+
+**发布：** GitHub Release 触发 `release.yml`：CLI 资产 + 尝试发布 Maven / CocoaPods / npm / pub.dev / crates.io / PyPI；**publish fail-pass**（不阻断 CLI/资产上传）。版本 = tag 去 `v`。
+
+**Serve：** 主页与文档（全站语言）Tab 展示各 binding 调用示例。
+
 ## 4. 数据布局
 
 ### 4.1 Aria bundle（加载契约）
@@ -342,12 +365,13 @@ python -m bench run \
 - [x] 非目标（不动 model、无 Metal/计费、无 Cactus FFI）可接受
 - [x] 验收门禁（`cargo test`、单测覆盖正常/异常）可接受
 - [x] §8 引擎对标评测（JSON+MD；aria/llamacpp/ollama/vllm；性能+质量；全家族；`bench/` Python）可接受
+- [ ] §3.7 SDK bindings（C ABI + 八语言；OpenAI FFI 面；host/device-farm 测；release.yml 多 registry 发布 fail-pass）可接受
 
-> **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。可据本 Spec 生成 / 执行 `task.md`。
+> **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。§3.7 SDK bindings 按 2026-08-15 计划实施。可据本 Spec 生成 / 执行 `task.md`。
 
 ## 10. 参考
 
-- Cactus：<https://github.com/cactus-compute/cactus>
+- Cactus：<https://github.com/cactus-compute/cactus>；Bindings：<https://docs.cactuscompute.com/latest/#bindings>
 - `model` 契约：`model/common/bundle.py`、`pack.py`、`quant.py`、`hadamard.py`
 - `model` Spec：`model/requirements.md`；质量审计：`model/common/audit_cli.py`
 - 调研笔记：桌面 `cactus_compute_research.md`；PPT《技术架构-大模型》

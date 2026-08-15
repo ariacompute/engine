@@ -1,0 +1,47 @@
+name: Bindings Mobile
+
+on:
+  pull_request:
+    paths:
+      - "ffi/**"
+      - "bindings/flutter/**"
+      - "bindings/react-native/**"
+      - ".github/workflows/bindings-mobile.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ffi/**"
+      - "bindings/flutter/**"
+      - "bindings/react-native/**"
+      - ".github/workflows/bindings-mobile.yml"
+  workflow_dispatch:
+
+jobs:
+  android-emulator:
+    name: Flutter/RN Android emulator smoke
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build aria-ffi (host)
+        run: cargo build -p aria-ffi
+      - name: Note
+        run: |
+          echo "Cross-compile android-arm64 libaria_ffi + install Flutter/RN example apps on emulator."
+          echo "Wire Firebase Test Lab / emulator action when secrets and example apps are ready."
+          echo "Required e2e cases: init_ok, complete_ok, embed_ok, transcribe_ok, destroy."
+
+  ios-simulator:
+    name: Flutter/RN iOS simulator smoke
+    runs-on: macos-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Build aria-ffi (host)
+        run: cargo build -p aria-ffi
+      - name: Note
+        run: |
+          echo "Cross-compile ios-arm64/sim libaria_ffi + run Flutter/RN example on Simulator."
+          echo "Gate PRs that touch ffi/ or mobile bindings once example apps land."

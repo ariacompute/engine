@@ -1,0 +1,628 @@
+{
+  "format": "aria-quant-bundle",
+  "format_version": 2,
+  "group_size_default": 32,
+  "hadamard_seed": 0,
+  "model": {
+    "context_length": 64,
+    "hidden_size": 64,
+    "intermediate_size": 128,
+    "num_attention_heads": 4,
+    "num_kv_heads": 4,
+    "num_layers": 2,
+    "rope_theta": 10000.0,
+    "vocab_size": 128
+  },
+  "quantization": "q4",
+  "tensors": {
+    "blk.0.attn_k.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          8384,
+          64
+        ],
+        "packed_indices": [
+          6336,
+          2048
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        64
+      ]
+    },
+    "blk.0.attn_norm.weight": {
+      "dtype": "f16",
+      "kind": "raw",
+      "offsets": {
+        "data": [
+          25280,
+          128
+        ]
+      },
+      "shape": [
+        64
+      ]
+    },
+    "blk.0.attn_output.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          12608,
+          64
+        ],
+        "packed_indices": [
+          10560,
+          2048
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        64
+      ]
+    },
+    "blk.0.attn_q.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          6272,
+          64
+        ],
+        "packed_indices": [
+          4224,
+          2048
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        64
+      ]
+    },
+    "blk.0.attn_v.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          10496,
+          64
+        ],
+        "packed_indices": [
+          8448,
+          2048
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        64
+      ]
+    },
+    "blk.0.ffn_down.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          25216,
+          64
+        ],
+        "packed_indices": [
+          21120,
+          4096
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        128
+      ]
+    },
+    "blk.0.ffn_gate.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 128,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          16768,
+          128
+        ],
+        "packed_indices": [
+          12672,
+          4096
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        128,
+        64
+      ]
+    },
+    "blk.0.ffn_norm.weight": {
+      "dtype": "f16",
+      "kind": "raw",
+      "offsets": {
+        "data": [
+          25408,
+          128
+        ]
+      },
+      "shape": [
+        64
+      ]
+    },
+    "blk.0.ffn_up.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 128,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          20992,
+          128
+        ],
+        "packed_indices": [
+          16896,
+          4096
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        128,
+        64
+      ]
+    },
+    "blk.1.attn_k.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          29696,
+          64
+        ],
+        "packed_indices": [
+          27648,
+          2048
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        64
+      ]
+    },
+    "blk.1.attn_norm.weight": {
+      "dtype": "f16",
+      "kind": "raw",
+      "offsets": {
+        "data": [
+          46592,
+          128
+        ]
+      },
+      "shape": [
+        64
+      ]
+    },
+    "blk.1.attn_output.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          33920,
+          64
+        ],
+        "packed_indices": [
+          31872,
+          2048
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        64
+      ]
+    },
+    "blk.1.attn_q.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          27584,
+          64
+        ],
+        "packed_indices": [
+          25536,
+          2048
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        64
+      ]
+    },
+    "blk.1.attn_v.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          31808,
+          64
+        ],
+        "packed_indices": [
+          29760,
+          2048
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        64
+      ]
+    },
+    "blk.1.ffn_down.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 64,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          46528,
+          64
+        ],
+        "packed_indices": [
+          42432,
+          4096
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        64,
+        128
+      ]
+    },
+    "blk.1.ffn_gate.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 128,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          38080,
+          128
+        ],
+        "packed_indices": [
+          33984,
+          4096
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        128,
+        64
+      ]
+    },
+    "blk.1.ffn_norm.weight": {
+      "dtype": "f16",
+      "kind": "raw",
+      "offsets": {
+        "data": [
+          46720,
+          128
+        ]
+      },
+      "shape": [
+        64
+      ]
+    },
+    "blk.1.ffn_up.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 128,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          42304,
+          128
+        ],
+        "packed_indices": [
+          38208,
+          4096
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        128,
+        64
+      ]
+    },
+    "output.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 128,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          51072,
+          128
+        ],
+        "packed_indices": [
+          46976,
+          4096
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        128,
+        64
+      ]
+    },
+    "output_norm.weight": {
+      "dtype": "f16",
+      "kind": "raw",
+      "offsets": {
+        "data": [
+          46848,
+          128
+        ]
+      },
+      "shape": [
+        64
+      ]
+    },
+    "token_embd.weight": {
+      "bits": 4,
+      "codebook_share": "group",
+      "group_size": 32,
+      "hadamard": {
+        "applied": true,
+        "axis": 0,
+        "blocks": [
+          {
+            "size": 128,
+            "start": 0
+          }
+        ],
+        "mode": "blocked",
+        "row_pad": 0,
+        "seed": 0
+      },
+      "kind": "codebook",
+      "offsets": {
+        "codebook": [
+          4096,
+          128
+        ],
+        "packed_indices": [
+          0,
+          4096
+        ]
+      },
+      "row_pad": 0,
+      "shape": [
+        128,
+        64
+      ]
+    }
+  }
+}

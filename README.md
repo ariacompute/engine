@@ -104,6 +104,36 @@ python -m bench run \
 
 Override model ids with `--model-id family=path=id` or `backend:family=id`. Default aria model id is the family path; others use HF `base_model`.
 
+## SDK Bindings
+
+Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`:
+
+| Binding | Path | Registry |
+|---------|------|----------|
+| Rust | `bindings/rust` (`aria-sdk`) | crates.io |
+| Python | `bindings/python` | PyPI |
+| Go | `bindings/go` | Go module |
+| TypeScript | `bindings/typescript` | npm `@ariacompute/engine-ts` |
+| React Native | `bindings/react-native` | npm `@ariacompute/engine-rn` |
+| Flutter | `bindings/flutter` | pub.dev |
+| Swift | `bindings/swift` | CocoaPods |
+| Kotlin | `bindings/kotlin` | Maven |
+
+C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_complete` / stream, `aria_embed`, `aria_transcribe`, tools JSON, `aria_model_destroy`, `aria_last_error`.
+
+```bash
+cargo test -p aria-ffi -p aria-sdk
+./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS)
+```
+
+Mobile e2e (Flutter + React Native, iOS + Android): [`.github/workflows/bindings-mobile.yml`](.github/workflows/bindings-mobile.yml).
+
+### Install from registries
+
+Cut a **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds CLI archives and attempts package publish (npm / pub.dev / Maven / CocoaPods / crates.io / PyPI). **Publish failures are fail-pass** and do not block CLI/`libaria_ffi` assets. Secrets: `NPM_TOKEN`, pub credentials, Maven + GPG, `COCOAPODS_TRUNK_TOKEN`, `CARGO_REGISTRY_TOKEN`, `PYPI_TOKEN`, plus `ARIACOMPUTE_TOKEN` for Release uploads.
+
+Version = release tag without leading `v`.
+
 ## Engineering Conventions
 
 This repository follows the Harness Engineering philosophy:

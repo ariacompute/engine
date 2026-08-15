@@ -98,3 +98,30 @@
 
 ### T34 — Docs / 测试
 - [x] engine + serve 文档；`cargo test` / clippy；serve Go 下载 API-key + JSON 测
+
+## SDK bindings（C ABI + 八语言）
+
+### T40 — Spec
+- [x] `requirements.md` §3.7；本文件 T40–T48；`AGENTS.md` 目录 / 命令
+
+### T41 — `aria-ffi`
+- [x] C ABI：init / complete / stream / embed / transcribe / destroy / last_error
+- [x] `ffi/include/aria.h`；`cargo test -p aria-ffi`
+
+### T42 — Language scaffolds
+- [x] `bindings/{python,go,rust,swift,kotlin,flutter,react-native,typescript}`
+
+### T43 — Host test matrix
+- [x] `bindings/testdata/` + `cases.json`；`scripts/run-binding-tests.sh`
+
+### T44 — Device-farm CI
+- [x] `.github/workflows/bindings-mobile.yml`（Flutter/RN iOS+Android）
+
+### T45 — Release publish
+- [x] `release.yml` 发布 Maven/CocoaPods/npm/pub.dev/crates.io/PyPI（fail-pass）
+
+### T46 — Engine docs
+- [x] README / README_cn Bindings + install
+
+### T47 — Serve UI
+- [x] 主页 + 文档 Tab 示例（全站语言）

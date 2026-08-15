@@ -104,6 +104,36 @@ python -m bench run \
 
 可用 `--model-id family=path=id` 或 `backend:family=id` 覆盖模型 id。aria 默认使用家族 path；其余后端默认使用 HF `base_model`。
 
+## SDK Bindings
+
+原生 C ABI（`aria-ffi` / `libaria_ffi`）与 `bindings/` 下薄封装：
+
+| Binding | 路径 | Registry |
+|---------|------|----------|
+| Rust | `bindings/rust`（`aria-sdk`） | crates.io |
+| Python | `bindings/python` | PyPI |
+| Go | `bindings/go` | Go module |
+| TypeScript | `bindings/typescript` | npm `@ariacompute/engine-ts` |
+| React Native | `bindings/react-native` | npm `@ariacompute/engine-rn` |
+| Flutter | `bindings/flutter` | pub.dev |
+| Swift | `bindings/swift` | CocoaPods |
+| Kotlin | `bindings/kotlin` | Maven |
+
+C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`、`aria_complete` / stream、`aria_embed`、`aria_transcribe`、tools JSON、`aria_model_destroy`、`aria_last_error`。
+
+```bash
+cargo test -p aria-ffi -p aria-sdk
+./scripts/run-binding-tests.sh   # 主机矩阵（Rust / Python / Go / TS）
+```
+
+移动端 e2e（Flutter + React Native，iOS + Android）：[`.github/workflows/bindings-mobile.yml`](.github/workflows/bindings-mobile.yml)。
+
+### 从各 Registry 安装
+
+创建 **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) 构建 CLI 包并尝试发布语言包（npm / pub.dev / Maven / CocoaPods / crates.io / PyPI）。**发布失败为 fail-pass**，不阻塞 CLI / `libaria_ffi` 资产。所需 secrets：`NPM_TOKEN`、pub 凭证、Maven + GPG、`COCOAPODS_TRUNK_TOKEN`、`CARGO_REGISTRY_TOKEN`、`PYPI_TOKEN`，以及 Release 上传用的 `ARIACOMPUTE_TOKEN`。
+
+版本 = release tag 去掉前导 `v`。
+
 ## 工程约定
 
 本仓库遵循 Harness Engineering 理念：

@@ -6,6 +6,8 @@ members = [
     "inference",
     "hybrid",
     "openai",
+    "ffi",
+    "bindings/rust",
 ]
 
 [workspace.package]
@@ -33,3 +35,4 @@ aria-kernel = { path = "kernel" }
 aria-graph = { path = "graph" }
 aria-inference = { path = "inference" }
 aria-hybrid = { path = "hybrid" }
+aria-ffi = { path = "ffi" }

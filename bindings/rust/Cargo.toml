@@ -1,0 +1,18 @@
+[package]
+name = "aria-sdk"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Rust SDK for Aria engine (thin wrapper over aria-inference / aria-ffi)"
+repository = "https://github.com/ariacompute/engine"
+readme = "README.md"
+keywords = ["aria", "llm", "inference"]
+categories = ["api-bindings"]
+
+[dependencies]
+aria-inference = { workspace = true }
+aria-ffi = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
