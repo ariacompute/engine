@@ -106,7 +106,7 @@ Override model ids with `--model-id family=path=id` or `backend:family=id`. Defa
 
 ## SDK Bindings
 
-Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`:
+Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`.
 
 | Binding | Path | Registry |
 |---------|------|----------|
@@ -128,9 +128,126 @@ cargo test -p aria-ffi -p aria-engine
 
 Mobile e2e (Flutter + React Native, iOS + Android): [`.github/workflows/bindings-mobile.yml`](.github/workflows/bindings-mobile.yml).
 
+### libaria_ffi (Release assets)
+
+On each GitHub Release, [`.github/workflows/release.yml`](.github/workflows/release.yml) uploads platform archives next to the CLI:
+
+| Asset | Contents |
+|-------|----------|
+| `libaria_ffi_<ver>_linux_x86_64.tar.gz` | `libaria_ffi.so` |
+| `libaria_ffi_<ver>_linux_arm64.tar.gz` | `libaria_ffi.so` |
+| `libaria_ffi_<ver>_macos.tar.gz` | `libaria_ffi.dylib` |
+| `libaria_ffi_<ver>_windows_x86_64.tar.gz` | `aria_ffi.dll` (+ optional import libs) |
+
+```bash
+# Example: Linux x86_64
+tar -xzf libaria_ffi_0.7.1_linux_x86_64.tar.gz
+export ARIA_FFI_LIB="$PWD/libaria_ffi.so"
+# optional: export LD_LIBRARY_PATH="$PWD:${LD_LIBRARY_PATH:-}"
+```
+
+Point bindings at a local Aria bundle (`weight.bin` + `config.json` + tokenizer), e.g. from `aria-engine download …` under `~/.ariacompute/models/`.
+
+### Examples
+
+**Python** (loads `libaria_ffi` via `ARIA_FFI_LIB`):
+
+```bash
+export ARIA_FFI_LIB=/path/to/libaria_ffi.so
+pip install aria-engine
+```
+
+```python
+from aria_engine import Engine
+
+with Engine("/path/to/aria-bundle") as eng:
+    out = eng.complete(
+        [{"role": "user", "content": "Hello"}],
+        {"max_tokens": 32},
+    )
+    print(out["response"])
+    # also: eng.embed("hi"), eng.transcribe(pcm_bytes)
+```
+
+**TypeScript / Node** (`@ariacompute/engine-ts`):
+
+```bash
+export ARIA_FFI_LIB=/path/to/libaria_ffi.so
+npm install @ariacompute/engine-ts
+```
+
+```ts
+import { Engine } from "@ariacompute/engine-ts";
+
+const eng = new Engine("/path/to/aria-bundle");
+const out = eng.complete(
+  [{ role: "user", content: "Hello" }],
+  { max_tokens: 32 },
+);
+console.log(out.response);
+eng.close();
+```
+
+**Go** (cgo; link against `libaria_ffi`):
+
+```bash
+export ARIA_FFI_LIB=/path/to/libaria_ffi.so
+export CGO_ENABLED=1
+# Ensure the linker can find the library (or use -L via cgo in the module).
+go get github.com/ariacompute/engine/bindings/go@latest
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	aria "github.com/ariacompute/engine/bindings/go"
+)
+
+func main() {
+	eng, err := aria.Open("/path/to/aria-bundle")
+	if err != nil {
+		panic(err)
+	}
+	defer eng.Close()
+	out, err := eng.Complete(
+		[]map[string]string{{"role": "user", "content": "Hello"}},
+		map[string]any{"max_tokens": 32},
+		nil,
+	)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(out["response"])
+}
+```
+
+**Rust** (`aria-engine` crate — native API; does not require unpacking `libaria_ffi`):
+
+```bash
+cargo add aria-engine
+```
+
+```rust
+use aria_engine::{Engine, GenerateOpts};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut eng = Engine::open("/path/to/aria-bundle")?;
+    let g = eng.complete("Hello", &GenerateOpts {
+        max_tokens: 32,
+        temperature: 0.0,
+    })?;
+    println!("{}", g.text);
+    Ok(())
+}
+```
+
+More detail per language: `bindings/*/README.md`.
+
 ### Install from registries
 
-Cut a **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds CLI archives and attempts package publish (npm / pub.dev / Maven / CocoaPods / crates.io / PyPI). **Publish failures are fail-pass** and do not block CLI/`libaria_ffi` assets. Secrets: `NPM_TOKEN`, pub credentials, Maven + GPG, `COCOAPODS_TRUNK_TOKEN`, `CARGO_REGISTRY_TOKEN`, `PYPI_TOKEN`, plus `ARIACOMPUTE_TOKEN` for Release uploads.
+Cut a **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds CLI + `libaria_ffi` archives and attempts package publish (npm / pub.dev / Maven / CocoaPods / crates.io / PyPI). **Publish failures are fail-pass** and do not block CLI/`libaria_ffi` assets. Secrets: `NPM_TOKEN`, pub credentials, Maven + GPG, `COCOAPODS_TRUNK_TOKEN`, `CARGO_REGISTRY_TOKEN`, `PYPI_TOKEN`, plus `ARIACOMPUTE_TOKEN` for Release uploads.
 
 Version = release tag without leading `v`.
 

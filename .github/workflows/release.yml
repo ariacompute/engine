@@ -61,6 +61,7 @@ jobs:
           export ARIA_ENGINE_VERSION="${TAG_NAME#v}"
           echo "ARIA_ENGINE_VERSION=$ARIA_ENGINE_VERSION"
           cargo build --release -p aria-openai
+          cargo build --release -p aria-ffi
 
       - name: Package release archive (Unix)
         if: matrix.archive == 'tar.gz'
@@ -87,11 +88,62 @@ jobs:
           Compress-Archive -Path "target/release/$($env:BIN_NAME).exe" -DestinationPath $archiveName -Force
           Add-Content -Path $env:GITHUB_ENV -Value "ASSET_PATH=$archiveName"
 
+      - name: Package libaria_ffi (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          ASSET_OS: ${{ matrix.asset_os }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          ARCHIVE_NAME="libaria_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          cd target/release
+          if [[ -f libaria_ffi.dylib ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.dylib
+          elif [[ -f libaria_ffi.so ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.so
+          elif [[ -f libaria_ffi.a ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.a
+          else
+            echo "No libaria_ffi shared/static library found in target/release" >&2
+            ls -la
+            exit 1
+          fi
+          cd ../..
+          echo "FFI_ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
+      - name: Package libaria_ffi (Windows)
+        if: matrix.archive == 'zip'
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          ASSET_OS: ${{ matrix.asset_os }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          ARCHIVE_NAME="libaria_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          cd target/release
+          if [[ -f aria_ffi.dll ]]; then
+            FILES=(aria_ffi.dll)
+            [[ -f aria_ffi.dll.lib ]] && FILES+=(aria_ffi.dll.lib)
+            [[ -f aria_ffi.lib ]] && FILES+=(aria_ffi.lib)
+            tar -czf "../../$ARCHIVE_NAME" "${FILES[@]}"
+          else
+            echo "No aria_ffi.dll found in target/release" >&2
+            ls -la
+            exit 1
+          fi
+          cd ../..
+          echo "FFI_ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
       - name: Upload release asset
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.release.tag_name }}
-          files: ${{ env.ASSET_PATH }}
+          files: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.FFI_ASSET_PATH }}
           token: ${{ secrets.ARIACOMPUTE_TOKEN }}
 
   # Language package publishes are fail-pass: must not block CLI/assets.
@@ -105,20 +157,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build release libaria_ffi
+      - name: Set package version from tag
         run: |
-          cargo build --release -p aria-ffi
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          tar -czf "libaria_ffi_${VERSION}_linux_x86_64.tar.gz" -C target/release libaria_ffi.so || \
-            tar -czf "libaria_ffi_${VERSION}_linux_x86_64.tar.gz" -C target/release libaria_ffi.a
-      - name: Upload libaria_ffi asset
-        continue-on-error: true
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.release.tag_name }}
-          files: libaria_ffi_*.tar.gz
-          token: ${{ secrets.ARIACOMPUTE_TOKEN }}
+          echo "VERSION=$VERSION"
       - name: npm @ariacompute/engine-ts
         continue-on-error: true
         env:

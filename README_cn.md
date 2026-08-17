@@ -106,7 +106,7 @@ python -m bench run \
 
 ## SDK Bindings
 
-原生 C ABI（`aria-ffi` / `libaria_ffi`）与 `bindings/` 下薄封装：
+原生 C ABI（`aria-ffi` / `libaria_ffi`）与 `bindings/` 下薄封装
 
 | Binding | 路径 | Registry |
 |---------|------|----------|
@@ -128,9 +128,126 @@ cargo test -p aria-ffi -p aria-engine
 
 移动端 e2e（Flutter + React Native，iOS + Android）：[`.github/workflows/bindings-mobile.yml`](.github/workflows/bindings-mobile.yml)。
 
+### libaria_ffi（Release 资产）
+
+每次 GitHub Release，[`.github/workflows/release.yml`](.github/workflows/release.yml) 会在 CLI 包之外上传各平台归档：
+
+| 资产 | 内容 |
+|------|------|
+| `libaria_ffi_<ver>_linux_x86_64.tar.gz` | `libaria_ffi.so` |
+| `libaria_ffi_<ver>_linux_arm64.tar.gz` | `libaria_ffi.so` |
+| `libaria_ffi_<ver>_macos.tar.gz` | `libaria_ffi.dylib` |
+| `libaria_ffi_<ver>_windows_x86_64.tar.gz` | `aria_ffi.dll`（及可选 import lib） |
+
+```bash
+# 示例：Linux x86_64
+tar -xzf libaria_ffi_0.7.1_linux_x86_64.tar.gz
+export ARIA_FFI_LIB="$PWD/libaria_ffi.so"
+# 可选：export LD_LIBRARY_PATH="$PWD:${LD_LIBRARY_PATH:-}"
+```
+
+绑定还需本地 Aria bundle（`weight.bin` + `config.json` + tokenizer），例如经 `aria-engine download …` 落到 `~/.ariacompute/models/`。
+
+### 示例
+
+**Python**（通过 `ARIA_FFI_LIB` 加载 `libaria_ffi`）：
+
+```bash
+export ARIA_FFI_LIB=/path/to/libaria_ffi.so
+pip install aria-engine
+```
+
+```python
+from aria_engine import Engine
+
+with Engine("/path/to/aria-bundle") as eng:
+    out = eng.complete(
+        [{"role": "user", "content": "Hello"}],
+        {"max_tokens": 32},
+    )
+    print(out["response"])
+    # 也可：eng.embed("hi"), eng.transcribe(pcm_bytes)
+```
+
+**TypeScript / Node**（`@ariacompute/engine-ts`）：
+
+```bash
+export ARIA_FFI_LIB=/path/to/libaria_ffi.so
+npm install @ariacompute/engine-ts
+```
+
+```ts
+import { Engine } from "@ariacompute/engine-ts";
+
+const eng = new Engine("/path/to/aria-bundle");
+const out = eng.complete(
+  [{ role: "user", content: "Hello" }],
+  { max_tokens: 32 },
+);
+console.log(out.response);
+eng.close();
+```
+
+**Go**（cgo；链接 `libaria_ffi`）：
+
+```bash
+export ARIA_FFI_LIB=/path/to/libaria_ffi.so
+export CGO_ENABLED=1
+# 确保链接器能找到该库（或在模块 cgo 中指定 -L）。
+go get github.com/ariacompute/engine/bindings/go@latest
+```
+
+```go
+package main
+
+import (
+	"fmt"
+	aria "github.com/ariacompute/engine/bindings/go"
+)
+
+func main() {
+	eng, err := aria.Open("/path/to/aria-bundle")
+	if err != nil {
+		panic(err)
+	}
+	defer eng.Close()
+	out, err := eng.Complete(
+		[]map[string]string{{"role": "user", "content": "Hello"}},
+		map[string]any{"max_tokens": 32},
+		nil,
+	)
+	if err != nil {
+		panic(err)
+	}
+	fmt.Println(out["response"])
+}
+```
+
+**Rust**（`aria-engine` crate — 原生 API；一般无需解压 `libaria_ffi`）：
+
+```bash
+cargo add aria-engine
+```
+
+```rust
+use aria_engine::{Engine, GenerateOpts};
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut eng = Engine::open("/path/to/aria-bundle")?;
+    let g = eng.complete("Hello", &GenerateOpts {
+        max_tokens: 32,
+        temperature: 0.0,
+    })?;
+    println!("{}", g.text);
+    Ok(())
+}
+```
+
+各语言更多说明见 `bindings/*/README.md`。
+
 ### 从各 Registry 安装
 
-创建 **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) 构建 CLI 包并尝试发布语言包（npm / pub.dev / Maven / CocoaPods / crates.io / PyPI）。**发布失败为 fail-pass**，不阻塞 CLI / `libaria_ffi` 资产。所需 secrets：`NPM_TOKEN`、pub 凭证、Maven + GPG、`COCOAPODS_TRUNK_TOKEN`、`CARGO_REGISTRY_TOKEN`、`PYPI_TOKEN`，以及 Release 上传用的 `ARIACOMPUTE_TOKEN`。
+创建 **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) 构建 CLI + `libaria_ffi` 包并尝试发布语言包（npm / pub.dev / Maven / CocoaPods / crates.io / PyPI）。**发布失败为 fail-pass**，不阻塞 CLI / `libaria_ffi` 资产。所需 secrets：`NPM_TOKEN`、pub 凭证、Maven + GPG、`COCOAPODS_TRUNK_TOKEN`、`CARGO_REGISTRY_TOKEN`、`PYPI_TOKEN`，以及 Release 上传用的 `ARIACOMPUTE_TOKEN`。
 
 版本 = release tag 去掉前导 `v`。
 
