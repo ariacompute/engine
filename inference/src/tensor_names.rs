@@ -70,6 +70,8 @@ pub fn ffn_norm_names(layer: usize) -> Vec<String> {
     names.extend(with_layer_suffix(layer, "pre_feedforward_layernorm.weight"));
     // LLaMA / Qwen: post-attention = pre-FFN.
     names.extend(with_layer_suffix(layer, "post_attention_layernorm.weight"));
+    // LFM2 dense / conv layers.
+    names.extend(with_layer_suffix(layer, "ffn_norm.weight"));
     names
 }
 
@@ -112,18 +114,119 @@ pub fn attn_o_names(layer: usize) -> Vec<String> {
 pub fn ffn_gate_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.ffn_gate.weight")];
     names.extend(with_layer_suffix(layer, "mlp.gate_proj.weight"));
+    names.extend(with_layer_suffix(layer, "mlp.w1.weight"));
+    names.extend(with_layer_suffix(layer, "feed_forward.w1.weight"));
     names
 }
 
 pub fn ffn_up_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.ffn_up.weight")];
     names.extend(with_layer_suffix(layer, "mlp.up_proj.weight"));
+    names.extend(with_layer_suffix(layer, "mlp.w3.weight"));
+    names.extend(with_layer_suffix(layer, "feed_forward.w3.weight"));
     names
 }
 
 pub fn ffn_down_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.ffn_down.weight")];
     names.extend(with_layer_suffix(layer, "mlp.down_proj.weight"));
+    names.extend(with_layer_suffix(layer, "mlp.w2.weight"));
+    names.extend(with_layer_suffix(layer, "feed_forward.w2.weight"));
+    names
+}
+
+/// LFM2 short-conv `in_proj` (projects to 3×hidden: B, C, x).
+pub fn conv_in_proj_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.conv_in.weight")];
+    names.extend(with_layer_suffix(layer, "conv.in_proj.weight"));
+    names
+}
+
+pub fn conv_out_proj_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.conv_out.weight")];
+    names.extend(with_layer_suffix(layer, "conv.out_proj.weight"));
+    names
+}
+
+/// Depthwise Conv1d weight; often stored as `[hidden, kernel]` after squeeze.
+pub fn conv_kernel_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.conv_kernel.weight")];
+    names.extend(with_layer_suffix(layer, "conv.conv.weight"));
+    names
+}
+
+/// MoE router / gate (logits over experts).
+pub fn moe_router_names(layer: usize) -> Vec<String> {
+    let mut names = vec![
+        format!("blk.{layer}.ffn_gate_inp.weight"),
+        format!("blk.{layer}.moe_gate.weight"),
+    ];
+    names.extend(with_layer_suffix(layer, "block_sparse_moe.gate.weight"));
+    names.extend(with_layer_suffix(layer, "mlp.gate.weight"));
+    names.extend(with_layer_suffix(layer, "feed_forward.gate.weight"));
+    names
+}
+
+pub fn moe_expert_gate_names(layer: usize, expert: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.ffn_gate.{expert}.weight")];
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("block_sparse_moe.experts.{expert}.w1.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("block_sparse_moe.experts.{expert}.gate_proj.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("mlp.experts.{expert}.gate_proj.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("mlp.experts.{expert}.w1.weight"),
+    ));
+    names
+}
+
+pub fn moe_expert_up_names(layer: usize, expert: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.ffn_up.{expert}.weight")];
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("block_sparse_moe.experts.{expert}.w3.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("block_sparse_moe.experts.{expert}.up_proj.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("mlp.experts.{expert}.up_proj.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("mlp.experts.{expert}.w3.weight"),
+    ));
+    names
+}
+
+pub fn moe_expert_down_names(layer: usize, expert: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.ffn_down.{expert}.weight")];
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("block_sparse_moe.experts.{expert}.w2.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("block_sparse_moe.experts.{expert}.down_proj.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("mlp.experts.{expert}.down_proj.weight"),
+    ));
+    names.extend(with_layer_suffix(
+        layer,
+        &format!("mlp.experts.{expert}.w2.weight"),
+    ));
     names
 }
 

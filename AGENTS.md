@@ -41,7 +41,7 @@
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8 评测、§3.7 SDK、§3.4 `upgrade`、**§3.3.1 全家族对齐**）。`task.md` T50–T54 已完成；**T60–T64 / T69** 与 T65–T68 门控已落地；short-conv / MoE / DeltaNet / 真 VL 仍待实现。
+Spec 见 `requirements.md`（含 §8 评测、§3.7 SDK、§3.4 `upgrade`、**§3.3.1 全家族对齐**）。`task.md` T50–T54 已完成；**T60–T66 / T69** 已落地；T67 DeltaNet / T68 真 VL / Gemma-4 真 KV-cache 仍待。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。

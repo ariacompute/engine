@@ -13,7 +13,7 @@ pub enum FamilyPhase {
 pub enum ArchClass {
     /// Dense decoder-only LLM (Gemma / Qwen / LFM / …).
     TextDense,
-    /// MoE text (LFM2-8B-A1B); stage B uses dense graph stub + expert flag.
+    /// MoE text (LFM2-8B-A1B / Inkling); Session top-k router + expert FFN.
     TextMoE,
     /// Vision-language.
     VL,
@@ -241,7 +241,7 @@ pub fn family_phase(path: &str) -> Result<FamilyPhase, EngineError> {
 pub fn graph_hook(arch: ArchClass) -> &'static str {
     match arch {
         ArchClass::TextDense => "text_dense_decoder",
-        ArchClass::TextMoE => "text_moe_decoder_stub",
+        ArchClass::TextMoE => "text_moe_decoder",
         ArchClass::VL => "vl_text_plus_vision",
         ArchClass::VLA => "vla_text_vision_action",
     }
@@ -371,7 +371,7 @@ mod tests {
             Err(EngineError::UnsupportedFamily(_))
         ));
         assert!(require_runnable("openvla/openvla-7b").is_ok());
-        assert_eq!(graph_hook(ArchClass::TextMoE), "text_moe_decoder_stub");
+        assert_eq!(graph_hook(ArchClass::TextMoE), "text_moe_decoder");
         assert_eq!(
             require_stage_a("gemma/gemma-4-e2b-it").unwrap().path(),
             "gemma/gemma-4-e2b-it"

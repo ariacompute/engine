@@ -38,6 +38,9 @@ pub struct ModelConfig {
     pub num_experts_per_tok: Option<usize>,
     #[serde(default)]
     pub tie_word_embeddings: Option<bool>,
+    /// LFM2 short-conv kernel / cache length (HF `conv_L_cache`, default 3).
+    #[serde(default)]
+    pub conv_l_cache: Option<usize>,
 }
 
 fn default_rope() -> f32 {

@@ -164,12 +164,13 @@
 - [x] 别名 + op；Qwen3 / Gemma / LFM attn 路径
 
 ### T65 — LFM conv hybrid
-- [x] `layer_types` 含 conv → 硬 `Unsupported`（short-conv 实现延期）
-- [ ] `conv.*` 名 + short-conv 层；不强制每层 `q_proj`
+- [x] `conv.*` 名 + short-conv 层 + per-layer cache；不强制每层 `q_proj`
+- [x] `layer_types` 混合 `conv` / `full_attention` 可 generate（单测）
 
 ### T66 — MoE
-- [x] `TextMoE` / `num_experts>0` → 硬 `Unsupported`（禁止 dense stub 冒充生成）；Inkling ArchClass=`TextMoE`
-- [ ] LFM2-8B-A1B + Inkling：router/experts 真实现
+- [x] LFM2-8B-A1B + Inkling：router + top-k expert FFN；`text_moe_decoder`；Inkling ArchClass=`TextMoE`
+- [x] 无 `num_experts` 的 MoE 家族仍硬失败（禁止 dense stub 冒充）
+- [x] 单测：4-expert / top-2 generate
 
 ### T67 — Qwen3.5 / Bonsai
 - [x] 家族路径硬 `Unsupported`（禁止当全 dense）；`layer_types` linear_attention/delta 同样门控
@@ -180,4 +181,4 @@
 - [ ] 消费 bundle 内 vision/action 张量
 
 ### T69 — Registry + model 字段
-- [x] 登记 `lfm2.5-2.6b`；消费扩展 `model` 元数据（`head_dim` / `layer_types` / `hidden_act` / MoE 字段）
+- [x] 登记 `lfm2.5-2.6b`；消费扩展 `model` 元数据（`head_dim` / `layer_types` / `hidden_act` / MoE / `conv_l_cache`）

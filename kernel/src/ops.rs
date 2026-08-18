@@ -203,6 +203,101 @@ pub fn swiglu(gate: &[f32], up: &[f32]) -> Result<Vec<f32>, EngineError> {
         .collect())
 }
 
+/// Causal depthwise short-conv one-token step (LFM2).
+///
+/// `w` layout: `[hidden * kernel]`, channel-major, `w[c*kernel + 0]` taps the oldest
+/// sample. `state` is `[hidden * (kernel-1)]` (oldest→newest); updated in place.
+pub fn short_conv_step(
+    x: &[f32],
+    w: &[f32],
+    state: &mut [f32],
+    hidden: usize,
+    kernel: usize,
+) -> Result<Vec<f32>, EngineError> {
+    if hidden == 0 || kernel == 0 {
+        return Err(EngineError::ShapeMismatch(
+            "short_conv_step: hidden and kernel must be > 0".into(),
+        ));
+    }
+    if x.len() != hidden {
+        return Err(EngineError::ShapeMismatch(
+            "short_conv_step: x len != hidden".into(),
+        ));
+    }
+    if w.len() != hidden * kernel {
+        return Err(EngineError::ShapeMismatch(
+            "short_conv_step: weight len != hidden*kernel".into(),
+        ));
+    }
+    let hist = kernel.saturating_sub(1);
+    if state.len() != hidden * hist {
+        return Err(EngineError::ShapeMismatch(
+            "short_conv_step: state len != hidden*(kernel-1)".into(),
+        ));
+    }
+    let mut out = vec![0.0f32; hidden];
+    for c in 0..hidden {
+        let mut acc = 0.0f32;
+        let wbase = c * kernel;
+        let sbase = c * hist;
+        for k in 0..hist {
+            acc += w[wbase + k] * state[sbase + k];
+        }
+        acc += w[wbase + hist] * x[c];
+        out[c] = acc;
+        if hist > 0 {
+            for k in 0..(hist - 1) {
+                state[sbase + k] = state[sbase + k + 1];
+            }
+            state[sbase + hist - 1] = x[c];
+        }
+    }
+    Ok(out)
+}
+
+/// Softmax (or sigmoid) top-k MoE routing. Returns (expert_ids, normalized weights).
+pub fn moe_topk_route(
+    logits: &[f32],
+    top_k: usize,
+    use_sigmoid: bool,
+) -> Result<(Vec<usize>, Vec<f32>), EngineError> {
+    let n = logits.len();
+    if n == 0 || top_k == 0 {
+        return Err(EngineError::InvalidParam(
+            "moe_topk_route: num_experts and top_k must be > 0".into(),
+        ));
+    }
+    let k = top_k.min(n);
+    let scores: Vec<f32> = if use_sigmoid {
+        logits.iter().map(|x| 1.0 / (1.0 + (-x).exp())).collect()
+    } else {
+        let m = logits.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+        let mut exps: Vec<f32> = logits.iter().map(|x| (x - m).exp()).collect();
+        let s: f32 = exps.iter().sum();
+        if s > 0.0 {
+            for e in &mut exps {
+                *e /= s;
+            }
+        }
+        exps
+    };
+    let mut idx: Vec<usize> = (0..n).collect();
+    idx.sort_by(|&a, &b| {
+        scores[b]
+            .partial_cmp(&scores[a])
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+    idx.truncate(k);
+    let mut weights: Vec<f32> = idx.iter().map(|&i| scores[i]).collect();
+    let sum: f32 = weights.iter().sum();
+    if sum > 0.0 {
+        for w in &mut weights {
+            *w /= sum;
+        }
+    }
+    Ok((idx, weights))
+}
+
 /// GeGLU: gelu(gate) * up (Gemma `gelu_pytorch_tanh` approximates with tanh form).
 pub fn geglu(gate: &[f32], up: &[f32]) -> Result<Vec<f32>, EngineError> {
     if gate.len() != up.len() {
@@ -709,6 +804,31 @@ mod tests {
         for (x, y) in s.iter().zip(n.iter()) {
             assert!((x - y).abs() < 1e-5, "{x} vs {y}");
         }
+    }
+
+    #[test]
+    fn short_conv_step_and_moe_route() {
+        let hidden = 2usize;
+        let kernel = 3usize;
+        // Channel-major: each channel w=[0,0,1] taps newest only.
+        let w = vec![0.0f32, 0.0, 1.0, 0.0, 0.0, 1.0];
+        let mut state = vec![0.0f32; hidden * (kernel - 1)];
+        let x = [3.0f32, 5.0];
+        let y = short_conv_step(&x, &w, &mut state, hidden, kernel).unwrap();
+        assert!((y[0] - 3.0).abs() < 1e-5);
+        assert!((y[1] - 5.0).abs() < 1e-5);
+        // After one step hist=[0, x]; w_old=[1,0,0] taps oldest → 0.
+        let w_old = vec![1.0f32, 0.0, 0.0, 1.0, 0.0, 0.0];
+        let y2 = short_conv_step(&[1.0, 2.0], &w_old, &mut state, hidden, kernel).unwrap();
+        assert!((y2[0] - 0.0).abs() < 1e-5);
+        assert!((y2[1] - 0.0).abs() < 1e-5);
+
+        let (ids, ws) = moe_topk_route(&[0.1, 2.0, 0.5, -1.0], 2, false).unwrap();
+        assert_eq!(ids.len(), 2);
+        assert_eq!(ids[0], 1);
+        assert!((ws.iter().sum::<f32>() - 1.0).abs() < 1e-5);
+        let (ids_s, _) = moe_topk_route(&[0.0, 10.0, 0.0], 1, true).unwrap();
+        assert_eq!(ids_s, vec![1]);
     }
 
     #[test]
