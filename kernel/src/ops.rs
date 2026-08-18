@@ -203,6 +203,102 @@ pub fn swiglu(gate: &[f32], up: &[f32]) -> Result<Vec<f32>, EngineError> {
         .collect())
 }
 
+/// GeGLU: gelu(gate) * up (Gemma `gelu_pytorch_tanh` approximates with tanh form).
+pub fn geglu(gate: &[f32], up: &[f32]) -> Result<Vec<f32>, EngineError> {
+    if gate.len() != up.len() {
+        return Err(EngineError::ShapeMismatch("geglu length mismatch".into()));
+    }
+    Ok(gate
+        .iter()
+        .zip(up.iter())
+        .map(|(g, u)| gelu_pytorch_tanh(*g) * u)
+        .collect())
+}
+
+/// Match transformers `gelu_pytorch_tanh` (used by Gemma GeGLU).
+pub fn gelu_pytorch_tanh(x: f32) -> f32 {
+    // Match transformers gelu_pytorch_tanh.
+    const SQRT_2_OVER_PI: f32 = 0.797_884_560_8;
+    const COEFF: f32 = 0.044_715;
+    let inner = SQRT_2_OVER_PI * (x + COEFF * x * x * x);
+    0.5 * x * (1.0 + inner.tanh())
+}
+
+/// Gemma-style RMSNorm: x * rrms * (1 + weight).
+pub fn rms_norm_gemma(x: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>, EngineError> {
+    let n = weight.len();
+    if n == 0 || !x.len().is_multiple_of(n) {
+        return Err(EngineError::ShapeMismatch(
+            "rms_norm_gemma: x length must be multiple of weight len".into(),
+        ));
+    }
+    let batch = x.len() / n;
+    let mut out = vec![0.0f32; x.len()];
+    for b in 0..batch {
+        let base = b * n;
+        let mut ms = 0.0f32;
+        for i in 0..n {
+            ms += x[base + i] * x[base + i];
+        }
+        let rrms = (ms / n as f32 + eps).sqrt().recip();
+        for i in 0..n {
+            out[base + i] = x[base + i] * rrms * (1.0 + weight[i]);
+        }
+    }
+    Ok(out)
+}
+
+/// HF Llama/Qwen/Gemma RoPE: rotate half of the head dims as a contiguous block.
+pub fn rope_half(x: &mut [f32], head_dim: usize, pos: usize, theta: f32) -> Result<(), EngineError> {
+    if head_dim == 0 || !head_dim.is_multiple_of(2) {
+        return Err(EngineError::ShapeMismatch(
+            "rope_half head_dim must be positive even".into(),
+        ));
+    }
+    if !x.len().is_multiple_of(head_dim) {
+        return Err(EngineError::ShapeMismatch(
+            "rope_half x len not divisible by head_dim".into(),
+        ));
+    }
+    let half = head_dim / 2;
+    let n_heads = x.len() / head_dim;
+    for h in 0..n_heads {
+        let base = h * head_dim;
+        for i in 0..half {
+            let freq = 1.0 / theta.powf((2 * i) as f32 / head_dim as f32);
+            let angle = pos as f32 * freq;
+            let (c, s) = (angle.cos(), angle.sin());
+            let u = x[base + i];
+            let v = x[base + i + half];
+            x[base + i] = u * c - v * s;
+            x[base + i + half] = u * s + v * c;
+        }
+    }
+    Ok(())
+}
+
+/// y = W_rot @ x followed by blocked unrotate on each out_f row (HDM fused path).
+pub fn hdm_linear(
+    x: &[f32],
+    w_rot: &[f32],
+    out_f: usize,
+    in_f: usize,
+    hadamard_seed: Option<i64>,
+) -> Result<Vec<f32>, EngineError> {
+    let mut y = linear(x, w_rot, out_f, in_f)?;
+    if out_f == 0 || !y.len().is_multiple_of(out_f) {
+        return Err(EngineError::ShapeMismatch(
+            "hdm_linear output not divisible by out_f".into(),
+        ));
+    }
+    let batch = y.len() / out_f;
+    for b in 0..batch {
+        let sl = b * out_f..(b + 1) * out_f;
+        hadamard_blocked_vec(&mut y[sl], hadamard_seed, true)?;
+    }
+    Ok(y)
+}
+
 /// In-place orthogonal FWHT on length = power of two (scale 1/sqrt(n)).
 pub fn fwht(x: &mut [f32]) -> Result<(), EngineError> {
     let n = x.len();
@@ -612,6 +708,56 @@ mod tests {
         assert_eq!(s.len(), n.len());
         for (x, y) in s.iter().zip(n.iter()) {
             assert!((x - y).abs() < 1e-5, "{x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn geglu_and_rms_norm_gemma() {
+        let gate = [0.5f32, -1.0];
+        let up = [2.0f32, 3.0];
+        let y = geglu(&gate, &up).unwrap();
+        assert!((y[0] - gelu_pytorch_tanh(0.5) * 2.0).abs() < 1e-5);
+        assert!((y[1] - gelu_pytorch_tanh(-1.0) * 3.0).abs() < 1e-5);
+        let x = [1.0f32, -1.0, 2.0, 0.0];
+        let w = [0.1f32, 0.2];
+        let n = rms_norm_gemma(&x, &w, 1e-6).unwrap();
+        assert_eq!(n.len(), 4);
+        // (1+w) vs plain rms_norm weight multiply differs.
+        let plain = rms_norm(&x, &w, 1e-6).unwrap();
+        assert!((n[0] - plain[0]).abs() > 1e-4 || (n[1] - plain[1]).abs() > 1e-4);
+    }
+
+    #[test]
+    fn rope_half_layout() {
+        let mut x = [1.0f32, 2.0, 3.0, 4.0];
+        rope_half(&mut x, 4, 1, 10000.0).unwrap();
+        // At pos=1, half=2: rotate (1,3) and (2,4) as pairs across half.
+        let freq0 = 1.0 / 10000f32.powf(0.0);
+        let (c0, s0) = (freq0.cos(), freq0.sin());
+        let freq1 = 1.0 / 10000f32.powf(2.0 / 4.0);
+        let (c1, s1) = (freq1.cos(), freq1.sin());
+        assert!((x[0] - (1.0 * c0 - 3.0 * s0)).abs() < 1e-5);
+        assert!((x[2] - (1.0 * s0 + 3.0 * c0)).abs() < 1e-5);
+        assert!((x[1] - (2.0 * c1 - 4.0 * s1)).abs() < 1e-5);
+        assert!((x[3] - (2.0 * s1 + 4.0 * c1)).abs() < 1e-5);
+        assert!(matches!(
+            rope_half(&mut [1.0, 2.0, 3.0], 3, 0, 10000.0),
+            Err(EngineError::ShapeMismatch(_))
+        ));
+    }
+
+    #[test]
+    fn hdm_linear_matches_unrotated_weight() {
+        let out_f = 8usize;
+        let in_f = 4usize;
+        let seed = Some(7i64);
+        let mut w_orig: Vec<f32> = (0..out_f * in_f).map(|i| (i as f32) * 0.05 - 0.2).collect();
+        let x: Vec<f32> = (0..in_f).map(|i| (i as f32) * 0.1).collect();
+        let y_ref = linear(&x, &w_orig, out_f, in_f).unwrap();
+        hadamard_blocked_rows(&mut w_orig, out_f, in_f, seed, false).unwrap();
+        let y = hdm_linear(&x, &w_orig, out_f, in_f, seed).unwrap();
+        for (a, b) in y.iter().zip(y_ref.iter()) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }
     }
 

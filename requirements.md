@@ -38,6 +38,7 @@
 | `lfm/lfm2.5-350m` | `LiquidAI/LFM2.5-350M` | text LLM | 阶段 B |
 | `lfm/lfm2.5-1.2b-instruct` | `LiquidAI/LFM2.5-1.2B-Instruct` | text LLM | 阶段 B |
 | `lfm/lfm2.5-1.2b-thinking` | `LiquidAI/LFM2.5-1.2B-Thinking` | text LLM | 阶段 B |
+| `lfm/lfm2.5-2.6b` | `LiquidAI/LFM2.5-2.6B` | text LLM | 阶段 B |
 | `lfm/lfm2.5-vl-1.6b` | `LiquidAI/LFM2.5-VL-1.6B` | VL | 阶段 C |
 | `nanbeige/nanbeige4.2-3b` | `Nanbeige/Nanbeige4.2-3B` | text LLM | 阶段 B |
 | `bonsai/bonsai-27b` | `prism-ml/Bonsai-27B-unpacked` | text LLM | 阶段 B |
@@ -99,6 +100,23 @@
 - `Session` / `SessionBuilder` / `GenerateOpts` / `generate`（prefill + decode）。
 - `Family` 注册表：覆盖 §1.1 每一行；未知家族 → `UnsupportedFamily`。
 - 阶段 A CLI / 库入口可加载 tiny 目录并产出 token 序列。
+
+### 3.3.1 全家族真实 Bundle 对齐（与 model 协同）
+
+> 背景：Session 当前共用一条 LLaMA 式 decoder；tiny fixture / 形状门控通过 ≠ 真实 q4 数值与图正确。Gemma-4 **按层 FFN 宽度**与 **缺 k/v 可 materialize** 已落地；下列按优先级推进，未达项须 `Unsupported` / 明确门控，禁止静默空实现。
+
+| 优先级 | 主题 | 要求 |
+|--------|------|------|
+| P0 | **Session HDM** | codebook 线性层走融合 HDM（或等价：先 unrotate 再 matmul）；禁止对 rotated-space `W` 直接当原域 `linear` |
+| P0 | **RoPE 布局** | 与 HF `rotate_half`（及家族 partial factor）对齐；单测对照 fixture |
+| P0 | **LFM conv hybrid** | LFM2/2.5：`layer_types` / conv 层不要求 `q_proj`；实现 short-conv + cache；消费 `conv.*` 张量名 |
+| P0 | **MoE** | `lfm2-8b-a1b`、Inkling：真实 router + expert FFN；`text_moe_decoder_stub` 不得冒充生成；Inkling ArchClass 不得标纯 TextDense |
+| P0 | **Qwen3.5 / Bonsai** | linear_attention / Gated DeltaNet 层：实现或对未实现层返回 `Unsupported`；禁止当全 SDPA dense |
+| P1 | **Gemma 正确性** | GeGLU（`gelu_pytorch_tanh`）vs SwiGLU；RMSNorm `*(1+w)`；四 norm；`ffn_norm` 优先 `pre_feedforward_layernorm`；Gemma-4：**KV cache 按注意力类型复用**（非 clone `wk`/`wv`）、滑动/全局、双/部分 RoPE、PLE |
+| P1 | **QK-Norm** | Qwen3 / Gemma / LFM attn：加载并应用 `q_norm`/`k_norm` |
+| P1 | **VL/VLA** | 消费 bundle 内 vision/action 张量，或硬 `Unsupported`；禁止 RGB mean-pool / 假 action 冒充完成 |
+| P2 | **注册表对齐** | §1.1 与 `model` 同步：补登记 `lfm/lfm2.5-2.6b`（或双方删除） |
+| P2 | **Bundle `model` 扩展字段** | 消费 model 仓写入的 `head_dim` / `layer_types` / `num_kv_shared_layers` / `hidden_act` / nested RoPE 等（见 model Spec）；缺字段时降级或 `Unsupported` |
 
 ### 3.4 `aria-openai`
 
@@ -261,6 +279,7 @@
 
 - **B**：每个 text/MoE 家族具备 loader/graph 钩子并通过该类 tiny 或全量文本生成测试。
 - **C**：VL/VLA、ASR、embeddings/RAG、tool_calls 的 OpenAI 面；NEON vs scalar 对拍；`hybrid_execution=device` 禁止云卸载、`=cloud` 强制云端。
+- **真实 codebook（与 §3.3.1）**：至少一条非 tiny Gemma-4 / Qwen3 / LFM 路径在 HDM 接通后，层 RMSE 或短生成与 Python `reconstruct_weight` / 参考前向有界；未实现架构族须硬失败而非乱输出。
 
 ## 7. 目录与依赖约定
 

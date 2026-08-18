@@ -59,15 +59,29 @@ pub fn output_names() -> Vec<&'static str> {
 pub fn attn_norm_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.attn_norm.weight")];
     names.extend(with_layer_suffix(layer, "input_layernorm.weight"));
+    // LFM2/2.5: operator_norm before attn or short-conv.
+    names.extend(with_layer_suffix(layer, "operator_norm.weight"));
     names
 }
 
 pub fn ffn_norm_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.ffn_norm.weight")];
+    // Gemma-2 / Gemma-3 / Gemma-4: dedicated pre-FFN norm first.
+    names.extend(with_layer_suffix(layer, "pre_feedforward_layernorm.weight"));
     // LLaMA / Qwen: post-attention = pre-FFN.
     names.extend(with_layer_suffix(layer, "post_attention_layernorm.weight"));
-    // Gemma-2 / Gemma-3 / Gemma-4: dedicated pre-FFN norm.
-    names.extend(with_layer_suffix(layer, "pre_feedforward_layernorm.weight"));
+    names
+}
+
+pub fn attn_q_norm_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.attn_q_norm.weight")];
+    names.extend(with_layer_suffix(layer, "self_attn.q_norm.weight"));
+    names
+}
+
+pub fn attn_k_norm_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.attn_k_norm.weight")];
+    names.extend(with_layer_suffix(layer, "self_attn.k_norm.weight"));
     names
 }
 
@@ -122,6 +136,9 @@ mod tests {
         let a = attn_norm_names(0);
         assert!(a.iter().any(|s| s.contains("attn_norm")));
         assert!(a.iter().any(|s| s == "model.layers.0.input_layernorm.weight"));
+        assert!(a
+            .iter()
+            .any(|s| s == "model.layers.0.operator_norm.weight"));
         assert!(a
             .iter()
             .any(|s| s == "model.language_model.layers.0.input_layernorm.weight"));

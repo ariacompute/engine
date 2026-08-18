@@ -1,8 +1,10 @@
-//! Stage C multimodal helpers: vision prefix, ASR stub, VLA action head, RAG pack.
+//! Stage C multimodal helpers: ASR stub + RAG pack.
+//! Vision / VLA action require real bundle tensors — Session APIs return `Unsupported`
+//! rather than RGB mean-pool / fake linear stubs.
 
 use aria_kernel::EngineError;
 
-/// Flatten RGB bytes (u8) into a mean-pooled f32 vector of `hidden` dims (deterministic stub).
+/// Legacy helper kept for unit shape checks; Session no longer calls this for VL.
 pub fn vision_encode(rgb: &[u8], height: usize, width: usize, hidden: usize) -> Result<Vec<f32>, EngineError> {
     if height == 0 || width == 0 || hidden == 0 {
         return Err(EngineError::InvalidParam("vision dims must be > 0".into()));
@@ -19,20 +21,9 @@ pub fn vision_encode(rgb: &[u8], height: usize, width: usize, hidden: usize) -> 
             width
         )));
     }
-    let mut out = vec![0.0f32; hidden];
-    let pixels = height * width;
-    for p in 0..pixels {
-        let r = rgb[p * 3] as f32 / 255.0;
-        let g = rgb[p * 3 + 1] as f32 / 255.0;
-        let b = rgb[p * 3 + 2] as f32 / 255.0;
-        let v = (r + g + b) / 3.0;
-        out[p % hidden] += v;
-    }
-    let scale = 1.0 / (pixels as f32).max(1.0);
-    for x in &mut out {
-        *x *= scale;
-    }
-    Ok(out)
+    Err(EngineError::Unsupported(
+        "vision_encode: vision tower not implemented (refusing RGB mean-pool stub)".into(),
+    ))
 }
 
 /// Minimal ASR: map PCM16 LE samples to a short token-id sequence (stub for stage C API).
@@ -53,20 +44,14 @@ pub fn asr_transcribe_pcm16le(pcm: &[u8], vocab: u32) -> Result<String, EngineEr
     Ok(words.join(" "))
 }
 
-/// VLA action head: project hidden state to `action_dim` (linear stub).
-pub fn action_head(hidden: &[f32], action_dim: usize) -> Result<Vec<f32>, EngineError> {
-    if hidden.is_empty() || action_dim == 0 {
+/// VLA action head: not implemented without bundle action weights.
+pub fn action_head(_hidden: &[f32], action_dim: usize) -> Result<Vec<f32>, EngineError> {
+    if action_dim == 0 {
         return Err(EngineError::InvalidParam("action_head dims".into()));
     }
-    let mut out = vec![0.0f32; action_dim];
-    for (i, o) in out.iter_mut().enumerate() {
-        let mut s = 0.0f32;
-        for (j, &h) in hidden.iter().enumerate() {
-            s += h * (((i + 1) * (j + 1)) as f32 * 0.001);
-        }
-        *o = s.tanh();
-    }
-    Ok(out)
+    Err(EngineError::Unsupported(
+        "action_head: action weights not implemented (refusing fake linear stub)".into(),
+    ))
 }
 
 /// Pack retrieved RAG snippets into a system-style context string.
@@ -87,12 +72,16 @@ mod tests {
     #[test]
     fn vision_and_asr_and_action() {
         let rgb = vec![255u8, 0, 0, 0, 255, 0, 0, 0, 255, 128, 128, 128];
-        let v = vision_encode(&rgb, 2, 2, 8).unwrap();
-        assert_eq!(v.len(), 8);
+        assert!(matches!(
+            vision_encode(&rgb, 2, 2, 8),
+            Err(EngineError::Unsupported(_))
+        ));
         let t = asr_transcribe_pcm16le(&[0, 1, 2, 3, 4, 5], 128).unwrap();
         assert!(!t.is_empty());
-        let a = action_head(&[0.5, -0.2, 0.1], 4).unwrap();
-        assert_eq!(a.len(), 4);
+        assert!(matches!(
+            action_head(&[0.5, -0.2, 0.1], 4),
+            Err(EngineError::Unsupported(_))
+        ));
     }
 
     #[test]

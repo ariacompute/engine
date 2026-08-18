@@ -1,11 +1,14 @@
-use crate::bundle::{load_bundle, Bundle};
+use crate::bundle::{load_bundle, Bundle, LoadedWeight};
 use crate::family::{graph_hook, require_runnable, ArchClass, Family};
-use crate::multimodal::{action_head, asr_transcribe_pcm16le, vision_encode};
+use crate::multimodal::asr_transcribe_pcm16le;
 use crate::tensor_names::{
-    attn_k_names, attn_norm_names, attn_o_names, attn_q_names, attn_v_names, emb_names,
-    ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_up_names, output_names, output_norm_names,
+    attn_k_names, attn_k_norm_names, attn_norm_names, attn_o_names, attn_q_names, attn_q_norm_names,
+    attn_v_names, emb_names, ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_up_names,
+    output_names, output_norm_names,
 };
-use aria_kernel::{attention, linear, rms_norm, rope, swiglu, EngineError};
+use aria_kernel::{
+    attention, geglu, hdm_linear, linear, rms_norm, rms_norm_gemma, rope_half, swiglu, EngineError,
+};
 use std::collections::HashMap;
 use std::path::Path;
 
@@ -30,23 +33,48 @@ pub struct Generation {
     pub text: String,
 }
 
+#[derive(Clone)]
+struct MatWeight {
+    data: Vec<f32>,
+    hdm_seed: Option<i64>,
+}
+
+impl MatWeight {
+    fn from_loaded(w: LoadedWeight) -> Self {
+        Self {
+            data: w.data,
+            hdm_seed: w.hdm_seed,
+        }
+    }
+
+    fn gemm(&self, x: &[f32], out_f: usize, in_f: usize) -> Result<Vec<f32>, EngineError> {
+        if let Some(seed) = self.hdm_seed {
+            hdm_linear(x, &self.data, out_f, in_f, Some(seed))
+        } else {
+            linear(x, &self.data, out_f, in_f)
+        }
+    }
+}
+
 struct LayerWeights {
     attn_norm: Vec<f32>,
     ffn_norm: Vec<f32>,
-    wq: Vec<f32>,
-    wk: Vec<f32>,
-    wv: Vec<f32>,
-    wo: Vec<f32>,
-    gate: Vec<f32>,
-    up: Vec<f32>,
-    down: Vec<f32>,
+    wq: MatWeight,
+    wk: MatWeight,
+    wv: MatWeight,
+    wo: MatWeight,
+    gate: MatWeight,
+    up: MatWeight,
+    down: MatWeight,
+    q_norm: Option<Vec<f32>>,
+    k_norm: Option<Vec<f32>>,
 }
 
 struct ModelWeights {
-    emb: Vec<f32>,
+    emb: MatWeight,
     layers: Vec<LayerWeights>,
     output_norm: Vec<f32>,
-    output: Vec<f32>,
+    output: MatWeight,
 }
 
 pub struct Session {
@@ -54,6 +82,8 @@ pub struct Session {
     bundle: Bundle,
     weights: ModelWeights,
     conf: crate::bundle::ModelConfig,
+    use_gemma_norm: bool,
+    use_geglu: bool,
 }
 
 impl std::fmt::Debug for Session {
@@ -95,13 +125,23 @@ impl SessionBuilder {
             .path
             .ok_or_else(|| EngineError::InvalidParam("model path required".into()))?;
         let bundle = load_bundle(&path)?;
+        reject_unsupported_geometry(&bundle.model, family)?;
         let weights = materialize(&bundle)?;
         let conf = bundle.model.clone();
+        let act = conf
+            .hidden_act
+            .as_deref()
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let use_geglu = act.contains("gelu");
+        let use_gemma_norm = family.path().contains("gemma") || use_geglu;
         Ok(Session {
             family,
             bundle,
             weights,
             conf,
+            use_gemma_norm,
+            use_geglu,
         })
     }
 }
@@ -112,19 +152,61 @@ impl Default for SessionBuilder {
     }
 }
 
+fn reject_unsupported_geometry(
+    conf: &crate::bundle::ModelConfig,
+    family: Family,
+) -> Result<(), EngineError> {
+    let path = family.path();
+    // MoE families must not silently run the dense decoder stub.
+    if family.is_moe() || conf.num_experts.unwrap_or(0) > 0 {
+        return Err(EngineError::Unsupported(format!(
+            "{path}: MoE router/experts not implemented yet (num_experts={:?})",
+            conf.num_experts
+        )));
+    }
+    // Qwen3.5 / Bonsai: hybrid linear_attention — refuse dense SDPA impersonation.
+    if path.contains("qwen3.5") || path.contains("bonsai") {
+        return Err(EngineError::Unsupported(format!(
+            "{path}: linear_attention / DeltaNet layers not implemented yet"
+        )));
+    }
+    if let Some(types) = &conf.layer_types {
+        let lower: Vec<String> = types.iter().map(|t| t.to_ascii_lowercase()).collect();
+        if lower.iter().any(|t| t.contains("conv")) {
+            return Err(EngineError::Unsupported(format!(
+                "{path}: LFM-style conv layers not implemented yet (layer_types has conv)"
+            )));
+        }
+        if lower
+            .iter()
+            .any(|t| t.contains("linear_attention") || t.contains("delta"))
+        {
+            return Err(EngineError::Unsupported(format!(
+                "{path}: linear_attention / DeltaNet layers not implemented yet"
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
-    fn any_owned(b: &Bundle, names: &[String]) -> Result<Vec<f32>, EngineError> {
+    fn any_mat(b: &Bundle, names: &[String]) -> Result<MatWeight, EngineError> {
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
-        b.weight_f32_any(&refs)
+        Ok(MatWeight::from_loaded(b.weight_loaded_any(&refs)?))
+    }
+    fn any_vec(b: &Bundle, names: &[String]) -> Result<Vec<f32>, EngineError> {
+        Ok(any_mat(b, names)?.data)
+    }
+    fn optional_vec(b: &Bundle, names: &[String]) -> Option<Vec<f32>> {
+        any_vec(b, names).ok()
     }
 
     let m = &b.model;
     let mut layers = Vec::with_capacity(m.num_layers);
-    // Gemma-4 E2B/E4B: last `num_kv_shared_layers` omit k/v; reuse prior layer KV.
-    let mut prev_wk: Option<Vec<f32>> = None;
-    let mut prev_wv: Option<Vec<f32>> = None;
+    let mut prev_wk: Option<MatWeight> = None;
+    let mut prev_wv: Option<MatWeight> = None;
     for layer in 0..m.num_layers {
-        let wk = match any_owned(b, &attn_k_names(layer)) {
+        let wk = match any_mat(b, &attn_k_names(layer)) {
             Ok(w) => {
                 prev_wk = Some(w.clone());
                 w
@@ -135,7 +217,7 @@ fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
                 ))
             })?,
         };
-        let wv = match any_owned(b, &attn_v_names(layer)) {
+        let wv = match any_mat(b, &attn_v_names(layer)) {
             Ok(w) => {
                 prev_wv = Some(w.clone());
                 w
@@ -147,25 +229,27 @@ fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
             })?,
         };
         layers.push(LayerWeights {
-            attn_norm: any_owned(b, &attn_norm_names(layer))?,
-            ffn_norm: any_owned(b, &ffn_norm_names(layer))?,
-            wq: any_owned(b, &attn_q_names(layer))?,
+            attn_norm: any_vec(b, &attn_norm_names(layer))?,
+            ffn_norm: any_vec(b, &ffn_norm_names(layer))?,
+            wq: any_mat(b, &attn_q_names(layer))?,
             wk,
             wv,
-            wo: any_owned(b, &attn_o_names(layer))?,
-            gate: any_owned(b, &ffn_gate_names(layer))?,
-            up: any_owned(b, &ffn_up_names(layer))?,
-            down: any_owned(b, &ffn_down_names(layer))?,
+            wo: any_mat(b, &attn_o_names(layer))?,
+            gate: any_mat(b, &ffn_gate_names(layer))?,
+            up: any_mat(b, &ffn_up_names(layer))?,
+            down: any_mat(b, &ffn_down_names(layer))?,
+            q_norm: optional_vec(b, &attn_q_norm_names(layer)),
+            k_norm: optional_vec(b, &attn_k_norm_names(layer)),
         });
     }
     let emb_n = emb_names();
     let out_norm_n = output_norm_names();
     let out_n = output_names();
     Ok(ModelWeights {
-        emb: b.weight_f32_any(&emb_n)?,
+        emb: MatWeight::from_loaded(b.weight_loaded_any(&emb_n)?),
         layers,
-        output_norm: b.weight_f32_any(&out_norm_n)?,
-        output: b.weight_f32_any(&out_n)?,
+        output_norm: b.weight_loaded_any(&out_norm_n)?.data,
+        output: MatWeight::from_loaded(b.weight_loaded_any(&out_n)?),
     })
 }
 
@@ -251,7 +335,7 @@ impl Session {
         }
         for &tok in &toks {
             let tid = (tok as usize) % vocab;
-            let row = &self.weights.emb[tid * hidden..(tid + 1) * hidden];
+            let row = &self.weights.emb.data[tid * hidden..(tid + 1) * hidden];
             for i in 0..hidden {
                 acc[i] += row[i];
             }
@@ -263,12 +347,12 @@ impl Session {
         Ok(acc)
     }
 
-    /// Stage C VL: encode image and blend into a one-token visual prefix embedding.
+    /// Stage C VL: require real vision tensors in the bundle (no RGB mean-pool stub).
     pub fn vision_prefix(
         &self,
-        rgb: &[u8],
-        height: usize,
-        width: usize,
+        _rgb: &[u8],
+        _height: usize,
+        _width: usize,
     ) -> Result<Vec<f32>, EngineError> {
         if !matches!(self.family.arch, ArchClass::VL | ArchClass::VLA) {
             return Err(EngineError::Unsupported(format!(
@@ -276,24 +360,41 @@ impl Session {
                 self.family.arch
             )));
         }
-        vision_encode(rgb, height, width, self.conf.hidden_size)
+        Err(EngineError::Unsupported(format!(
+            "{}: vision tower weights not implemented (refusing RGB mean-pool stub)",
+            self.family.path()
+        )))
     }
 
-    /// Stage C VLA action vector from last hidden proxy (embedding of prompt).
-    pub fn predict_action(&self, prompt: &str, action_dim: usize) -> Result<Vec<f32>, EngineError> {
+    /// Stage C VLA: require real action head tensors (no fake linear stub).
+    pub fn predict_action(
+        &self,
+        _prompt: &str,
+        _action_dim: usize,
+    ) -> Result<Vec<f32>, EngineError> {
         if self.family.arch != ArchClass::VLA {
             return Err(EngineError::Unsupported(format!(
                 "predict_action requires VLA, got {:?}",
                 self.family.arch
             )));
         }
-        let h = self.embed_text(prompt)?;
-        action_head(&h, action_dim)
+        Err(EngineError::Unsupported(format!(
+            "{}: action head weights not implemented (refusing fake action stub)",
+            self.family.path()
+        )))
     }
 
     /// Stage C ASR stub bound to session vocab.
     pub fn transcribe_pcm16le(&self, pcm: &[u8]) -> Result<String, EngineError> {
         asr_transcribe_pcm16le(pcm, self.conf.vocab_size as u32)
+    }
+
+    fn norm(&self, x: &[f32], weight: &[f32]) -> Result<Vec<f32>, EngineError> {
+        if self.use_gemma_norm {
+            rms_norm_gemma(x, weight, 1e-6)
+        } else {
+            rms_norm(x, weight, 1e-6)
+        }
     }
 
     fn forward(&self, tokens: &[u32]) -> Result<Vec<f32>, EngineError> {
@@ -304,12 +405,12 @@ impl Session {
         if hidden == 0 {
             return Err(EngineError::ShapeMismatch("hidden_size is 0".into()));
         }
-        if self.weights.emb.len() < vocab.saturating_mul(hidden)
-            || !self.weights.emb.len().is_multiple_of(hidden)
+        if self.weights.emb.data.len() < vocab.saturating_mul(hidden)
+            || !self.weights.emb.data.len().is_multiple_of(hidden)
         {
             return Err(EngineError::ShapeMismatch(format!(
                 "embedding length {} not compatible with vocab={vocab} hidden={hidden}",
-                self.weights.emb.len()
+                self.weights.emb.data.len()
             )));
         }
         let mut k_caches: Vec<Vec<f32>> = (0..self.conf.num_layers).map(|_| Vec::new()).collect();
@@ -318,96 +419,108 @@ impl Session {
         let mut x = vec![0.0f32; hidden];
         for (pos, &tok) in tokens.iter().enumerate() {
             let tid = (tok as usize) % vocab;
-            x.copy_from_slice(&self.weights.emb[tid * hidden..(tid + 1) * hidden]);
+            x.copy_from_slice(&self.weights.emb.data[tid * hidden..(tid + 1) * hidden]);
 
             for (li, layer) in self.weights.layers.iter().enumerate() {
-                if layer.wq.len() % hidden != 0
-                    || layer.wk.len() % hidden != 0
-                    || layer.wv.len() % hidden != 0
+                if layer.wq.data.len() % hidden != 0
+                    || layer.wk.data.len() % hidden != 0
+                    || layer.wv.data.len() % hidden != 0
                 {
                     return Err(EngineError::ShapeMismatch(
                         "attn proj weight not divisible by hidden_size".into(),
                     ));
                 }
-                let q_dim = layer.wq.len() / hidden;
-                let k_dim = layer.wk.len() / hidden;
-                let v_dim = layer.wv.len() / hidden;
+                let q_dim = layer.wq.data.len() / hidden;
+                let k_dim = layer.wk.data.len() / hidden;
+                let v_dim = layer.wv.data.len() / hidden;
                 if n_heads == 0 || !q_dim.is_multiple_of(n_heads) {
                     return Err(EngineError::ShapeMismatch(
                         "q_dim not divisible by num_attention_heads".into(),
                     ));
                 }
-                // Gemma-4: head_dim may differ from hidden/n_heads (e.g. 256 vs 192).
-                let head_dim = q_dim / n_heads;
+                let head_dim = self
+                    .conf
+                    .head_dim
+                    .filter(|d| *d > 0 && q_dim == n_heads * *d)
+                    .unwrap_or(q_dim / n_heads);
                 if k_dim != n_kv * head_dim || v_dim != n_kv * head_dim {
                     return Err(EngineError::ShapeMismatch(format!(
                         "kv dims {k_dim}/{v_dim} != n_kv*head_dim {}",
                         n_kv * head_dim
                     )));
                 }
-                if layer.wo.len() != hidden * q_dim {
+                if layer.wo.data.len() != hidden * q_dim {
                     return Err(EngineError::ShapeMismatch(
                         "attn output proj weight shape mismatch".into(),
                     ));
                 }
 
-                let xn = rms_norm(&x, &layer.attn_norm, 1e-6)?;
-                let mut q = linear(&xn, &layer.wq, q_dim, hidden)?;
-                let mut k = linear(&xn, &layer.wk, k_dim, hidden)?;
-                let v = linear(&xn, &layer.wv, v_dim, hidden)?;
-                rope(&mut q, head_dim, pos, self.conf.rope_theta)?;
-                rope(&mut k, head_dim, pos, self.conf.rope_theta)?;
+                let xn = self.norm(&x, &layer.attn_norm)?;
+                let mut q = layer.wq.gemm(&xn, q_dim, hidden)?;
+                let mut k = layer.wk.gemm(&xn, k_dim, hidden)?;
+                let v = layer.wv.gemm(&xn, v_dim, hidden)?;
+                if let Some(qn) = &layer.q_norm {
+                    q = rms_norm(&q, qn, 1e-6)?;
+                }
+                if let Some(kn) = &layer.k_norm {
+                    k = rms_norm(&k, kn, 1e-6)?;
+                }
+                rope_half(&mut q, head_dim, pos, self.conf.rope_theta)?;
+                rope_half(&mut k, head_dim, pos, self.conf.rope_theta)?;
                 k_caches[li].extend_from_slice(&k);
                 v_caches[li].extend_from_slice(&v);
                 let attn = attention(&q, &k_caches[li], &v_caches[li], n_heads, n_kv, head_dim)?;
-                let ao = linear(&attn, &layer.wo, hidden, q_dim)?;
+                let ao = layer.wo.gemm(&attn, hidden, q_dim)?;
                 for i in 0..hidden {
                     x[i] += ao[i];
                 }
-                let xn2 = rms_norm(&x, &layer.ffn_norm, 1e-6)?;
-                // Per-layer intermediate (Gemma-4 KV-shared layers use 2× MLP width).
-                if layer.gate.len() % hidden != 0 {
+                let xn2 = self.norm(&x, &layer.ffn_norm)?;
+                if layer.gate.data.len() % hidden != 0 {
                     return Err(EngineError::ShapeMismatch(format!(
                         "layer {li} gate len {} not divisible by hidden {hidden}",
-                        layer.gate.len()
+                        layer.gate.data.len()
                     )));
                 }
-                let inter = layer.gate.len() / hidden;
+                let inter = layer.gate.data.len() / hidden;
                 if inter == 0 {
                     return Err(EngineError::ShapeMismatch(format!(
                         "layer {li} inferred intermediate_size is 0"
                     )));
                 }
-                if layer.up.len() != inter * hidden {
+                if layer.up.data.len() != inter * hidden {
                     return Err(EngineError::ShapeMismatch(format!(
                         "layer {li} up len {} != inter*hidden {inter}*{hidden}",
-                        layer.up.len()
+                        layer.up.data.len()
                     )));
                 }
-                if layer.down.len() != hidden * inter {
+                if layer.down.data.len() != hidden * inter {
                     return Err(EngineError::ShapeMismatch(format!(
                         "layer {li} down len {} != hidden*inter {hidden}*{inter}",
-                        layer.down.len()
+                        layer.down.data.len()
                     )));
                 }
-                let gate = linear(&xn2, &layer.gate, inter, hidden)?;
-                let up = linear(&xn2, &layer.up, inter, hidden)?;
-                let h = swiglu(&gate, &up)?;
-                let down = linear(&h, &layer.down, hidden, inter)?;
+                let gate = layer.gate.gemm(&xn2, inter, hidden)?;
+                let up = layer.up.gemm(&xn2, inter, hidden)?;
+                let h = if self.use_geglu {
+                    geglu(&gate, &up)?
+                } else {
+                    swiglu(&gate, &up)?
+                };
+                let down = layer.down.gemm(&h, hidden, inter)?;
                 for i in 0..hidden {
                     x[i] += down[i];
                 }
             }
         }
-        let xn = rms_norm(&x, &self.weights.output_norm, 1e-6)?;
-        if self.weights.output.len() % hidden != 0 {
+        let xn = self.norm(&x, &self.weights.output_norm)?;
+        if self.weights.output.data.len() % hidden != 0 {
             return Err(EngineError::ShapeMismatch(format!(
                 "lm_head len {} not divisible by hidden {hidden}",
-                self.weights.output.len()
+                self.weights.output.data.len()
             )));
         }
-        let out_rows = self.weights.output.len() / hidden;
-        linear(&xn, &self.weights.output, out_rows, hidden)
+        let out_rows = self.weights.output.data.len() / hidden;
+        self.weights.output.gemm(&xn, out_rows, hidden)
     }
 }
 
@@ -453,7 +566,7 @@ pub fn cache_shapes_ok(cache: &HashMap<usize, Vec<f32>>, kv_dim: usize) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::family::{arch_class_representatives, require_stage_b};
+    use crate::family::{arch_class_representatives, graph_hook, lookup_family, require_stage_b};
     use crate::fixture::write_tiny_q4_bundle;
     use serde_json::{json, Value};
 
@@ -850,8 +963,23 @@ mod tests {
     #[test]
     fn stage_b_arch_classes_generate() {
         for (path, arch) in arch_class_representatives() {
-            if matches!(arch, ArchClass::VL | ArchClass::VLA) {
-                continue; // stage C reps tested separately
+            if matches!(arch, ArchClass::VL | ArchClass::VLA | ArchClass::TextMoE) {
+                continue; // stage C / MoE gated separately
+            }
+            // Hybrid linear_attention families refuse dense Session until DeltaNet lands.
+            if path.contains("qwen3.5") || path.contains("bonsai") {
+                let dir = tempfile::tempdir().unwrap();
+                write_tiny_q4_bundle(dir.path()).unwrap();
+                let err = SessionBuilder::new()
+                    .model(dir.path())
+                    .family(*path)
+                    .build()
+                    .unwrap_err();
+                assert!(
+                    matches!(err, EngineError::Unsupported(_)),
+                    "{path}: {err:?}"
+                );
+                continue;
             }
             assert!(require_stage_b(path).is_ok(), "{path}");
             let dir = tempfile::tempdir().unwrap();
@@ -886,16 +1014,16 @@ mod tests {
             .build()
             .unwrap();
         let rgb = vec![10u8; 3 * 4 * 4];
-        let pref = s.vision_prefix(&rgb, 4, 4).unwrap();
-        assert_eq!(pref.len(), s.config().hidden_size);
+        let err = s.vision_prefix(&rgb, 4, 4).unwrap_err();
+        assert!(matches!(err, EngineError::Unsupported(_)));
 
         let vla = SessionBuilder::new()
             .model(dir.path())
             .family("openvla/openvla-7b")
             .build()
             .unwrap();
-        let act = vla.predict_action("move", 7).unwrap();
-        assert_eq!(act.len(), 7);
+        let err = vla.predict_action("move", 7).unwrap_err();
+        assert!(matches!(err, EngineError::Unsupported(_)));
         let emb = vla.embed_text("hello").unwrap();
         assert_eq!(emb.len(), vla.config().hidden_size);
     }
@@ -952,17 +1080,218 @@ mod tests {
     }
 
     #[test]
-    fn moe_family_hook() {
+    fn moe_family_refuses_dense_stub() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
-        let s = SessionBuilder::new()
+        let err = SessionBuilder::new()
             .model(dir.path())
             .family("lfm/lfm2-8b-a1b")
             .build()
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Unsupported(_)));
+        assert_eq!(
+            lookup_family("lfm/lfm2-8b-a1b").unwrap().arch,
+            ArchClass::TextMoE
+        );
+        assert_eq!(graph_hook(ArchClass::TextMoE), "text_moe_decoder_stub");
+    }
+
+    #[test]
+    fn geometry_gates_conv_and_experts() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let cfg_path = dir.path().join("config.json");
+        let mut cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        cfg["model"]["layer_types"] = json!(["conv", "full_attention"]);
+        std::fs::write(&cfg_path, cfg.to_string()).unwrap();
+        let err = SessionBuilder::new()
+            .model(dir.path())
+            .family("lfm/lfm2-350m")
+            .build()
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Unsupported(_)), "{err:?}");
+
+        let dir2 = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir2.path()).unwrap();
+        let cfg_path = dir2.path().join("config.json");
+        let mut cfg: Value =
+            serde_json::from_str(&std::fs::read_to_string(&cfg_path).unwrap()).unwrap();
+        cfg["model"]["num_experts"] = json!(8);
+        cfg["model"]["num_experts_per_tok"] = json!(2);
+        std::fs::write(&cfg_path, cfg.to_string()).unwrap();
+        let err = SessionBuilder::new()
+            .model(dir2.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap_err();
+        assert!(matches!(err, EngineError::Unsupported(_)), "{err:?}");
+    }
+
+    #[test]
+    fn tiny_q4_codebook_weights_carry_hdm_seed() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let b = load_bundle(dir.path()).unwrap();
+        let w = b.weight_loaded("blk.0.attn_q.weight").unwrap();
+        assert!(w.hdm_seed.is_some(), "rotated codebook must expose HDM seed");
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
             .unwrap();
-        assert_eq!(s.arch(), ArchClass::TextMoE);
-        assert!(s.family().is_moe());
-        assert_eq!(s.graph_hook_name(), "text_moe_decoder_stub");
+        let gen = s
+            .generate(
+                &[1, 2],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 2);
+    }
+
+    #[test]
+    fn gemma_hidden_act_geglu_and_qk_norm() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = 8usize;
+        let layers = 1usize;
+        let inter = 16usize;
+        let vocab = 16usize;
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let q_dim = n_heads * head_dim;
+        let k_dim = n_kv * head_dim;
+        let p = "model.language_model";
+
+        let mut tensors = serde_json::Map::new();
+        let mut bin = Vec::new();
+        let mut add_raw = |name: &str, shape: Vec<usize>, data: &[f32]| {
+            let offset = bin.len();
+            for &v in data {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+            let nbytes = data.len() * 4;
+            let mut meta = serde_json::Map::new();
+            meta.insert("kind".into(), json!("raw"));
+            meta.insert("dtype".into(), json!("f32"));
+            meta.insert("shape".into(), json!(shape));
+            meta.insert("offsets".into(), json!({ "data": [offset, nbytes] }));
+            tensors.insert(name.to_string(), Value::Object(meta));
+        };
+        let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
+        add_raw(&format!("{p}.embed_tokens.weight"), vec![vocab, hidden], &emb);
+        let n1 = vec![1.0f32; hidden];
+        let qn = vec![1.0f32; q_dim];
+        let kn = vec![1.0f32; k_dim];
+        let wq = vec![0.01f32; q_dim * hidden];
+        let wk = vec![0.01f32; k_dim * hidden];
+        let wv = vec![0.01f32; k_dim * hidden];
+        let wo = vec![0.01f32; hidden * q_dim];
+        add_raw(
+            &format!("{p}.layers.0.input_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.pre_feedforward_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.q_proj.weight"),
+            vec![q_dim, hidden],
+            &wq,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.k_proj.weight"),
+            vec![k_dim, hidden],
+            &wk,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.v_proj.weight"),
+            vec![k_dim, hidden],
+            &wv,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.o_proj.weight"),
+            vec![hidden, q_dim],
+            &wo,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.q_norm.weight"),
+            vec![q_dim],
+            &qn,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.k_norm.weight"),
+            vec![k_dim],
+            &kn,
+        );
+        let g = vec![0.01f32; inter * hidden];
+        let d = vec![0.01f32; hidden * inter];
+        add_raw(
+            &format!("{p}.layers.0.mlp.gate_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.up_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.down_proj.weight"),
+            vec![hidden, inter],
+            &d,
+        );
+        add_raw(&format!("{p}.norm.weight"), vec![hidden], &n1);
+        add_raw("lm_head.weight", vec![vocab, hidden], &emb);
+
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "test",
+            "group_size_default": 32,
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": layers,
+                "num_attention_heads": n_heads,
+                "num_kv_heads": n_kv,
+                "head_dim": head_dim,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 10000.0,
+                "hidden_act": "gelu_pytorch_tanh"
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        assert_eq!(
+            s.config().hidden_act.as_deref(),
+            Some("gelu_pytorch_tanh")
+        );
+        let gen = s
+            .generate(
+                &[1, 2],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 2);
     }
 
     #[test]

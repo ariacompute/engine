@@ -144,3 +144,40 @@
 
 ### T54 — Tests / docs
 - [x] Engine 单测 + README；Serve handler 测 + README `/download`
+
+## 全家族真实 Bundle 对齐（§3.3.1）
+
+### T60 — Spec
+- [x] `requirements.md` §3.3.1 + §6.3 真实 codebook；本文件 T60–T69；`AGENTS.md` 进行中
+
+### T61 — Session HDM
+- [x] Session 线性层走 `HdmLinear`（或等价 unrotate）；单测 rotated vs 原域
+
+### T62 — RoPE `rotate_half`
+- [x] 与 HF 布局对齐；partial RoPE 预留；单测
+
+### T63 — Gemma 正确性
+- [x] GeGLU + RMSNorm `(1+w)` + 四 norm 别名；`ffn_norm` 优先 `pre_feedforward_layernorm`
+- [ ] Gemma-4 KV **cache** 复用 / 滑动·全局 / 双 RoPE / PLE 门控（未做；缺 k/v 仍 clone 先验权重）
+
+### T64 — QK-Norm
+- [x] 别名 + op；Qwen3 / Gemma / LFM attn 路径
+
+### T65 — LFM conv hybrid
+- [x] `layer_types` 含 conv → 硬 `Unsupported`（short-conv 实现延期）
+- [ ] `conv.*` 名 + short-conv 层；不强制每层 `q_proj`
+
+### T66 — MoE
+- [x] `TextMoE` / `num_experts>0` → 硬 `Unsupported`（禁止 dense stub 冒充生成）；Inkling ArchClass=`TextMoE`
+- [ ] LFM2-8B-A1B + Inkling：router/experts 真实现
+
+### T67 — Qwen3.5 / Bonsai
+- [x] 家族路径硬 `Unsupported`（禁止当全 dense）；`layer_types` linear_attention/delta 同样门控
+- [ ] DeltaNet / linear_attention 真实现
+
+### T68 — VL / VLA
+- [x] `vision_prefix` / `predict_action` 硬 `Unsupported`（去掉 RGB mean-pool / 假 action）
+- [ ] 消费 bundle 内 vision/action 张量
+
+### T69 — Registry + model 字段
+- [x] 登记 `lfm2.5-2.6b`；消费扩展 `model` 元数据（`head_dim` / `layer_types` / `hidden_act` / MoE 字段）

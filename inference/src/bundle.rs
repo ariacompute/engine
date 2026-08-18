@@ -22,6 +22,22 @@ pub struct ModelConfig {
     pub context_length: usize,
     #[serde(default = "default_rope")]
     pub rope_theta: f32,
+    #[serde(default)]
+    pub head_dim: Option<usize>,
+    #[serde(default)]
+    pub layer_types: Option<Vec<String>>,
+    #[serde(default)]
+    pub num_kv_shared_layers: Option<usize>,
+    #[serde(default)]
+    pub use_double_wide_mlp: Option<bool>,
+    #[serde(default)]
+    pub hidden_act: Option<String>,
+    #[serde(default)]
+    pub num_experts: Option<usize>,
+    #[serde(default)]
+    pub num_experts_per_tok: Option<usize>,
+    #[serde(default)]
+    pub tie_word_embeddings: Option<bool>,
 }
 
 fn default_rope() -> f32 {
@@ -344,18 +360,49 @@ pub fn dequantize(t: &QuantTensor) -> Result<Vec<f32>, EngineError> {
 
 impl Bundle {
     pub fn weight_f32(&self, name: &str) -> Result<Vec<f32>, EngineError> {
+        Ok(self.weight_loaded(name)?.data)
+    }
+
+    /// Load weight + optional HDM seed (Some ⇒ rotated-space codebook weight).
+    pub fn weight_loaded(&self, name: &str) -> Result<LoadedWeight, EngineError> {
         match self.tensors.get(name) {
-            Some(TensorData::Codebook(q)) => dequantize(q),
-            Some(TensorData::Raw { data, .. }) => Ok(data.clone()),
+            Some(TensorData::Codebook(q)) => {
+                let data = dequantize(q)?;
+                let applied = q
+                    .hadamard
+                    .get("applied")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let seed = if applied {
+                    q.hadamard
+                        .get("seed")
+                        .and_then(|v| v.as_i64())
+                        .or(self.hadamard_seed)
+                } else {
+                    None
+                };
+                Ok(LoadedWeight {
+                    data,
+                    hdm_seed: seed,
+                })
+            }
+            Some(TensorData::Raw { data, .. }) => Ok(LoadedWeight {
+                data: data.clone(),
+                hdm_seed: None,
+            }),
             None => Err(EngineError::Format(format!("missing tensor {name}"))),
         }
     }
 
     /// Load the first tensor that exists among `names` (HF vs tiny/blk aliases).
     pub fn weight_f32_any(&self, names: &[&str]) -> Result<Vec<f32>, EngineError> {
+        Ok(self.weight_loaded_any(names)?.data)
+    }
+
+    pub fn weight_loaded_any(&self, names: &[&str]) -> Result<LoadedWeight, EngineError> {
         let mut tried = Vec::with_capacity(names.len());
         for name in names {
-            match self.weight_f32(name) {
+            match self.weight_loaded(name) {
                 Ok(v) => return Ok(v),
                 Err(EngineError::Format(_)) => tried.push(*name),
                 Err(e) => return Err(e),
@@ -366,6 +413,13 @@ impl Bundle {
             tried.join(", ")
         )))
     }
+}
+
+/// Dequantized (or raw) weight with optional HDM unrotate seed.
+#[derive(Debug, Clone)]
+pub struct LoadedWeight {
+    pub data: Vec<f32>,
+    pub hdm_seed: Option<i64>,
 }
 
 #[cfg(test)]

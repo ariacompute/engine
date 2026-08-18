@@ -34,6 +34,7 @@ FAMILIES: tuple[Family, ...] = (
     Family("lfm/lfm2.5-350m", "LiquidAI/LFM2.5-350M", "text"),
     Family("lfm/lfm2.5-1.2b-instruct", "LiquidAI/LFM2.5-1.2B-Instruct", "text"),
     Family("lfm/lfm2.5-1.2b-thinking", "LiquidAI/LFM2.5-1.2B-Thinking", "text"),
+    Family("lfm/lfm2.5-2.6b", "LiquidAI/LFM2.5-2.6B", "text"),
     Family("lfm/lfm2.5-vl-1.6b", "LiquidAI/LFM2.5-VL-1.6B", "vl"),
     Family("nanbeige/nanbeige4.2-3b", "Nanbeige/Nanbeige4.2-3B", "text"),
     Family("bonsai/bonsai-27b", "prism-ml/Bonsai-27B-unpacked", "text"),
