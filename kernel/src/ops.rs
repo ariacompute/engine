@@ -331,21 +331,35 @@ fn l2_normalize_inplace(x: &mut [f32]) {
     }
 }
 
+/// Bundled args for [`gated_delta_step`] (avoids clippy `too_many_arguments`).
+pub struct GatedDeltaStep<'a> {
+    pub q: &'a [f32],
+    pub k: &'a [f32],
+    pub v: &'a [f32],
+    pub g: &'a [f32],
+    pub beta: &'a [f32],
+    pub state: &'a mut [f32],
+    pub n_heads: usize,
+    pub dk: usize,
+    pub dv: usize,
+}
+
 /// One-token Gated DeltaNet recurrence (Qwen3.5 / Bonsai linear attention).
 ///
 /// `state` is `[n_heads * dk * dv]` (per-head `S[dk, dv]`). `q`/`k` are
 /// `[n_heads * dk]`, `v` `[n_heads * dv]`, `g`/`beta` `[n_heads]`.
-pub fn gated_delta_step(
-    q: &[f32],
-    k: &[f32],
-    v: &[f32],
-    g: &[f32],
-    beta: &[f32],
-    state: &mut [f32],
-    n_heads: usize,
-    dk: usize,
-    dv: usize,
-) -> Result<Vec<f32>, EngineError> {
+pub fn gated_delta_step(p: GatedDeltaStep<'_>) -> Result<Vec<f32>, EngineError> {
+    let GatedDeltaStep {
+        q,
+        k,
+        v,
+        g,
+        beta,
+        state,
+        n_heads,
+        dk,
+        dv,
+    } = p;
     if n_heads == 0 || dk == 0 || dv == 0 {
         return Err(EngineError::ShapeMismatch(
             "gated_delta_step: heads/dk/dv must be > 0".into(),
@@ -415,7 +429,7 @@ pub fn geglu(gate: &[f32], up: &[f32]) -> Result<Vec<f32>, EngineError> {
 /// Match transformers `gelu_pytorch_tanh` (used by Gemma GeGLU).
 pub fn gelu_pytorch_tanh(x: f32) -> f32 {
     // Match transformers gelu_pytorch_tanh.
-    const SQRT_2_OVER_PI: f32 = 0.797_884_560_8;
+    const SQRT_2_OVER_PI: f32 = 0.797_884_6;
     const COEFF: f32 = 0.044_715;
     let inner = SQRT_2_OVER_PI * (x + COEFF * x * x * x);
     0.5 * x * (1.0 + inner.tanh())
@@ -944,10 +958,32 @@ mod tests {
         let g = [0.9f32];
         let beta = [1.0f32];
         let mut s = vec![0.0f32; n_heads * dk * dv];
-        let o1 = gated_delta_step(&q, &k, &v, &g, &beta, &mut s, n_heads, dk, dv).unwrap();
+        let o1 = gated_delta_step(GatedDeltaStep {
+            q: &q,
+            k: &k,
+            v: &v,
+            g: &g,
+            beta: &beta,
+            state: &mut s,
+            n_heads,
+            dk,
+            dv,
+        })
+        .unwrap();
         assert_eq!(o1.len(), dv);
         let s_after = s.clone();
-        let o2 = gated_delta_step(&q, &k, &v, &g, &beta, &mut s, n_heads, dk, dv).unwrap();
+        let o2 = gated_delta_step(GatedDeltaStep {
+            q: &q,
+            k: &k,
+            v: &v,
+            g: &g,
+            beta: &beta,
+            state: &mut s,
+            n_heads,
+            dk,
+            dv,
+        })
+        .unwrap();
         assert!(s != s_after || (o2[0] - o1[0]).abs() > 0.0);
     }
 

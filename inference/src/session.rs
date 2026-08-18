@@ -11,7 +11,7 @@ use crate::tensor_names::{
 };
 use aria_kernel::{
     attention, gated_delta_step, geglu, hdm_linear, linear, moe_topk_route, rms_norm, rms_norm_gemma,
-    rope_half, short_conv_step, silu_vec, softplus, swiglu, EngineError,
+    rope_half, short_conv_step, silu_vec, softplus, swiglu, EngineError, GatedDeltaStep,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -312,17 +312,14 @@ fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
             }
             let inferred_k = kw.data.len() / hidden;
             let kernel_size = if inferred_k > 0 { inferred_k } else { kernel_size };
-            // Squeeze [H,1,K] → [H,K] if stored with an extra 1.
-            let kernel = if kw.data.len() == hidden * kernel_size {
-                kw.data
-            } else if kw.data.len() == hidden * 1 * kernel_size {
-                kw.data
-            } else {
+            // Accept [H,K] or squeezed [H,1,K] (same flat length).
+            if kw.data.len() != hidden * kernel_size {
                 return Err(EngineError::ShapeMismatch(format!(
                     "layer {layer} conv kernel len {} != hidden*kernel {hidden}*{kernel_size}",
                     kw.data.len()
                 )));
-            };
+            }
+            let kernel = kw.data;
             if in_proj.data.len() != 3 * hidden * hidden {
                 return Err(EngineError::ShapeMismatch(format!(
                     "layer {layer} conv in_proj len {} != 3*hidden*hidden",
@@ -373,7 +370,7 @@ fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
             }
             let qkvz_out = qkvz.data.len() / hidden;
             // Equal k/v dims: qkvz = 2*key + 2*value = 4*key.
-            if qkvz_out % 4 != 0 {
+            if !qkvz_out.is_multiple_of(4) {
                 return Err(EngineError::ShapeMismatch(format!(
                     "layer {layer} qkvz out {qkvz_out} not divisible by 4"
                 )));
@@ -381,7 +378,10 @@ fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
             let key_dim = qkvz_out / 4;
             let value_dim = key_dim;
             let n_k_heads = n_v_heads;
-            if n_k_heads == 0 || key_dim % n_k_heads != 0 || value_dim % n_v_heads != 0 {
+            if n_k_heads == 0
+                || !key_dim.is_multiple_of(n_k_heads)
+                || !value_dim.is_multiple_of(n_v_heads)
+            {
                 return Err(EngineError::ShapeMismatch(format!(
                     "layer {layer} cannot infer DeltaNet head dims"
                 )));
@@ -971,9 +971,17 @@ impl Session {
                         let s = delta_states[li].as_mut().ok_or_else(|| {
                             EngineError::ShapeMismatch("missing delta recurrent state".into())
                         })?;
-                        let mut core = gated_delta_step(
-                            &q, &k, &v, &g, &beta, s, dn.n_v_heads, dn.head_k, dn.head_v,
-                        )?;
+                        let mut core = gated_delta_step(GatedDeltaStep {
+                            q: &q,
+                            k: &k,
+                            v: &v,
+                            g: &g,
+                            beta: &beta,
+                            state: s,
+                            n_heads: dn.n_v_heads,
+                            dk: dn.head_k,
+                            dv: dn.head_v,
+                        })?;
                         // RMSNormGated approx: rms(core) * silu(z)
                         let ones = vec![1.0f32; dn.head_v];
                         core = rms_norm(&core, &ones, 1e-6)?;
@@ -996,7 +1004,7 @@ impl Session {
             }
         }
         let xn = self.norm(&x, &self.weights.output_norm)?;
-        if self.weights.output.data.len() % hidden != 0 {
+        if !self.weights.output.data.len().is_multiple_of(hidden) {
             return Err(EngineError::ShapeMismatch(format!(
                 "lm_head len {} not divisible by hidden {hidden}",
                 self.weights.output.data.len()
