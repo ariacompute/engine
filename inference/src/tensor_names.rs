@@ -230,6 +230,77 @@ pub fn moe_expert_down_names(layer: usize, expert: usize) -> Vec<String> {
     names
 }
 
+/// Qwen3.5 / Bonsai Gated DeltaNet projections.
+pub fn linear_in_proj_qkvz_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.linear_attn.in_proj_qkvz.weight")];
+    names.extend(with_layer_suffix(layer, "linear_attn.in_proj_qkvz.weight"));
+    names.extend(with_layer_suffix(
+        layer,
+        "self_attn.in_proj_qkvz.weight",
+    ));
+    names
+}
+
+pub fn linear_in_proj_ba_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.linear_attn.in_proj_ba.weight")];
+    names.extend(with_layer_suffix(layer, "linear_attn.in_proj_ba.weight"));
+    names.extend(with_layer_suffix(layer, "self_attn.in_proj_ba.weight"));
+    names
+}
+
+pub fn linear_conv1d_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.linear_attn.conv1d.weight")];
+    names.extend(with_layer_suffix(layer, "linear_attn.conv1d.weight"));
+    names.extend(with_layer_suffix(layer, "self_attn.conv1d.weight"));
+    names
+}
+
+pub fn linear_out_proj_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.linear_attn.out_proj.weight")];
+    names.extend(with_layer_suffix(layer, "linear_attn.out_proj.weight"));
+    names.extend(with_layer_suffix(layer, "self_attn.out_proj.weight"));
+    names
+}
+
+pub fn linear_a_log_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.linear_attn.A_log")];
+    names.extend(with_layer_suffix(layer, "linear_attn.A_log"));
+    names.extend(with_layer_suffix(layer, "self_attn.A_log"));
+    names
+}
+
+pub fn linear_dt_bias_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.linear_attn.dt_bias")];
+    names.extend(with_layer_suffix(layer, "linear_attn.dt_bias"));
+    names.extend(with_layer_suffix(layer, "self_attn.dt_bias"));
+    names
+}
+
+/// Vision projector / merger (first hit wins at load).
+pub fn vision_proj_names() -> Vec<&'static str> {
+    vec![
+        "mm_projector.weight",
+        "vision_projector.weight",
+        "multi_modal_projector.linear.weight",
+        "multi_modal_projector.weight",
+        "model.visual.merger.mlp.0.weight",
+        "visual.merger.mlp.0.weight",
+        "model.mm_projector.weight",
+        "vision_tower.projector.weight",
+    ]
+}
+
+/// VLA action / policy head.
+pub fn action_head_names() -> Vec<&'static str> {
+    vec![
+        "action_head.weight",
+        "action_out.weight",
+        "model.action_head.weight",
+        "model.action_out_proj.weight",
+        "policy.action_out.weight",
+    ]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

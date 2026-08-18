@@ -158,7 +158,8 @@
 
 ### T63 — Gemma 正确性
 - [x] GeGLU + RMSNorm `(1+w)` + 四 norm 别名；`ffn_norm` 优先 `pre_feedforward_layernorm`
-- [ ] Gemma-4 KV **cache** 复用 / 滑动·全局 / 双 RoPE / PLE 门控（未做；缺 k/v 仍 clone 先验权重）
+- [x] Gemma-4 KV **cache** 按 `num_kv_shared_layers` + `layer_types` 同类复用（不 clone `wk`/`wv`）
+- [ ] 滑动窗口 mask / 双 RoPE / PLE 仍未做
 
 ### T64 — QK-Norm
 - [x] 别名 + op；Qwen3 / Gemma / LFM attn 路径
@@ -173,12 +174,14 @@
 - [x] 单测：4-expert / top-2 generate
 
 ### T67 — Qwen3.5 / Bonsai
-- [x] 家族路径硬 `Unsupported`（禁止当全 dense）；`layer_types` linear_attention/delta 同样门控
-- [ ] DeltaNet / linear_attention 真实现
+- [x] `layer_types` 驱动 Gated DeltaNet 循环 + full attention；无 `layer_types` 仍拒绝 dense 冒充
+- [x] 单测：linear_attention + full_attention generate
+- [ ] DeltaNet GQA（`n_v_heads != n_k_heads`）/ chunked prefill
 
 ### T68 — VL / VLA
-- [x] `vision_prefix` / `predict_action` 硬 `Unsupported`（去掉 RGB mean-pool / 假 action）
-- [ ] 消费 bundle 内 vision/action 张量
+- [x] 消费 bundle `mm_projector` / `action_head` 等张量；缺张量仍 `Unsupported`
+- [x] 单测：vision_prefix + predict_action 走真实权重
+- [ ] 完整 ViT / SigLIP tower
 
 ### T69 — Registry + model 字段
 - [x] 登记 `lfm2.5-2.6b`；消费扩展 `model` 元数据（`head_dim` / `layer_types` / `hidden_act` / MoE / `conv_l_cache`）

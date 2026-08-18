@@ -298,6 +298,108 @@ pub fn moe_topk_route(
     Ok((idx, weights))
 }
 
+fn silu(x: f32) -> f32 {
+    x / (1.0 + (-x).exp())
+}
+
+/// Elementwise SiLU (DeltaNet conv activation).
+pub fn silu_vec(x: &mut [f32]) {
+    for v in x.iter_mut() {
+        *v = silu(*v);
+    }
+}
+
+/// Numerically stable softplus.
+pub fn softplus(x: f32) -> f32 {
+    if x > 20.0 {
+        x
+    } else {
+        (1.0 + x.exp()).ln()
+    }
+}
+
+fn l2_normalize_inplace(x: &mut [f32]) {
+    let mut ss = 0.0f32;
+    for v in x.iter() {
+        ss += *v * *v;
+    }
+    let n = (ss + 1e-6).sqrt();
+    if n > 0.0 {
+        for v in x.iter_mut() {
+            *v /= n;
+        }
+    }
+}
+
+/// One-token Gated DeltaNet recurrence (Qwen3.5 / Bonsai linear attention).
+///
+/// `state` is `[n_heads * dk * dv]` (per-head `S[dk, dv]`). `q`/`k` are
+/// `[n_heads * dk]`, `v` `[n_heads * dv]`, `g`/`beta` `[n_heads]`.
+pub fn gated_delta_step(
+    q: &[f32],
+    k: &[f32],
+    v: &[f32],
+    g: &[f32],
+    beta: &[f32],
+    state: &mut [f32],
+    n_heads: usize,
+    dk: usize,
+    dv: usize,
+) -> Result<Vec<f32>, EngineError> {
+    if n_heads == 0 || dk == 0 || dv == 0 {
+        return Err(EngineError::ShapeMismatch(
+            "gated_delta_step: heads/dk/dv must be > 0".into(),
+        ));
+    }
+    if q.len() != n_heads * dk
+        || k.len() != n_heads * dk
+        || v.len() != n_heads * dv
+        || g.len() != n_heads
+        || beta.len() != n_heads
+        || state.len() != n_heads * dk * dv
+    {
+        return Err(EngineError::ShapeMismatch(
+            "gated_delta_step: q/k/v/g/beta/state shape mismatch".into(),
+        ));
+    }
+    let mut qq = q.to_vec();
+    let mut kk = k.to_vec();
+    for h in 0..n_heads {
+        l2_normalize_inplace(&mut qq[h * dk..(h + 1) * dk]);
+        l2_normalize_inplace(&mut kk[h * dk..(h + 1) * dk]);
+    }
+    let scale = (dk as f32).sqrt().recip();
+    let mut out = vec![0.0f32; n_heads * dv];
+    for h in 0..n_heads {
+        let sbase = h * dk * dv;
+        let gh = g[h];
+        for i in 0..dk * dv {
+            state[sbase + i] *= gh;
+        }
+        let mut kv_mem = vec![0.0f32; dv];
+        for i in 0..dk {
+            let kv = kk[h * dk + i];
+            for j in 0..dv {
+                kv_mem[j] += state[sbase + i * dv + j] * kv;
+            }
+        }
+        for j in 0..dv {
+            let delta = (v[h * dv + j] - kv_mem[j]) * beta[h];
+            for i in 0..dk {
+                state[sbase + i * dv + j] += kk[h * dk + i] * delta;
+            }
+        }
+        for j in 0..dv {
+            let mut o = 0.0f32;
+            for i in 0..dk {
+                o += state[sbase + i * dv + j] * qq[h * dk + i];
+            }
+            out[h * dv + j] = o * scale;
+        }
+    }
+    Ok(out)
+}
+
 /// GeGLU: gelu(gate) * up (Gemma `gelu_pytorch_tanh` approximates with tanh form).
 pub fn geglu(gate: &[f32], up: &[f32]) -> Result<Vec<f32>, EngineError> {
     if gate.len() != up.len() {
@@ -829,6 +931,24 @@ mod tests {
         assert!((ws.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         let (ids_s, _) = moe_topk_route(&[0.0, 10.0, 0.0], 1, true).unwrap();
         assert_eq!(ids_s, vec![1]);
+    }
+
+    #[test]
+    fn gated_delta_step_updates_state() {
+        let n_heads = 1usize;
+        let dk = 2usize;
+        let dv = 2usize;
+        let q = [1.0f32, 0.0];
+        let k = [1.0f32, 0.0];
+        let v = [0.5f32, -0.25];
+        let g = [0.9f32];
+        let beta = [1.0f32];
+        let mut s = vec![0.0f32; n_heads * dk * dv];
+        let o1 = gated_delta_step(&q, &k, &v, &g, &beta, &mut s, n_heads, dk, dv).unwrap();
+        assert_eq!(o1.len(), dv);
+        let s_after = s.clone();
+        let o2 = gated_delta_step(&q, &k, &v, &g, &beta, &mut s, n_heads, dk, dv).unwrap();
+        assert!(s != s_after || (o2[0] - o1[0]).abs() > 0.0);
     }
 
     #[test]
