@@ -113,7 +113,7 @@ impl Default for SessionBuilder {
 }
 
 fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
-    fn any(b: &Bundle, names: &[String]) -> Result<Vec<f32>, EngineError> {
+    fn any_owned(b: &Bundle, names: &[String]) -> Result<Vec<f32>, EngineError> {
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         b.weight_f32_any(&refs)
     }
@@ -122,22 +122,25 @@ fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
     let mut layers = Vec::with_capacity(m.num_layers);
     for layer in 0..m.num_layers {
         layers.push(LayerWeights {
-            attn_norm: any(b, &attn_norm_names(layer))?,
-            ffn_norm: any(b, &ffn_norm_names(layer))?,
-            wq: any(b, &attn_q_names(layer))?,
-            wk: any(b, &attn_k_names(layer))?,
-            wv: any(b, &attn_v_names(layer))?,
-            wo: any(b, &attn_o_names(layer))?,
-            gate: any(b, &ffn_gate_names(layer))?,
-            up: any(b, &ffn_up_names(layer))?,
-            down: any(b, &ffn_down_names(layer))?,
+            attn_norm: any_owned(b, &attn_norm_names(layer))?,
+            ffn_norm: any_owned(b, &ffn_norm_names(layer))?,
+            wq: any_owned(b, &attn_q_names(layer))?,
+            wk: any_owned(b, &attn_k_names(layer))?,
+            wv: any_owned(b, &attn_v_names(layer))?,
+            wo: any_owned(b, &attn_o_names(layer))?,
+            gate: any_owned(b, &ffn_gate_names(layer))?,
+            up: any_owned(b, &ffn_up_names(layer))?,
+            down: any_owned(b, &ffn_down_names(layer))?,
         });
     }
+    let emb_n = emb_names();
+    let out_norm_n = output_norm_names();
+    let out_n = output_names();
     Ok(ModelWeights {
-        emb: b.weight_f32_any(&emb_names())?,
+        emb: b.weight_f32_any(&emb_n)?,
         layers,
-        output_norm: b.weight_f32_any(&output_norm_names())?,
-        output: b.weight_f32_any(&output_names())?,
+        output_norm: b.weight_f32_any(&out_norm_n)?,
+        output: b.weight_f32_any(&out_n)?,
     })
 }
 
@@ -511,6 +514,128 @@ mod tests {
         let mut s = SessionBuilder::new()
             .model(dir.path())
             .family("qwen/qwen3-0.6b")
+            .build()
+            .unwrap();
+        let gen = s
+            .generate(&[1, 2], &GenerateOpts {
+                max_tokens: 2,
+                temperature: 0.0,
+            })
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 2);
+    }
+
+    #[test]
+    fn materialize_accepts_language_model_prefix_and_pre_ffn_norm() {
+        // Gemma-4 / Gemma-3n VL-style HF paths.
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = 8usize;
+        let layers = 1usize;
+        let inter = 16usize;
+        let vocab = 16usize;
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let q_dim = n_heads * head_dim;
+        let k_dim = n_kv * head_dim;
+
+        let mut tensors = serde_json::Map::new();
+        let mut bin = Vec::new();
+        let mut add_raw = |name: &str, shape: Vec<usize>, data: &[f32]| {
+            let offset = bin.len();
+            for &v in data {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+            let nbytes = data.len() * 4;
+            let mut meta = serde_json::Map::new();
+            meta.insert("kind".into(), json!("raw"));
+            meta.insert("dtype".into(), json!("f32"));
+            meta.insert("shape".into(), json!(shape));
+            meta.insert("offsets".into(), json!({ "data": [offset, nbytes] }));
+            tensors.insert(name.to_string(), Value::Object(meta));
+        };
+        let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
+        let p = "model.language_model";
+        add_raw(&format!("{p}.embed_tokens.weight"), vec![vocab, hidden], &emb);
+        let n1 = vec![1.0f32; hidden];
+        add_raw(
+            &format!("{p}.layers.0.input_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.pre_feedforward_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        let wq = vec![0.01f32; q_dim * hidden];
+        let wk = vec![0.01f32; k_dim * hidden];
+        let wv = vec![0.01f32; k_dim * hidden];
+        let wo = vec![0.01f32; hidden * q_dim];
+        add_raw(
+            &format!("{p}.layers.0.self_attn.q_proj.weight"),
+            vec![q_dim, hidden],
+            &wq,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.k_proj.weight"),
+            vec![k_dim, hidden],
+            &wk,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.v_proj.weight"),
+            vec![k_dim, hidden],
+            &wv,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.o_proj.weight"),
+            vec![hidden, q_dim],
+            &wo,
+        );
+        let g = vec![0.01f32; inter * hidden];
+        let d = vec![0.01f32; hidden * inter];
+        add_raw(
+            &format!("{p}.layers.0.mlp.gate_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.up_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.down_proj.weight"),
+            vec![hidden, inter],
+            &d,
+        );
+        add_raw(&format!("{p}.norm.weight"), vec![hidden], &n1);
+        add_raw("lm_head.weight", vec![vocab, hidden], &emb);
+
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "test",
+            "group_size_default": 32,
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": layers,
+                "num_attention_heads": n_heads,
+                "num_kv_heads": n_kv,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 10000.0
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
             .build()
             .unwrap();
         let gen = s
