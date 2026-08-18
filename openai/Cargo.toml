@@ -25,6 +25,8 @@ futures-util = { workspace = true }
 reqwest = { workspace = true }
 serde_yaml = "0.9"
 zip = { version = "2", default-features = false, features = ["deflate"] }
+flate2 = "1"
+tar = "0.4"
 dirs = "5"
 urlencoding = "2"
 indicatif = { workspace = true }

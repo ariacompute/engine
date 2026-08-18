@@ -20,6 +20,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `cloud_api_key` | Hybrid Bearer 密钥 | _(空 → 云调用报错)_ |
 | `cloud_url` | Gateway base URL（由 API key 所属区域自动探测） | — |
 | `site_url` | 下载用站点（与 `cloud_url` 同区） | — |
+| `upgrade_url` | CLI/FFI 升级组织根（`.com`→GitHub，`.cn`→Gitee） | — |
 | `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
 | `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
 
@@ -28,10 +29,15 @@ cargo clippy --workspace --all-targets -- -D warnings
 aria-engine auth
 aria-engine auth --status
 
-# 下载
+# 下载模型
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
 aria-engine clean gemma-4-e2b-it_q4
+
+# 升级 CLI + libaria_ffi（最新正式版，或指定版本）
+# FFI 安装到 ~/.ariacompute/lib/，必要时设置 ARIA_FFI_LIB
+aria-engine upgrade
+aria-engine upgrade 0.7.2
 
 # 服务
 # 或：serve /path/to/aria-bundle

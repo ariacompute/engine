@@ -2,6 +2,7 @@ use aria_hybrid::{CloudClient, ExecutionMode, ParetoMode, Router};
 use aria_openai::config::{self, AriaConfig};
 use aria_openai::download;
 use aria_openai::gateway_detect;
+use aria_openai::upgrade;
 use aria_openai::{app, build_state};
 use std::env;
 use std::io::{self, BufRead, Write};
@@ -32,6 +33,7 @@ Usage:
   aria-engine download <model>
   aria-engine list
   aria-engine clean [model]
+  aria-engine upgrade [version]
   aria-engine serve <model> [--bind host:port] [--hybrid-mode MODE] [--hybrid-execution MODE]
   aria-engine -h | --help | help
   aria-engine -v | --version | version
@@ -39,6 +41,7 @@ Usage:
 Cache:
   ~/.ariacompute/config.yml
   ~/.ariacompute/models/<model>/
+  ~/.ariacompute/lib/   (libaria_ffi from upgrade)
 
 auth                 Prompt for API key + hybrid prefs; detect .com/.cn from key
   --status           Show config status (key redacted)
@@ -46,6 +49,7 @@ auth                 Prompt for API key + hybrid prefs; detect .com/.cn from key
 download <model>     Probe dashboard / Hugging Face / ModelScope; fetch best source
 list                 Query site catalog; mark each bundle downloaded / not downloaded
 clean [model]        Remove one cached model or all
+upgrade [version]    Replace this CLI + libaria_ffi from GitHub/Gitee (via upgrade_url)
 serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
   --hybrid-mode      cost | balance | intelligence (overrides config for this process)
@@ -112,9 +116,18 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 &cfg.site_url
             }
         );
+        println!(
+            "upgrade_url: {}",
+            if cfg.upgrade_url.is_empty() {
+                "(not set)"
+            } else {
+                &cfg.upgrade_url
+            }
+        );
         println!("hybrid_mode: {}", cfg.hybrid_mode);
         println!("hybrid_execution: {}", cfg.hybrid_execution);
         println!("config: {}", config::config_path()?.display());
+        println!("lib: {}", config::lib_dir()?.display());
         return Ok(());
     }
     if args.iter().any(|a| a == "--clear") {
@@ -129,7 +142,12 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
     eprintln!("detecting gateway / site from API key…");
     let pair = gateway_detect::detect_gateway_and_site(&api_key).await;
-    eprintln!("using cloud_url={} site_url={}", pair.cloud_url, pair.site_url);
+    eprintln!(
+        "using cloud_url={} site_url={} upgrade_url={}",
+        pair.cloud_url,
+        pair.site_url,
+        pair.upgrade_url()
+    );
     let hybrid_mode = prompt_choice(
         "hybrid_mode",
         &["cost", "balance", "intelligence"],
@@ -142,6 +160,7 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         cloud_api_key: api_key,
         cloud_url: pair.cloud_url.to_string(),
         site_url: pair.site_url.to_string(),
+        upgrade_url: pair.upgrade_url().to_string(),
         hybrid_mode,
         hybrid_execution,
     };
@@ -302,6 +321,12 @@ async fn main() {
         }
         "list" => cmd_list().await,
         "clean" => cmd_clean(args.get(1).map(|s| s.as_str())),
+        "upgrade" => {
+            let version = args.get(1).map(|s| s.as_str());
+            upgrade::run(version, ENGINE_VERSION)
+                .await
+                .map_err(|e| e.into())
+        }
         "serve" => cmd_serve(&args[1..]).await,
         other => Err(format!("unknown command: {other}").into()),
     };

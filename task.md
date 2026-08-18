@@ -125,3 +125,22 @@
 
 ### T47 — Serve UI
 - [x] 主页 + 文档 Tab 示例（全站语言）
+
+## CLI upgrade + Serve Download
+
+### T50 — Spec
+- [x] `requirements.md` §3.4 / §3.4.1：`upgrade` / `upgrade_url`；本文件 T50–T54；`AGENTS.md` 命令
+- [x] serve：`/download` + 站点→GitHub/Gitee 映射（README）
+
+### T51 — Config + auth
+- [x] `AriaConfig.upgrade_url`；`GatewayPair::upgrade_url()`；auth / reconcile / `--status`
+
+### T52 — `aria-engine upgrade`
+- [x] 解析正式 Release；下载 CLI + `libaria_ffi`；原子安装到 `current_exe` + `~/.ariacompute/lib/`
+
+### T53 — Serve Download page
+- [x] `GET /api/download/engine-latest`（按 Host 选源 + 短缓存）
+- [x] `/download` 前端 + 13 locale + 导航 / SEO
+
+### T54 — Tests / docs
+- [x] Engine 单测 + README；Serve handler 测 + README `/download`

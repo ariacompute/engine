@@ -3,6 +3,7 @@
 pub mod config;
 pub mod download;
 pub mod gateway_detect;
+pub mod upgrade;
 
 use aria_hybrid::{
     estimate_route_signals, CloudChatRequest, CloudClient, CloudMessage, ExecutionMode, RouteAction,

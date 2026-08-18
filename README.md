@@ -20,6 +20,7 @@ Credentials and hybrid prefs live in `~/.ariacompute/config.yml` (via `aria-engi
 | `cloud_api_key` | Hybrid Bearer key | _(empty → cloud errors)_ |
 | `cloud_url` | Gateway base URL (auto-detected from API key region) | — |
 | `site_url` | Site for downloads (same region as `cloud_url`) | — |
+| `upgrade_url` | Org root for CLI/FFI upgrades (`.com`→GitHub, `.cn`→Gitee) | — |
 | `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
 | `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
 
@@ -28,10 +29,15 @@ Credentials and hybrid prefs live in `~/.ariacompute/config.yml` (via `aria-engi
 aria-engine auth
 aria-engine auth --status
 
-# Download
+# Download models
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
 aria-engine clean gemma-4-e2b-it_q4
+
+# Upgrade CLI + libaria_ffi (latest stable, or a tag)
+# FFI lands in ~/.ariacompute/lib/ — set ARIA_FFI_LIB if needed
+aria-engine upgrade
+aria-engine upgrade 0.7.2
 
 # Serve
 # or: serve /path/to/aria-bundle

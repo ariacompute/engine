@@ -460,7 +460,7 @@ fn looks_like_zip(bytes: &[u8]) -> bool {
 
 /// Stream an HTTP body to `path`, showing a green progress bar when stderr is a TTY
 /// and `label` is non-empty.
-async fn stream_response_to_file(
+pub(crate) async fn stream_response_to_file(
     resp: reqwest::Response,
     path: &Path,
     label: &str,

@@ -35,13 +35,13 @@
 ## 常用命令
 - `cargo test`
 - `cargo run -p aria-openai --bin aria-engine -- serve <model|bundle_dir>`
-- `aria-engine auth` / `download` / `list` / `clean`
+- `aria-engine auth` / `download` / `list` / `clean` / `upgrade`
 - `./scripts/run-binding-tests.sh`
 - `python -m unittest discover -s bench/tests -t .`
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8 评测、§3.7 SDK bindings）。`task.md` T0–T6 / T10–T11 / T20 / T21 / T30–T34 / **T40–T47 SDK bindings** 已完成。
+Spec 见 `requirements.md`（含 §8 评测、§3.7 SDK bindings、§3.4 `upgrade`）。`task.md` T0–T6 / T10–T11 / T20 / T21 / T30–T34 / T40–T47 / **T50–T54 CLI upgrade + Serve Download** 已完成。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。

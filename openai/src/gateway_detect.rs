@@ -4,8 +4,10 @@ use std::time::{Duration, Instant};
 
 const INTL_CLOUD: &str = "https://gateway.ariacompute.com";
 const INTL_SITE: &str = "https://ariacompute.com";
+const INTL_UPGRADE: &str = "https://github.com/ariacompute";
 const CN_CLOUD: &str = "https://gateway.ariacompute.cn";
 const CN_SITE: &str = "https://ariacompute.cn";
+const CN_UPGRADE: &str = "https://gitee.com/ariacompute";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct GatewayPair {
@@ -23,12 +25,25 @@ impl GatewayPair {
         site_url: CN_SITE,
     };
 
+    /// Org root for Releases (`…/engine` appended by `upgrade`).
+    pub fn upgrade_url(self) -> &'static str {
+        if self == Self::CN {
+            CN_UPGRADE
+        } else {
+            INTL_UPGRADE
+        }
+    }
+
     /// Map a URL to the matching `.com` / `.cn` pair (cloud + site always aligned).
     pub fn from_url(url: &str) -> Option<Self> {
         let lower = url.to_ascii_lowercase();
         if lower.contains("ariacompute.cn") {
             Some(Self::CN)
         } else if lower.contains("ariacompute.com") {
+            Some(Self::INTL)
+        } else if lower.contains("gitee.com/ariacompute") {
+            Some(Self::CN)
+        } else if lower.contains("github.com/ariacompute") {
             Some(Self::INTL)
         } else {
             None
@@ -52,13 +67,14 @@ pub async fn detect_gateway_and_site(api_key: &str) -> GatewayPair {
 
 /// If config URLs are mismatched or the key is rejected by the configured site,
 /// rewrite to the pair that accepts the key (or the consistent locale fallback).
-/// Returns `true` when `cloud_url` / `site_url` changed.
+/// Returns `true` when `cloud_url` / `site_url` / `upgrade_url` changed.
 pub async fn reconcile_config_urls(cfg: &mut crate::config::AriaConfig) -> bool {
     if cfg.cloud_api_key.trim().is_empty() {
         return false;
     }
     let before_cloud = cfg.cloud_url.clone();
     let before_site = cfg.site_url.clone();
+    let before_upgrade = cfg.upgrade_url.clone();
 
     let site_pair = GatewayPair::from_url(&cfg.site_url);
     let cloud_pair = GatewayPair::from_url(&cfg.cloud_url);
@@ -72,14 +88,20 @@ pub async fn reconcile_config_urls(cfg: &mut crate::config::AriaConfig) -> bool 
         if ok {
             cfg.cloud_url = pair.cloud_url.to_string();
             cfg.site_url = pair.site_url.to_string();
-            return cfg.cloud_url != before_cloud || cfg.site_url != before_site;
+            cfg.upgrade_url = pair.upgrade_url().to_string();
+            return cfg.cloud_url != before_cloud
+                || cfg.site_url != before_site
+                || cfg.upgrade_url != before_upgrade;
         }
     }
 
     let pair = detect_gateway_and_site(&cfg.cloud_api_key).await;
     cfg.cloud_url = pair.cloud_url.to_string();
     cfg.site_url = pair.site_url.to_string();
-    cfg.cloud_url != before_cloud || cfg.site_url != before_site
+    cfg.upgrade_url = pair.upgrade_url().to_string();
+    cfg.cloud_url != before_cloud
+        || cfg.site_url != before_site
+        || cfg.upgrade_url != before_upgrade
 }
 
 async fn detect_by_api_key(api_key: &str) -> Option<GatewayPair> {
@@ -212,6 +234,8 @@ mod tests {
         assert!(GatewayPair::INTL.site_url.contains(".com"));
         assert!(GatewayPair::CN.cloud_url.contains(".cn"));
         assert!(GatewayPair::CN.site_url.contains(".cn"));
+        assert_eq!(GatewayPair::INTL.upgrade_url(), INTL_UPGRADE);
+        assert_eq!(GatewayPair::CN.upgrade_url(), CN_UPGRADE);
     }
 
     #[test]
@@ -223,6 +247,14 @@ mod tests {
         assert_eq!(
             GatewayPair::from_url("https://ariacompute.com"),
             Some(GatewayPair::INTL)
+        );
+        assert_eq!(
+            GatewayPair::from_url("https://github.com/ariacompute"),
+            Some(GatewayPair::INTL)
+        );
+        assert_eq!(
+            GatewayPair::from_url("https://gitee.com/ariacompute"),
+            Some(GatewayPair::CN)
         );
         assert_eq!(GatewayPair::from_url("https://example.com"), None);
     }
