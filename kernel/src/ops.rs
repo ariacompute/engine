@@ -43,9 +43,11 @@ pub fn linear(x: &[f32], w: &[f32], out_f: usize, in_f: usize) -> Result<Vec<f32
         )));
     }
     if w.len() != out_f * in_f {
-        return Err(EngineError::ShapeMismatch(
-            "linear weight length mismatch".into(),
-        ));
+        return Err(EngineError::ShapeMismatch(format!(
+            "linear weight length mismatch: got {} want out_f*in_f={out_f}*{in_f}={}",
+            w.len(),
+            out_f * in_f
+        )));
     }
     let batch = x.len() / in_f;
     let mut out = vec![0.0f32; batch * out_f];

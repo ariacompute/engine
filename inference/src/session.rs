@@ -120,13 +120,38 @@ fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
 
     let m = &b.model;
     let mut layers = Vec::with_capacity(m.num_layers);
+    // Gemma-4 E2B/E4B: last `num_kv_shared_layers` omit k/v; reuse prior layer KV.
+    let mut prev_wk: Option<Vec<f32>> = None;
+    let mut prev_wv: Option<Vec<f32>> = None;
     for layer in 0..m.num_layers {
+        let wk = match any_owned(b, &attn_k_names(layer)) {
+            Ok(w) => {
+                prev_wk = Some(w.clone());
+                w
+            }
+            Err(e) => prev_wk.clone().ok_or_else(|| {
+                EngineError::Format(format!(
+                    "missing k_proj for layer {layer} and no prior KV to share ({e})"
+                ))
+            })?,
+        };
+        let wv = match any_owned(b, &attn_v_names(layer)) {
+            Ok(w) => {
+                prev_wv = Some(w.clone());
+                w
+            }
+            Err(e) => prev_wv.clone().ok_or_else(|| {
+                EngineError::Format(format!(
+                    "missing v_proj for layer {layer} and no prior KV to share ({e})"
+                ))
+            })?,
+        };
         layers.push(LayerWeights {
             attn_norm: any_owned(b, &attn_norm_names(layer))?,
             ffn_norm: any_owned(b, &ffn_norm_names(layer))?,
             wq: any_owned(b, &attn_q_names(layer))?,
-            wk: any_owned(b, &attn_k_names(layer))?,
-            wv: any_owned(b, &attn_v_names(layer))?,
+            wk,
+            wv,
             wo: any_owned(b, &attn_o_names(layer))?,
             gate: any_owned(b, &ffn_gate_names(layer))?,
             up: any_owned(b, &ffn_up_names(layer))?,
@@ -275,8 +300,18 @@ impl Session {
         let hidden = self.conf.hidden_size;
         let n_heads = self.conf.num_attention_heads;
         let n_kv = self.conf.num_kv_heads;
-        let inter = self.conf.intermediate_size;
         let vocab = self.conf.vocab_size;
+        if hidden == 0 {
+            return Err(EngineError::ShapeMismatch("hidden_size is 0".into()));
+        }
+        if self.weights.emb.len() < vocab.saturating_mul(hidden)
+            || !self.weights.emb.len().is_multiple_of(hidden)
+        {
+            return Err(EngineError::ShapeMismatch(format!(
+                "embedding length {} not compatible with vocab={vocab} hidden={hidden}",
+                self.weights.emb.len()
+            )));
+        }
         let mut k_caches: Vec<Vec<f32>> = (0..self.conf.num_layers).map(|_| Vec::new()).collect();
         let mut v_caches: Vec<Vec<f32>> = (0..self.conf.num_layers).map(|_| Vec::new()).collect();
 
@@ -302,6 +337,7 @@ impl Session {
                         "q_dim not divisible by num_attention_heads".into(),
                     ));
                 }
+                // Gemma-4: head_dim may differ from hidden/n_heads (e.g. 256 vs 192).
                 let head_dim = q_dim / n_heads;
                 if k_dim != n_kv * head_dim || v_dim != n_kv * head_dim {
                     return Err(EngineError::ShapeMismatch(format!(
@@ -329,6 +365,31 @@ impl Session {
                     x[i] += ao[i];
                 }
                 let xn2 = rms_norm(&x, &layer.ffn_norm, 1e-6)?;
+                // Per-layer intermediate (Gemma-4 KV-shared layers use 2× MLP width).
+                if layer.gate.len() % hidden != 0 {
+                    return Err(EngineError::ShapeMismatch(format!(
+                        "layer {li} gate len {} not divisible by hidden {hidden}",
+                        layer.gate.len()
+                    )));
+                }
+                let inter = layer.gate.len() / hidden;
+                if inter == 0 {
+                    return Err(EngineError::ShapeMismatch(format!(
+                        "layer {li} inferred intermediate_size is 0"
+                    )));
+                }
+                if layer.up.len() != inter * hidden {
+                    return Err(EngineError::ShapeMismatch(format!(
+                        "layer {li} up len {} != inter*hidden {inter}*{hidden}",
+                        layer.up.len()
+                    )));
+                }
+                if layer.down.len() != hidden * inter {
+                    return Err(EngineError::ShapeMismatch(format!(
+                        "layer {li} down len {} != hidden*inter {hidden}*{inter}",
+                        layer.down.len()
+                    )));
+                }
                 let gate = linear(&xn2, &layer.gate, inter, hidden)?;
                 let up = linear(&xn2, &layer.up, inter, hidden)?;
                 let h = swiglu(&gate, &up)?;
@@ -339,7 +400,14 @@ impl Session {
             }
         }
         let xn = rms_norm(&x, &self.weights.output_norm, 1e-6)?;
-        linear(&xn, &self.weights.output, vocab, hidden)
+        if self.weights.output.len() % hidden != 0 {
+            return Err(EngineError::ShapeMismatch(format!(
+                "lm_head len {} not divisible by hidden {hidden}",
+                self.weights.output.len()
+            )));
+        }
+        let out_rows = self.weights.output.len() / hidden;
+        linear(&xn, &self.weights.output, out_rows, hidden)
     }
 }
 
@@ -643,6 +711,138 @@ mod tests {
                 max_tokens: 2,
                 temperature: 0.0,
             })
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 2);
+    }
+
+    #[test]
+    fn gemma4_style_double_wide_mlp_and_shared_kv() {
+        // Config intermediate_size stays at the narrow width; layer 1 is 2× (KV-shared)
+        // and omits k/v projections — must still generate without shape mismatch.
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = 8usize;
+        let layers = 2usize;
+        let inter = 16usize;
+        let inter_wide = 32usize;
+        let vocab = 16usize;
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let q_dim = n_heads * head_dim;
+        let k_dim = n_kv * head_dim;
+        let p = "model.language_model";
+
+        let mut tensors = serde_json::Map::new();
+        let mut bin = Vec::new();
+        let mut add_raw = |name: &str, shape: Vec<usize>, data: &[f32]| {
+            let offset = bin.len();
+            for &v in data {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+            let nbytes = data.len() * 4;
+            let mut meta = serde_json::Map::new();
+            meta.insert("kind".into(), json!("raw"));
+            meta.insert("dtype".into(), json!("f32"));
+            meta.insert("shape".into(), json!(shape));
+            meta.insert("offsets".into(), json!({ "data": [offset, nbytes] }));
+            tensors.insert(name.to_string(), Value::Object(meta));
+        };
+        let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
+        add_raw(&format!("{p}.embed_tokens.weight"), vec![vocab, hidden], &emb);
+        let n1 = vec![1.0f32; hidden];
+        let wq = vec![0.01f32; q_dim * hidden];
+        let wk = vec![0.01f32; k_dim * hidden];
+        let wv = vec![0.01f32; k_dim * hidden];
+        let wo = vec![0.01f32; hidden * q_dim];
+        for li in 0..layers {
+            let layer_inter = if li == 0 { inter } else { inter_wide };
+            add_raw(
+                &format!("{p}.layers.{li}.input_layernorm.weight"),
+                vec![hidden],
+                &n1,
+            );
+            add_raw(
+                &format!("{p}.layers.{li}.pre_feedforward_layernorm.weight"),
+                vec![hidden],
+                &n1,
+            );
+            add_raw(
+                &format!("{p}.layers.{li}.self_attn.q_proj.weight"),
+                vec![q_dim, hidden],
+                &wq,
+            );
+            if li == 0 {
+                add_raw(
+                    &format!("{p}.layers.{li}.self_attn.k_proj.weight"),
+                    vec![k_dim, hidden],
+                    &wk,
+                );
+                add_raw(
+                    &format!("{p}.layers.{li}.self_attn.v_proj.weight"),
+                    vec![k_dim, hidden],
+                    &wv,
+                );
+            }
+            add_raw(
+                &format!("{p}.layers.{li}.self_attn.o_proj.weight"),
+                vec![hidden, q_dim],
+                &wo,
+            );
+            let g = vec![0.01f32; layer_inter * hidden];
+            let d = vec![0.01f32; hidden * layer_inter];
+            add_raw(
+                &format!("{p}.layers.{li}.mlp.gate_proj.weight"),
+                vec![layer_inter, hidden],
+                &g,
+            );
+            add_raw(
+                &format!("{p}.layers.{li}.mlp.up_proj.weight"),
+                vec![layer_inter, hidden],
+                &g,
+            );
+            add_raw(
+                &format!("{p}.layers.{li}.mlp.down_proj.weight"),
+                vec![hidden, layer_inter],
+                &d,
+            );
+        }
+        add_raw(&format!("{p}.norm.weight"), vec![hidden], &n1);
+        add_raw("lm_head.weight", vec![vocab, hidden], &emb);
+
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "test",
+            "group_size_default": 32,
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": layers,
+                "num_attention_heads": n_heads,
+                "num_kv_heads": n_kv,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 10000.0
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        let gen = s
+            .generate(
+                &[1, 2],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
             .unwrap();
         assert_eq!(gen.tokens.len(), 2);
     }
