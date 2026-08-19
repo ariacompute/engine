@@ -65,8 +65,11 @@ jobs:
           CIBW_BEFORE_ALL: bash scripts/build-python-ffi.sh
           # env var is authoritative (mirrors [tool.cibuildwheel] skip in
           # bindings/python/pyproject.toml): musl targets drop the cdylib
-          # crate type, so musllinux wheels cannot bundle libaria_ffi.so
-          CIBW_SKIP: musllinux*
+          # crate type, so musllinux wheels cannot bundle libaria_ffi.so.
+          # The pattern must be "*musllinux*" (fnmatch on the full
+          # identifier like cp310-musllinux_x86_64); quoted because it
+          # starts with an asterisk in YAML.
+          CIBW_SKIP: "*musllinux*"
         with:
           package-dir: bindings/python
           output-dir: wheelhouse
