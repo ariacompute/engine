@@ -19,4 +19,4 @@ pub use multimodal::{action_head, asr_transcribe_pcm16le, rag_pack_context, visi
 pub use session::{
     confidence_from_logits, GenerateOpts, Generation, Session, SessionBuilder,
 };
-pub use tokenizer::{decode_placeholders, BundleTokenizer};
+pub use tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};

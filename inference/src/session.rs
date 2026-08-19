@@ -1,5 +1,5 @@
 use crate::bundle::{load_bundle, Bundle, LoadedWeight};
-use crate::tokenizer::{decode_placeholders, BundleTokenizer};
+use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use crate::family::{graph_hook, require_runnable, ArchClass, Family};
 use crate::multimodal::asr_transcribe_pcm16le;
 use crate::tensor_names::{
@@ -579,15 +579,16 @@ impl Session {
         }
     }
 
-    /// Naive whitespace / char tokenizer for demos (no HF tokenizer required).
+    /// Encode with bundle `tokenizer.json` when present; else naive byte fallback.
     pub fn encode_text(&self, text: &str) -> Vec<u32> {
-        let vocab = self.conf.vocab_size as u32;
-        if text.is_empty() {
-            return vec![1];
+        match &self.tokenizer {
+            Some(tok) => match tok.encode(text) {
+                Ok(ids) if !ids.is_empty() => ids,
+                Ok(_) => encode_naive(text, self.conf.vocab_size as u32),
+                Err(_) => encode_naive(text, self.conf.vocab_size as u32),
+            },
+            None => encode_naive(text, self.conf.vocab_size as u32),
         }
-        text.bytes()
-            .map(|b| (b as u32) % vocab.max(1))
-            .collect()
     }
 
     pub fn arch(&self) -> ArchClass {
