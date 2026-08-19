@@ -78,12 +78,14 @@ pub fn ffn_norm_names(layer: usize) -> Vec<String> {
 pub fn attn_q_norm_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.attn_q_norm.weight")];
     names.extend(with_layer_suffix(layer, "self_attn.q_norm.weight"));
+    names.extend(with_layer_suffix(layer, "self_attn.query_layernorm.weight"));
     names
 }
 
 pub fn attn_k_norm_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.attn_k_norm.weight")];
     names.extend(with_layer_suffix(layer, "self_attn.k_norm.weight"));
+    names.extend(with_layer_suffix(layer, "self_attn.key_layernorm.weight"));
     names
 }
 

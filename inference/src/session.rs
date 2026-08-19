@@ -1,7 +1,7 @@
 use crate::bundle::{load_bundle, Bundle, LoadedWeight};
-use crate::chat::{apply_chat_template, ChatTurn};
+use crate::chat::{apply_chat_template, strip_assistant_visible, ChatTurn};
+use crate::family::{effective_rope_theta, graph_hook, require_runnable, ArchClass, Family};
 use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
-use crate::family::{graph_hook, require_runnable, ArchClass, Family};
 use crate::multimodal::asr_transcribe_pcm16le;
 use crate::tensor_names::{
     action_head_names, attn_k_names, attn_k_norm_names, attn_norm_names, attn_o_names, attn_q_names,
@@ -214,15 +214,17 @@ impl SessionBuilder {
         let bundle = load_bundle(&path)?;
         reject_unsupported_geometry(&bundle.model, family)?;
         let tokenizer = BundleTokenizer::try_load(&path)?;
-        let weights = materialize(&bundle)?;
-        let conf = bundle.model.clone();
+        let weights = materialize(&bundle, family)?;
+        let mut conf = bundle.model.clone();
+        conf.rope_theta = effective_rope_theta(family.path(), conf.rope_theta);
         let act = conf
             .hidden_act
             .as_deref()
             .unwrap_or("")
             .to_ascii_lowercase();
         let use_geglu = act.contains("gelu");
-        let use_gemma_norm = family.path().contains("gemma") || use_geglu;
+        // Never apply Gemma (1+w) RMSNorm to Qwen/LFM/… even if act string is odd.
+        let use_gemma_norm = family.path().contains("gemma");
         Ok(Session {
             family,
             bundle,
@@ -292,7 +294,7 @@ fn is_kv_consumer(conf: &crate::bundle::ModelConfig, layer: usize) -> bool {
     n > 0 && layer >= conf.num_layers.saturating_sub(n)
 }
 
-fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
+fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> {
     fn any_mat(b: &Bundle, names: &[String]) -> Result<MatWeight, EngineError> {
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         Ok(MatWeight::from_loaded(b.weight_loaded_any(&refs)?))
@@ -527,11 +529,21 @@ fn materialize(b: &Bundle) -> Result<ModelWeights, EngineError> {
     let out_n = output_names();
     let vis_n: Vec<String> = vision_proj_names().iter().map(|s| (*s).to_string()).collect();
     let act_n: Vec<String> = action_head_names().iter().map(|s| (*s).to_string()).collect();
+    let emb = MatWeight::from_loaded(b.weight_loaded_any(&emb_n)?);
+    let output = if m.tie_word_embeddings.unwrap_or(false)
+        || (family.path().contains("qwen3") && !family.path().contains("qwen3.5"))
+    {
+        // Qwen3-0.6B/1.7B tie lm_head to embed; prefer embed even if a separate
+        // lm_head tensor exists (often a worse-quantized copy).
+        emb.clone()
+    } else {
+        MatWeight::from_loaded(b.weight_loaded_any(&out_n)?)
+    };
     Ok(ModelWeights {
-        emb: MatWeight::from_loaded(b.weight_loaded_any(&emb_n)?),
+        emb,
         layers,
         output_norm: b.weight_loaded_any(&out_norm_n)?.data,
-        output: MatWeight::from_loaded(b.weight_loaded_any(&out_n)?),
+        output,
         vision: any_mat(b, &vis_n).ok(),
         action: any_mat(b, &act_n).ok(),
     })
@@ -600,7 +612,10 @@ impl Session {
     /// Falls back to `<id>` placeholders when no sidecar is present.
     pub fn decode_tokens(&self, ids: &[u32]) -> String {
         match &self.tokenizer {
-            Some(tok) => tok.decode(ids),
+            Some(tok) => {
+                let raw = tok.decode_opts(ids, false);
+                strip_assistant_visible(&raw)
+            }
             None => decode_placeholders(ids),
         }
     }
@@ -1651,6 +1666,11 @@ mod tests {
             "chat template should wrap the user turn (raw={}, chat={})",
             raw.len(),
             chat.len()
+        );
+        assert!(
+            (s.config().rope_theta - 1_000_000.0).abs() < 1.0,
+            "Qwen3 must not keep Llama-default rope_theta=10000, got {}",
+            s.config().rope_theta
         );
     }
 

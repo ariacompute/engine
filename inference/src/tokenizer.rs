@@ -114,11 +114,27 @@ impl BundleTokenizer {
 
 fn collect_stop_ids(tok: &Tokenizer) -> Vec<u32> {
     let mut ids = Vec::new();
+    let mut push = |id: u32| {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    };
     for name in STOP_TOKEN_STRINGS {
         if let Some(id) = tok.token_to_id(name) {
-            if !ids.contains(&id) {
-                ids.push(id);
+            push(id);
+        }
+        // Added tokens sometimes miss token_to_id; encode as a whole piece.
+        if let Ok(enc) = tok.encode(*name, false) {
+            let got = enc.get_ids();
+            if got.len() == 1 {
+                push(got[0]);
             }
+        }
+    }
+    for (id, added) in tok.get_added_tokens_decoder() {
+        let content = added.content;
+        if STOP_TOKEN_STRINGS.contains(&content.as_str()) {
+            push(id);
         }
     }
     ids

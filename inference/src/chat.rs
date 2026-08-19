@@ -61,6 +61,17 @@ fn qwen_chatml(messages: &[ChatTurn], empty_think: bool) -> String {
     out
 }
 
+/// Drop Qwen3 thinking and ChatML specials from decoded assistant text.
+pub fn strip_assistant_visible(raw: &str) -> String {
+    let mut s = raw.replace("<|im_end|>", "").replace("<|im_start|>", "");
+    if let Some(idx) = s.rfind("</think>") {
+        s = s[idx + "</think>".len()..].to_string();
+    } else if let Some(idx) = s.find("<think>") {
+        s = s[idx + "<think>".len()..].to_string();
+    }
+    s.trim().to_string()
+}
+
 fn gemma_it(messages: &[ChatTurn]) -> String {
     let mut out = String::from("<bos>");
     for m in messages {
@@ -133,5 +144,11 @@ mod tests {
         let sys = s.find("<|im_start|>system").unwrap();
         let usr = s.find("<|im_start|>user").unwrap();
         assert!(sys < usr);
+    }
+
+    #[test]
+    fn strip_think_keeps_answer() {
+        let raw = "<think>\nreason\n</think>\n\nHello there<|im_end|>";
+        assert_eq!(strip_assistant_visible(raw), "Hello there");
     }
 }

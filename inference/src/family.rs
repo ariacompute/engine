@@ -273,6 +273,17 @@ fn strip_quant_suffix(name: &str) -> &str {
     s
 }
 
+/// Qwen3 (not 3.5 dual-RoPE) uses θ=1e6. Bundles that omit `rope_theta` hit serde
+/// default 10000 and produce garbage completions.
+pub fn effective_rope_theta(family_path: &str, configured: f32) -> f32 {
+    let p = family_path.to_ascii_lowercase();
+    if p.contains("qwen") && !p.contains("qwen3.5") && (configured - 10_000.0).abs() < 0.5 {
+        1_000_000.0
+    } else {
+        configured
+    }
+}
+
 pub fn family_phase(path: &str) -> Result<FamilyPhase, EngineError> {
     Ok(lookup_family(path)?.phase)
 }
@@ -436,5 +447,13 @@ mod tests {
             Some("gemma/gemma-4-e2b-it")
         );
         assert!(infer_family_path("totally-unknown_q4").is_none());
+    }
+
+    #[test]
+    fn qwen3_rope_theta_not_llama_default() {
+        assert!((effective_rope_theta("qwen/qwen3-0.6b", 10_000.0) - 1_000_000.0).abs() < 1.0);
+        assert!((effective_rope_theta("qwen/qwen3-0.6b", 1_000_000.0) - 1_000_000.0).abs() < 1.0);
+        assert!((effective_rope_theta("gemma/gemma-4-e2b-it", 10_000.0) - 10_000.0).abs() < 1.0);
+        assert!((effective_rope_theta("qwen/qwen3.5-2b", 10_000.0) - 10_000.0).abs() < 1.0);
     }
 }
