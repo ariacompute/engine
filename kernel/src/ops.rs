@@ -148,8 +148,7 @@ pub fn attention(
     n_kv_heads: usize,
     head_dim: usize,
 ) -> Result<Vec<f32>, EngineError> {
-    if n_heads == 0 || head_dim == 0 || n_kv_heads == 0 || !n_heads.is_multiple_of(n_kv_heads)
-    {
+    if n_heads == 0 || head_dim == 0 || n_kv_heads == 0 || !n_heads.is_multiple_of(n_kv_heads) {
         return Err(EngineError::ShapeMismatch(
             "attention invalid head configuration".into(),
         ));
@@ -159,7 +158,9 @@ pub fn attention(
         return Err(EngineError::ShapeMismatch("attention q shape".into()));
     }
     if k_cache.len() != v_cache.len() || !k_cache.len().is_multiple_of(kv_dim) {
-        return Err(EngineError::ShapeMismatch("attention kv cache shape".into()));
+        return Err(EngineError::ShapeMismatch(
+            "attention kv cache shape".into(),
+        ));
     }
     let seq = k_cache.len() / kv_dim;
     let rep = n_heads / n_kv_heads;
@@ -460,7 +461,12 @@ pub fn rms_norm_gemma(x: &[f32], weight: &[f32], eps: f32) -> Result<Vec<f32>, E
 }
 
 /// HF Llama/Qwen/Gemma RoPE: rotate half of the head dims as a contiguous block.
-pub fn rope_half(x: &mut [f32], head_dim: usize, pos: usize, theta: f32) -> Result<(), EngineError> {
+pub fn rope_half(
+    x: &mut [f32],
+    head_dim: usize,
+    pos: usize,
+    theta: f32,
+) -> Result<(), EngineError> {
     if head_dim == 0 || !head_dim.is_multiple_of(2) {
         return Err(EngineError::ShapeMismatch(
             "rope_half head_dim must be positive even".into(),
@@ -489,6 +495,10 @@ pub fn rope_half(x: &mut [f32], head_dim: usize, pos: usize, theta: f32) -> Resu
 }
 
 /// y = W_rot @ x followed by blocked unrotate on each out_f row (HDM fused path).
+///
+/// Equivalent to `linear(x, unrotate(W_rot))` for dense GEMM. **Not** valid for
+/// embedding row gather: axis-0 Hadamard mixes vocab rows, so `W_rot[token]` is
+/// not the token vector. Session reconstructs the full matrix at load instead.
 pub fn hdm_linear(
     x: &[f32],
     w_rot: &[f32],
@@ -660,7 +670,9 @@ pub fn dequant_lookup_group(
         ));
     }
     if codebook.len() != num_groups * kc {
-        return Err(EngineError::Quant("dequant codebook length mismatch".into()));
+        return Err(EngineError::Quant(
+            "dequant codebook length mismatch".into(),
+        ));
     }
     let mut out = vec![0.0f32; k_work * n];
     for g in 0..num_groups {
@@ -844,17 +856,40 @@ mod tests {
         // W[i,j] = i*3+j)*0.1 - 0.5; seed=7 — from model.common.hadamard
         let rows = 10usize;
         let cols = 3usize;
-        let mut w: Vec<f32> = (0..rows * cols)
-            .map(|i| (i as f32) * 0.1 - 0.5)
-            .collect();
+        let mut w: Vec<f32> = (0..rows * cols).map(|i| (i as f32) * 0.1 - 0.5).collect();
         hadamard_blocked_rows(&mut w, rows, cols, Some(7), false).unwrap();
         // Clippy-safe f32 literals (Python float32 rounded to representable precision).
         let golden: [f32; 30] = [
-            0.919239, 0.989949, 1.060_66, 0.919239, 0.989950, 1.060_66, -0.919239, -0.989949,
-            -1.060_66, 0.777817, std::f32::consts::FRAC_1_SQRT_2, 0.636396, -0.919239, -0.989949,
-            -1.060_66, -0.070711, -0.141421, -0.212132, 1.343503, std::f32::consts::SQRT_2,
-            1.484924, -0.636396, -0.848528, -1.060_66, -2.899138, -3.040559, -3.181_98, 0.212132,
-            0.212132, 0.212132,
+            0.919239,
+            0.989949,
+            1.060_66,
+            0.919239,
+            0.989950,
+            1.060_66,
+            -0.919239,
+            -0.989949,
+            -1.060_66,
+            0.777817,
+            std::f32::consts::FRAC_1_SQRT_2,
+            0.636396,
+            -0.919239,
+            -0.989949,
+            -1.060_66,
+            -0.070711,
+            -0.141421,
+            -0.212132,
+            1.343503,
+            std::f32::consts::SQRT_2,
+            1.484924,
+            -0.636396,
+            -0.848528,
+            -1.060_66,
+            -2.899138,
+            -3.040559,
+            -3.181_98,
+            0.212132,
+            0.212132,
+            0.212132,
         ];
         assert_eq!(w.len(), golden.len());
         for (a, b) in w.iter().zip(golden.iter()) {
@@ -1033,6 +1068,33 @@ mod tests {
         hadamard_blocked_rows(&mut w_orig, out_f, in_f, seed, false).unwrap();
         let y = hdm_linear(&x, &w_orig, out_f, in_f, seed).unwrap();
         for (a, b) in y.iter().zip(y_ref.iter()) {
+            assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn embedding_row_gather_needs_full_matrix_unrotate() {
+        let vocab = 8usize;
+        let hidden = 4usize;
+        let seed = Some(7i64);
+        let tid = 3usize;
+        let mut w: Vec<f32> = (0..vocab * hidden)
+            .map(|i| (i as f32) * 0.05 - 0.2)
+            .collect();
+        let orig = w[tid * hidden..(tid + 1) * hidden].to_vec();
+        hadamard_blocked_rows(&mut w, vocab, hidden, seed, false).unwrap();
+        let rotated_row = &w[tid * hidden..(tid + 1) * hidden];
+        let drift: f32 = orig
+            .iter()
+            .zip(rotated_row.iter())
+            .map(|(a, b)| (a - b).abs())
+            .sum();
+        assert!(
+            drift > 1e-3,
+            "axis-0 Hadamard must mix vocab rows; gather of W_rot[token] is wrong"
+        );
+        hadamard_blocked_rows(&mut w, vocab, hidden, seed, true).unwrap();
+        for (a, b) in orig.iter().zip(w[tid * hidden..(tid + 1) * hidden].iter()) {
             assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }
     }

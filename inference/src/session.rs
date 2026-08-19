@@ -1,19 +1,20 @@
 use crate::bundle::{load_bundle, Bundle, LoadedWeight};
 use crate::chat::{apply_chat_template, strip_assistant_visible, ChatTurn};
 use crate::family::{effective_rope_theta, graph_hook, require_runnable, ArchClass, Family};
-use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use crate::multimodal::asr_transcribe_pcm16le;
 use crate::tensor_names::{
-    action_head_names, attn_k_names, attn_k_norm_names, attn_norm_names, attn_o_names, attn_q_names,
-    attn_q_norm_names, attn_v_names, conv_in_proj_names, conv_kernel_names, conv_out_proj_names,
-    emb_names, ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_up_names, linear_a_log_names,
-    linear_conv1d_names, linear_dt_bias_names, linear_in_proj_ba_names, linear_in_proj_qkvz_names,
-    linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names, moe_expert_up_names,
-    moe_router_names, output_names, output_norm_names, vision_proj_names,
+    action_head_names, attn_k_names, attn_k_norm_names, attn_norm_names, attn_o_names,
+    attn_q_names, attn_q_norm_names, attn_v_names, conv_in_proj_names, conv_kernel_names,
+    conv_out_proj_names, emb_names, ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_up_names,
+    linear_a_log_names, linear_conv1d_names, linear_dt_bias_names, linear_in_proj_ba_names,
+    linear_in_proj_qkvz_names, linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names,
+    moe_expert_up_names, moe_router_names, output_names, output_norm_names, vision_proj_names,
 };
+use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use aria_kernel::{
-    attention, gated_delta_step, geglu, hdm_linear, linear, moe_topk_route, rms_norm, rms_norm_gemma,
-    rope_half, short_conv_step, silu_vec, softplus, swiglu, EngineError, GatedDeltaStep,
+    attention, gated_delta_step, geglu, hdm_linear, linear, moe_topk_route, rms_norm,
+    rms_norm_gemma, rope_half, short_conv_step, silu_vec, softplus, swiglu, EngineError,
+    GatedDeltaStep,
 };
 use std::collections::HashMap;
 use std::path::Path;
@@ -54,6 +55,8 @@ impl MatWeight {
     }
 
     fn gemm(&self, x: &[f32], out_f: usize, in_f: usize) -> Result<Vec<f32>, EngineError> {
+        // Codebook weights are unrotated at load (`reconstruct_weight`). Fused
+        // hdm_linear is only for leftover rotated-space tensors.
         if let Some(seed) = self.hdm_seed {
             hdm_linear(x, &self.data, out_f, in_f, Some(seed))
         } else {
@@ -332,7 +335,11 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
                 )));
             }
             let inferred_k = kw.data.len() / hidden;
-            let kernel_size = if inferred_k > 0 { inferred_k } else { kernel_size };
+            let kernel_size = if inferred_k > 0 {
+                inferred_k
+            } else {
+                kernel_size
+            };
             // Accept [H,K] or squeezed [H,1,K] (same flat length).
             if kw.data.len() != hidden * kernel_size {
                 return Err(EngineError::ShapeMismatch(format!(
@@ -527,8 +534,14 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
     let emb_n = emb_names();
     let out_norm_n = output_norm_names();
     let out_n = output_names();
-    let vis_n: Vec<String> = vision_proj_names().iter().map(|s| (*s).to_string()).collect();
-    let act_n: Vec<String> = action_head_names().iter().map(|s| (*s).to_string()).collect();
+    let vis_n: Vec<String> = vision_proj_names()
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let act_n: Vec<String> = action_head_names()
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
     let emb = MatWeight::from_loaded(b.weight_loaded_any(&emb_n)?);
     let output = if m.tie_word_embeddings.unwrap_or(false)
         || (family.path().contains("qwen3") && !family.path().contains("qwen3.5"))
@@ -568,7 +581,11 @@ impl Session {
 
     /// Greedy (temperature<=0) generation from prompt token ids.
     /// Prefills the prompt once, then runs one incremental decode step per new token.
-    pub fn generate(&mut self, prompt: &[u32], opts: &GenerateOpts) -> Result<Generation, EngineError> {
+    pub fn generate(
+        &mut self,
+        prompt: &[u32],
+        opts: &GenerateOpts,
+    ) -> Result<Generation, EngineError> {
         if opts.max_tokens == 0 {
             return Err(EngineError::InvalidParam("max_tokens must be > 0".into()));
         }
@@ -741,11 +758,7 @@ impl Session {
     }
 
     /// Stage C VLA: project last-token embedding with bundle action weights.
-    pub fn predict_action(
-        &self,
-        prompt: &str,
-        action_dim: usize,
-    ) -> Result<Vec<f32>, EngineError> {
+    pub fn predict_action(&self, prompt: &str, action_dim: usize) -> Result<Vec<f32>, EngineError> {
         if self.family.arch != ArchClass::VLA {
             return Err(EngineError::Unsupported(format!(
                 "predict_action requires VLA, got {:?}",
@@ -790,7 +803,12 @@ impl Session {
         }
     }
 
-    fn apply_ffn(&self, layer: &LayerWeights, xn2: &[f32], hidden: usize) -> Result<Vec<f32>, EngineError> {
+    fn apply_ffn(
+        &self,
+        layer: &LayerWeights,
+        xn2: &[f32],
+        hidden: usize,
+    ) -> Result<Vec<f32>, EngineError> {
         match &layer.ffn {
             FfnWeights::Dense { gate, up, down } => {
                 if gate.data.len() % hidden != 0 {
@@ -799,7 +817,9 @@ impl Session {
                     ));
                 }
                 let inter = gate.data.len() / hidden;
-                if inter == 0 || up.data.len() != inter * hidden || down.data.len() != hidden * inter
+                if inter == 0
+                    || up.data.len() != inter * hidden
+                    || down.data.len() != hidden * inter
                 {
                     return Err(EngineError::ShapeMismatch(
                         "dense FFN weight shape mismatch".into(),
@@ -873,9 +893,7 @@ impl Session {
                 .layers
                 .iter()
                 .map(|layer| match &layer.op {
-                    LayerOp::Linear(d) => {
-                        Some(vec![0.0f32; d.n_v_heads * d.head_k * d.head_v])
-                    }
+                    LayerOp::Linear(d) => Some(vec![0.0f32; d.n_v_heads * d.head_k * d.head_v]),
                     _ => None,
                 })
                 .collect(),
@@ -1016,9 +1034,9 @@ impl Session {
                         bx[i] = b * xx;
                         c_gate[i] = c;
                     }
-                    let cstate = state.conv_states[li].as_mut().ok_or_else(|| {
-                        EngineError::ShapeMismatch("missing conv state".into())
-                    })?;
+                    let cstate = state.conv_states[li]
+                        .as_mut()
+                        .ok_or_else(|| EngineError::ShapeMismatch("missing conv state".into()))?;
                     let conv_y =
                         short_conv_step(&bx, &conv.kernel, cstate, hidden, conv.kernel_size)?;
                     let mut y = vec![0.0f32; hidden];
@@ -1047,8 +1065,7 @@ impl Session {
                     let cstate = state.conv_states[li].as_mut().ok_or_else(|| {
                         EngineError::ShapeMismatch("missing delta conv state".into())
                     })?;
-                    let mut mixed_c =
-                        short_conv_step(&qkv, &dn.conv, cstate, conv_dim, dn.conv_k)?;
+                    let mut mixed_c = short_conv_step(&qkv, &dn.conv, cstate, conv_dim, dn.conv_k)?;
                     silu_vec(&mut mixed_c);
                     q.copy_from_slice(&mixed_c[0..key_dim]);
                     k.copy_from_slice(&mixed_c[key_dim..2 * key_dim]);
@@ -1288,10 +1305,13 @@ mod tests {
             .build()
             .unwrap();
         let gen = s
-            .generate(&[1, 2], &GenerateOpts {
-                max_tokens: 2,
-                temperature: 0.0,
-            })
+            .generate(
+                &[1, 2],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
             .unwrap();
         assert_eq!(gen.tokens.len(), 2);
     }
@@ -1327,7 +1347,11 @@ mod tests {
         };
         let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
         let p = "model.language_model";
-        add_raw(&format!("{p}.embed_tokens.weight"), vec![vocab, hidden], &emb);
+        add_raw(
+            &format!("{p}.embed_tokens.weight"),
+            vec![vocab, hidden],
+            &emb,
+        );
         let n1 = vec![1.0f32; hidden];
         add_raw(
             &format!("{p}.layers.0.input_layernorm.weight"),
@@ -1410,10 +1434,13 @@ mod tests {
             .build()
             .unwrap();
         let gen = s
-            .generate(&[1, 2], &GenerateOpts {
-                max_tokens: 2,
-                temperature: 0.0,
-            })
+            .generate(
+                &[1, 2],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
             .unwrap();
         assert_eq!(gen.tokens.len(), 2);
     }
@@ -1451,7 +1478,11 @@ mod tests {
             tensors.insert(name.to_string(), Value::Object(meta));
         };
         let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
-        add_raw(&format!("{p}.embed_tokens.weight"), vec![vocab, hidden], &emb);
+        add_raw(
+            &format!("{p}.embed_tokens.weight"),
+            vec![vocab, hidden],
+            &emb,
+        );
         let n1 = vec![1.0f32; hidden];
         let wq = vec![0.01f32; q_dim * hidden];
         let wk = vec![0.01f32; k_dim * hidden];
@@ -2084,12 +2115,15 @@ mod tests {
     }
 
     #[test]
-    fn tiny_q4_codebook_weights_carry_hdm_seed() {
+    fn tiny_q4_codebook_weights_unrotate_on_load() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
         let b = load_bundle(dir.path()).unwrap();
         let w = b.weight_loaded("blk.0.attn_q.weight").unwrap();
-        assert!(w.hdm_seed.is_some(), "rotated codebook must expose HDM seed");
+        assert!(
+            w.hdm_seed.is_none(),
+            "reconstruct_weight path stores original-space W for linear()"
+        );
         let mut s = SessionBuilder::new()
             .model(dir.path())
             .family("gemma/gemma-4-e2b-it")
@@ -2137,7 +2171,11 @@ mod tests {
             tensors.insert(name.to_string(), Value::Object(meta));
         };
         let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
-        add_raw(&format!("{p}.embed_tokens.weight"), vec![vocab, hidden], &emb);
+        add_raw(
+            &format!("{p}.embed_tokens.weight"),
+            vec![vocab, hidden],
+            &emb,
+        );
         let n1 = vec![1.0f32; hidden];
         let qn = vec![1.0f32; q_dim];
         let kn = vec![1.0f32; k_dim];
@@ -2233,10 +2271,7 @@ mod tests {
             .family("gemma/gemma-4-e2b-it")
             .build()
             .unwrap();
-        assert_eq!(
-            s.config().hidden_act.as_deref(),
-            Some("gelu_pytorch_tanh")
-        );
+        assert_eq!(s.config().hidden_act.as_deref(), Some("gelu_pytorch_tanh"));
         let gen = s
             .generate(
                 &[1, 2],
@@ -2322,9 +2357,17 @@ mod tests {
         );
         let g = vec![0.02f32; inter * hidden];
         let d = vec![0.02f32; hidden * inter];
-        add_raw("model.layers.0.mlp.gate_proj.weight", vec![inter, hidden], &g);
+        add_raw(
+            "model.layers.0.mlp.gate_proj.weight",
+            vec![inter, hidden],
+            &g,
+        );
         add_raw("model.layers.0.mlp.up_proj.weight", vec![inter, hidden], &g);
-        add_raw("model.layers.0.mlp.down_proj.weight", vec![hidden, inter], &d);
+        add_raw(
+            "model.layers.0.mlp.down_proj.weight",
+            vec![hidden, inter],
+            &d,
+        );
 
         add_raw("model.layers.1.input_layernorm.weight", vec![hidden], &n1);
         add_raw(
@@ -2356,9 +2399,17 @@ mod tests {
             vec![hidden, q_dim],
             &wo,
         );
-        add_raw("model.layers.1.mlp.gate_proj.weight", vec![inter, hidden], &g);
+        add_raw(
+            "model.layers.1.mlp.gate_proj.weight",
+            vec![inter, hidden],
+            &g,
+        );
         add_raw("model.layers.1.mlp.up_proj.weight", vec![inter, hidden], &g);
-        add_raw("model.layers.1.mlp.down_proj.weight", vec![hidden, inter], &d);
+        add_raw(
+            "model.layers.1.mlp.down_proj.weight",
+            vec![hidden, inter],
+            &d,
+        );
         add_raw("model.norm.weight", vec![hidden], &n1);
         add_raw("lm_head.weight", vec![vocab, hidden], &emb);
 

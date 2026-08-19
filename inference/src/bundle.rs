@@ -1,5 +1,5 @@
 use crate::pack::unpack_indices;
-use aria_kernel::{dequant_lookup_group, EngineError};
+use aria_kernel::{dequant_lookup_group, hadamard_blocked_rows, EngineError};
 use half::f16;
 use memmap2::Mmap;
 use serde::Deserialize;
@@ -175,8 +175,8 @@ pub fn load_bundle(path: impl AsRef<Path>) -> Result<Bundle, EngineError> {
         )));
     }
     let cfg_text = std::fs::read_to_string(&cfg_path)?;
-    let cfg: BundleConfig = serde_json::from_str(&cfg_text)
-        .map_err(|e| EngineError::Format(e.to_string()))?;
+    let cfg: BundleConfig =
+        serde_json::from_str(&cfg_text).map_err(|e| EngineError::Format(e.to_string()))?;
     if cfg.format != BUNDLE_FORMAT {
         return Err(EngineError::Format(format!(
             "unsupported format {:?}",
@@ -207,14 +207,15 @@ pub fn load_bundle(path: impl AsRef<Path>) -> Result<Bundle, EngineError> {
                 let bits = meta
                     .get("bits")
                     .and_then(|v| v.as_u64())
-                    .ok_or_else(|| EngineError::Quant("bits".into()))? as u8;
+                    .ok_or_else(|| EngineError::Quant("bits".into()))?
+                    as u8;
                 if !matches!(bits, 1 | 2 | 3 | 4 | 8) {
                     return Err(EngineError::Quant(format!("unsupported bits {bits}")));
                 }
-                let group_size = meta
-                    .get("group_size")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(cfg.group_size_default as u64) as usize;
+                let group_size =
+                    meta.get("group_size")
+                        .and_then(|v| v.as_u64())
+                        .unwrap_or(cfg.group_size_default as u64) as usize;
                 let shape = meta
                     .get("shape")
                     .and_then(|v| v.as_array())
@@ -224,10 +225,7 @@ pub fn load_bundle(path: impl AsRef<Path>) -> Result<Bundle, EngineError> {
                 }
                 let k = shape[0].as_u64().unwrap() as usize;
                 let n = shape[1].as_u64().unwrap() as usize;
-                let row_pad = meta
-                    .get("row_pad")
-                    .and_then(|v| v.as_u64())
-                    .unwrap_or(0) as usize;
+                let row_pad = meta.get("row_pad").and_then(|v| v.as_u64()).unwrap_or(0) as usize;
                 let share = meta
                     .get("codebook_share")
                     .and_then(|v| v.as_str())
@@ -241,9 +239,7 @@ pub fn load_bundle(path: impl AsRef<Path>) -> Result<Bundle, EngineError> {
                 let kc = 1usize << bits;
                 let codebook_shape = if share == "group" {
                     if !codebook.len().is_multiple_of(kc) {
-                        return Err(EngineError::ShapeMismatch(
-                            "bad group codebook size".into(),
-                        ));
+                        return Err(EngineError::ShapeMismatch("bad group codebook size".into()));
                     }
                     vec![codebook.len() / kc, kc]
                 } else {
@@ -294,10 +290,7 @@ pub fn load_bundle(path: impl AsRef<Path>) -> Result<Bundle, EngineError> {
                 } else {
                     f16_bytes_to_f32(raw)?
                 };
-                tensors.insert(
-                    name.clone(),
-                    TensorData::Raw { dtype, shape, data },
-                );
+                tensors.insert(name.clone(), TensorData::Raw { dtype, shape, data });
             }
             other => {
                 return Err(EngineError::Format(format!(
@@ -366,27 +359,42 @@ impl Bundle {
         Ok(self.weight_loaded(name)?.data)
     }
 
-    /// Load weight + optional HDM seed (Some ⇒ rotated-space codebook weight).
+    /// Load a weight in **original space** (Python `reconstruct_weight`).
+    ///
+    /// Codebook tensors are stored rotated (`W_rot = H@S@W` on axis 0). Fused
+    /// `hdm_linear` unrotates `y = W_rot @ x`, which is valid for dense GEMM but
+    /// **not** for embedding row gather (`e = W[token]`). Unrotating the full
+    /// matrix here makes lookup, tied `lm_head`, and `linear` all match HF inject.
     pub fn weight_loaded(&self, name: &str) -> Result<LoadedWeight, EngineError> {
         match self.tensors.get(name) {
             Some(TensorData::Codebook(q)) => {
-                let data = dequantize(q)?;
+                let mut data = dequantize(q)?;
                 let applied = q
                     .hadamard
                     .get("applied")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                let seed = if applied {
-                    q.hadamard
-                        .get("seed")
-                        .and_then(|v| v.as_i64())
-                        .or(self.hadamard_seed)
-                } else {
-                    None
-                };
+                if applied {
+                    let (k0, n) = q.shape;
+                    if data.len() != k0 * n {
+                        return Err(EngineError::ShapeMismatch(format!(
+                            "dequant {name} len {} != shape {k0}*{n}",
+                            data.len()
+                        )));
+                    }
+                    // Match Python reconstruct_weight(obj, bundle_seed): bundle seed
+                    // overrides per-tensor seed when present.
+                    let seed = self
+                        .hadamard_seed
+                        .or_else(|| q.hadamard.get("seed").and_then(|v| v.as_i64()));
+                    // k0==1 is identity in Python `_apply_blocked` (skip signs).
+                    if k0 > 1 {
+                        hadamard_blocked_rows(&mut data, k0, n, seed, true)?;
+                    }
+                }
                 Ok(LoadedWeight {
                     data,
-                    hdm_seed: seed,
+                    hdm_seed: None,
                 })
             }
             Some(TensorData::Raw { data, .. }) => Ok(LoadedWeight {
@@ -418,7 +426,10 @@ impl Bundle {
     }
 }
 
-/// Dequantized (or raw) weight with optional HDM unrotate seed.
+/// Dequantized original-space weight (codebook tensors already unrotated).
+///
+/// `hdm_seed` is kept for API compatibility; `weight_loaded` always clears it
+/// so Session GEMM uses `linear` on reconstructed `W`.
 #[derive(Debug, Clone)]
 pub struct LoadedWeight {
     pub data: Vec<f32>,
@@ -431,6 +442,7 @@ mod tests {
     use crate::fixture::{
         make_channel_quant_tensor, make_group_quant_tensor, rel_rmse, write_tiny_q4_bundle,
     };
+    use aria_kernel::hadamard_blocked_rows;
     use serde_json::json;
 
     #[test]
@@ -508,6 +520,45 @@ mod tests {
             }
             _ => panic!("expected codebook"),
         }
+    }
+
+    #[test]
+    fn codebook_weight_loaded_unrotates_like_reconstruct() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let b = load_bundle(dir.path()).unwrap();
+        let name = "blk.0.attn_q.weight";
+        let q = match b.tensors.get(name).unwrap() {
+            TensorData::Codebook(q) => q,
+            _ => panic!("expected codebook"),
+        };
+        let mut expected = dequantize(q).unwrap();
+        let (k0, n) = q.shape;
+        let seed = b
+            .hadamard_seed
+            .or_else(|| q.hadamard.get("seed").and_then(|v| v.as_i64()));
+        hadamard_blocked_rows(&mut expected, k0, n, seed, true).unwrap();
+        let loaded = b.weight_loaded(name).unwrap();
+        assert!(
+            loaded.hdm_seed.is_none(),
+            "reconstructed weights are original-space; Session uses linear()"
+        );
+        assert_eq!(loaded.data.len(), expected.len());
+        for (a, e) in loaded.data.iter().zip(expected.iter()) {
+            assert!((a - e).abs() < 1e-5, "{a} vs {e}");
+        }
+        // Rotated dequant row must differ from reconstructed row (axis-0 mix).
+        let rotated = dequantize(q).unwrap();
+        let row = n;
+        let rot_norm: f32 = rotated[..row]
+            .iter()
+            .zip(loaded.data[..row].iter())
+            .map(|(a, b)| (a - b) * (a - b))
+            .sum();
+        assert!(
+            rot_norm.sqrt() > 1e-4,
+            "embedding/linear rows must change under blocked unrotate"
+        );
     }
 
     #[test]

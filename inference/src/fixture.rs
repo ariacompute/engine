@@ -252,14 +252,20 @@ impl Writer {
     }
 
     fn add_codebook_2d(&mut self, name: &str, w: &[f32], k: usize, n: usize) -> Vec<f32> {
-        let (packed, codebook, num_groups) = quantize_group_q4(w, k, n, self.gs);
+        // Match Python quantize: rotate then pack; load path unrotates (reconstruct_weight).
+        let mut w_rot = w.to_vec();
+        aria_kernel::hadamard_blocked_rows(&mut w_rot, k, n, Some(0), false)
+            .expect("fixture hadamard rotate");
+        let (packed, codebook, num_groups) = quantize_group_q4(&w_rot, k, n, self.gs);
         let pi_start = self.bin.len();
         self.bin.extend_from_slice(&packed);
         let pi_len = self.bin.len() - pi_start;
         let cb_start = self.bin.len();
         write_f16_slice(&mut self.bin, &codebook);
         let cb_len = self.bin.len() - cb_start;
-        let recon = dequant_ref(&packed, &codebook, num_groups, self.gs, n, k);
+        let mut recon = dequant_ref(&packed, &codebook, num_groups, self.gs, n, k);
+        aria_kernel::hadamard_blocked_rows(&mut recon, k, n, Some(0), true)
+            .expect("fixture hadamard unrotate");
         self.tensors.insert(
             name.to_string(),
             json!({
