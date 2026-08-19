@@ -67,6 +67,17 @@ enum AttnKind {
     Full,
 }
 
+/// Persistent caches for autoregressive decode (KV / short-conv / DeltaNet).
+struct DecodeState {
+    k_caches: Vec<Vec<f32>>,
+    v_caches: Vec<Vec<f32>>,
+    last_kv_src: HashMap<AttnKind, usize>,
+    conv_states: Vec<Option<Vec<f32>>>,
+    delta_states: Vec<Option<Vec<f32>>>,
+    /// Next absolute position (RoPE / seq index).
+    pos: usize,
+}
+
 #[derive(Clone)]
 struct AttnWeights {
     wq: MatWeight,
@@ -157,6 +168,8 @@ pub struct Session {
     use_gemma_norm: bool,
     use_geglu: bool,
     tokenizer: Option<BundleTokenizer>,
+    /// Cleared at the start of each `generate`; reused across decode steps.
+    decode: Option<DecodeState>,
 }
 
 impl std::fmt::Debug for Session {
@@ -217,6 +230,7 @@ impl SessionBuilder {
             use_gemma_norm,
             use_geglu,
             tokenizer,
+            decode: None,
         })
     }
 }
@@ -540,6 +554,7 @@ impl Session {
     }
 
     /// Greedy (temperature<=0) generation from prompt token ids.
+    /// Prefills the prompt once, then runs one incremental decode step per new token.
     pub fn generate(&mut self, prompt: &[u32], opts: &GenerateOpts) -> Result<Generation, EngineError> {
         if opts.max_tokens == 0 {
             return Err(EngineError::InvalidParam("max_tokens must be > 0".into()));
@@ -548,26 +563,35 @@ impl Session {
         if tokens.is_empty() {
             tokens.push(1);
         }
-        let mut generated = Vec::new();
-        for _ in 0..opts.max_tokens {
-            let logits = self.forward(&tokens)?;
-            let next = if opts.temperature <= 0.0 {
-                argmax(&logits)
-            } else {
-                // Stage A: still greedy for determinism; temperature reserved.
-                argmax(&logits)
-            };
-            generated.push(next);
-            tokens.push(next);
-            if next == 0 {
-                break;
+        self.decode = Some(self.fresh_decode_state());
+        let result = (|| {
+            let mut logits = Vec::new();
+            for &tok in &tokens {
+                logits = self.forward_step(tok)?;
             }
-        }
-        let text = self.decode_tokens(&generated);
-        Ok(Generation {
-            tokens: generated,
-            text,
-        })
+            let mut generated = Vec::new();
+            for _ in 0..opts.max_tokens {
+                let next = if opts.temperature <= 0.0 {
+                    argmax(&logits)
+                } else {
+                    // Stage A: still greedy for determinism; temperature reserved.
+                    argmax(&logits)
+                };
+                generated.push(next);
+                tokens.push(next);
+                if next == 0 {
+                    break;
+                }
+                logits = self.forward_step(next)?;
+            }
+            let text = self.decode_tokens(&generated);
+            Ok(Generation {
+                tokens: generated,
+                text,
+            })
+        })();
+        self.decode = None;
+        result
     }
 
     /// Map token ids → UTF-8 via bundle `tokenizer.json` (byte-level when applicable).
@@ -786,7 +810,68 @@ impl Session {
         }
     }
 
+    fn fresh_decode_state(&self) -> DecodeState {
+        let hidden = self.conf.hidden_size;
+        DecodeState {
+            k_caches: (0..self.conf.num_layers).map(|_| Vec::new()).collect(),
+            v_caches: (0..self.conf.num_layers).map(|_| Vec::new()).collect(),
+            last_kv_src: HashMap::new(),
+            conv_states: self
+                .weights
+                .layers
+                .iter()
+                .map(|layer| match &layer.op {
+                    LayerOp::Conv(c) => {
+                        let hist = c.kernel_size.saturating_sub(1);
+                        Some(vec![0.0f32; hidden * hist])
+                    }
+                    LayerOp::Linear(d) => {
+                        let conv_dim = d.n_k_heads * d.head_k * 2 + d.n_v_heads * d.head_v;
+                        let hist = d.conv_k.saturating_sub(1);
+                        Some(vec![0.0f32; conv_dim * hist])
+                    }
+                    LayerOp::Attn(_) => None,
+                })
+                .collect(),
+            delta_states: self
+                .weights
+                .layers
+                .iter()
+                .map(|layer| match &layer.op {
+                    LayerOp::Linear(d) => {
+                        Some(vec![0.0f32; d.n_v_heads * d.head_k * d.head_v])
+                    }
+                    _ => None,
+                })
+                .collect(),
+            pos: 0,
+        }
+    }
+
+    /// Full-sequence forward (allocates fresh caches). Used by tests / parity checks.
     fn forward(&self, tokens: &[u32]) -> Result<Vec<f32>, EngineError> {
+        let mut state = self.fresh_decode_state();
+        let mut logits = Vec::new();
+        for &tok in tokens {
+            logits = self.forward_step_with(&mut state, tok)?;
+        }
+        Ok(logits)
+    }
+
+    fn forward_step(&mut self, tok: u32) -> Result<Vec<f32>, EngineError> {
+        let mut owned = self.decode.take().ok_or_else(|| {
+            EngineError::InvalidParam("decode state missing; call generate/prefill first".into())
+        })?;
+        let logits = self.forward_step_with(&mut owned, tok);
+        self.decode = Some(owned);
+        logits
+    }
+
+    fn forward_step_with(
+        &self,
+        state: &mut DecodeState,
+        tok: u32,
+    ) -> Result<Vec<f32>, EngineError> {
         let hidden = self.conf.hidden_size;
         let n_heads = self.conf.num_attention_heads;
         let n_kv = self.conf.num_kv_heads;
@@ -802,217 +887,185 @@ impl Session {
                 self.weights.emb.data.len()
             )));
         }
-        let mut k_caches: Vec<Vec<f32>> = (0..self.conf.num_layers).map(|_| Vec::new()).collect();
-        let mut v_caches: Vec<Vec<f32>> = (0..self.conf.num_layers).map(|_| Vec::new()).collect();
-        let mut last_kv_src: HashMap<AttnKind, usize> = HashMap::new();
-        let mut conv_states: Vec<Option<Vec<f32>>> = self
-            .weights
-            .layers
-            .iter()
-            .map(|layer| match &layer.op {
-                LayerOp::Conv(c) => {
-                    let hist = c.kernel_size.saturating_sub(1);
-                    Some(vec![0.0f32; hidden * hist])
-                }
-                LayerOp::Linear(d) => {
-                    let conv_dim = d.n_k_heads * d.head_k * 2 + d.n_v_heads * d.head_v;
-                    let hist = d.conv_k.saturating_sub(1);
-                    Some(vec![0.0f32; conv_dim * hist])
-                }
-                LayerOp::Attn(_) => None,
-            })
-            .collect();
-        let mut delta_states: Vec<Option<Vec<f32>>> = self
-            .weights
-            .layers
-            .iter()
-            .map(|layer| match &layer.op {
-                LayerOp::Linear(d) => {
-                    Some(vec![0.0f32; d.n_v_heads * d.head_k * d.head_v])
-                }
-                _ => None,
-            })
-            .collect();
-
+        let pos = state.pos;
+        let tid = (tok as usize) % vocab;
         let mut x = vec![0.0f32; hidden];
-        for (pos, &tok) in tokens.iter().enumerate() {
-            let tid = (tok as usize) % vocab;
-            x.copy_from_slice(&self.weights.emb.data[tid * hidden..(tid + 1) * hidden]);
+        x.copy_from_slice(&self.weights.emb.data[tid * hidden..(tid + 1) * hidden]);
 
-            for (li, layer) in self.weights.layers.iter().enumerate() {
-                let xn = self.norm(&x, &layer.attn_norm)?;
-                match &layer.op {
-                    LayerOp::Attn(attn) => {
-                        if attn.wq.data.len() % hidden != 0 {
-                            return Err(EngineError::ShapeMismatch(
-                                "attn q proj weight not divisible by hidden_size".into(),
-                            ));
-                        }
-                        let q_dim = attn.wq.data.len() / hidden;
-                        if n_heads == 0 || !q_dim.is_multiple_of(n_heads) {
-                            return Err(EngineError::ShapeMismatch(
-                                "q_dim not divisible by num_attention_heads".into(),
-                            ));
-                        }
-                        let head_dim = self
-                            .conf
-                            .head_dim
-                            .filter(|d| *d > 0 && q_dim == n_heads * *d)
-                            .unwrap_or(q_dim / n_heads);
-                        if attn.wo.data.len() != hidden * q_dim {
-                            return Err(EngineError::ShapeMismatch(
-                                "attn output proj weight shape mismatch".into(),
-                            ));
-                        }
-                        let mut q = attn.wq.gemm(&xn, q_dim, hidden)?;
-                        if let Some(qn) = &attn.q_norm {
-                            q = rms_norm(&q, qn, 1e-6)?;
-                        }
-                        rope_half(&mut q, head_dim, pos, self.conf.rope_theta)?;
+        for (li, layer) in self.weights.layers.iter().enumerate() {
+            let xn = self.norm(&x, &layer.attn_norm)?;
+            match &layer.op {
+                LayerOp::Attn(attn) => {
+                    if attn.wq.data.len() % hidden != 0 {
+                        return Err(EngineError::ShapeMismatch(
+                            "attn q proj weight not divisible by hidden_size".into(),
+                        ));
+                    }
+                    let q_dim = attn.wq.data.len() / hidden;
+                    if n_heads == 0 || !q_dim.is_multiple_of(n_heads) {
+                        return Err(EngineError::ShapeMismatch(
+                            "q_dim not divisible by num_attention_heads".into(),
+                        ));
+                    }
+                    let head_dim = self
+                        .conf
+                        .head_dim
+                        .filter(|d| *d > 0 && q_dim == n_heads * *d)
+                        .unwrap_or(q_dim / n_heads);
+                    if attn.wo.data.len() != hidden * q_dim {
+                        return Err(EngineError::ShapeMismatch(
+                            "attn output proj weight shape mismatch".into(),
+                        ));
+                    }
+                    let mut q = attn.wq.gemm(&xn, q_dim, hidden)?;
+                    if let Some(qn) = &attn.q_norm {
+                        q = rms_norm(&q, qn, 1e-6)?;
+                    }
+                    rope_half(&mut q, head_dim, pos, self.conf.rope_theta)?;
 
-                        let (k_src, v_src) = if let (Some(wk), Some(wv)) = (&attn.wk, &attn.wv) {
-                            if wk.data.len() % hidden != 0 || wv.data.len() % hidden != 0 {
-                                return Err(EngineError::ShapeMismatch(
-                                    "attn kv proj weight not divisible by hidden_size".into(),
-                                ));
-                            }
-                            let k_dim = wk.data.len() / hidden;
-                            let v_dim = wv.data.len() / hidden;
-                            if k_dim != n_kv * head_dim || v_dim != n_kv * head_dim {
-                                return Err(EngineError::ShapeMismatch(format!(
-                                    "kv dims {k_dim}/{v_dim} != n_kv*head_dim {}",
-                                    n_kv * head_dim
-                                )));
-                            }
-                            let mut k = wk.gemm(&xn, k_dim, hidden)?;
-                            let v = wv.gemm(&xn, v_dim, hidden)?;
-                            if let Some(kn) = &attn.k_norm {
-                                k = rms_norm(&k, kn, 1e-6)?;
-                            }
-                            rope_half(&mut k, head_dim, pos, self.conf.rope_theta)?;
-                            k_caches[li].extend_from_slice(&k);
-                            v_caches[li].extend_from_slice(&v);
-                            last_kv_src.insert(attn.kind, li);
-                            (li, li)
-                        } else {
-                            let src = last_kv_src.get(&attn.kind).copied().ok_or_else(|| {
-                                EngineError::Format(format!(
-                                    "KV-consumer layer {li} has no producer of kind {:?}",
-                                    attn.kind
-                                ))
-                            })?;
-                            (src, src)
-                        };
-                        let attn_out = attention(
-                            &q,
-                            &k_caches[k_src],
-                            &v_caches[v_src],
-                            n_heads,
-                            n_kv,
-                            head_dim,
-                        )?;
-                        let ao = attn.wo.gemm(&attn_out, hidden, q_dim)?;
-                        for i in 0..hidden {
-                            x[i] += ao[i];
-                        }
-                    }
-                    LayerOp::Conv(conv) => {
-                        let bcx = conv.in_proj.gemm(&xn, 3 * hidden, hidden)?;
-                        let mut bx = vec![0.0f32; hidden];
-                        let mut c_gate = vec![0.0f32; hidden];
-                        for i in 0..hidden {
-                            let b = bcx[i];
-                            let c = bcx[hidden + i];
-                            let xx = bcx[2 * hidden + i];
-                            bx[i] = b * xx;
-                            c_gate[i] = c;
-                        }
-                        let state = conv_states[li].as_mut().ok_or_else(|| {
-                            EngineError::ShapeMismatch("missing conv state".into())
-                        })?;
-                        let conv_y =
-                            short_conv_step(&bx, &conv.kernel, state, hidden, conv.kernel_size)?;
-                        let mut y = vec![0.0f32; hidden];
-                        for i in 0..hidden {
-                            y[i] = c_gate[i] * conv_y[i];
-                        }
-                        let ao = conv.out_proj.gemm(&y, hidden, hidden)?;
-                        for i in 0..hidden {
-                            x[i] += ao[i];
-                        }
-                    }
-                    LayerOp::Linear(dn) => {
-                        let key_dim = dn.n_k_heads * dn.head_k;
-                        let value_dim = dn.n_v_heads * dn.head_v;
-                        let qkvz_out = 2 * key_dim + 2 * value_dim;
-                        let mixed = dn.qkvz.gemm(&xn, qkvz_out, hidden)?;
-                        let mut q = mixed[0..key_dim].to_vec();
-                        let mut k = mixed[key_dim..2 * key_dim].to_vec();
-                        let mut v = mixed[2 * key_dim..2 * key_dim + value_dim].to_vec();
-                        let z = mixed[2 * key_dim + value_dim..].to_vec();
-                        let mut qkv = Vec::with_capacity(key_dim * 2 + value_dim);
-                        qkv.extend_from_slice(&q);
-                        qkv.extend_from_slice(&k);
-                        qkv.extend_from_slice(&v);
-                        let conv_dim = qkv.len();
-                        let cstate = conv_states[li].as_mut().ok_or_else(|| {
-                            EngineError::ShapeMismatch("missing delta conv state".into())
-                        })?;
-                        let mut mixed_c =
-                            short_conv_step(&qkv, &dn.conv, cstate, conv_dim, dn.conv_k)?;
-                        silu_vec(&mut mixed_c);
-                        q.copy_from_slice(&mixed_c[0..key_dim]);
-                        k.copy_from_slice(&mixed_c[key_dim..2 * key_dim]);
-                        v.copy_from_slice(&mixed_c[2 * key_dim..]);
-                        let ba = dn.ba.gemm(&xn, 2 * dn.n_v_heads, hidden)?;
-                        let mut beta = vec![0.0f32; dn.n_v_heads];
-                        let mut g = vec![0.0f32; dn.n_v_heads];
-                        for h in 0..dn.n_v_heads {
-                            beta[h] = 1.0 / (1.0 + (-ba[h]).exp());
-                            let alpha =
-                                -dn.a_log[h].exp() * softplus(ba[dn.n_v_heads + h] + dn.dt_bias[h]);
-                            g[h] = alpha.exp();
-                        }
-                        if dn.n_v_heads != dn.n_k_heads {
-                            return Err(EngineError::Unsupported(
-                                "DeltaNet GQA (n_v != n_k) not implemented".into(),
+                    let (k_src, v_src) = if let (Some(wk), Some(wv)) = (&attn.wk, &attn.wv) {
+                        if wk.data.len() % hidden != 0 || wv.data.len() % hidden != 0 {
+                            return Err(EngineError::ShapeMismatch(
+                                "attn kv proj weight not divisible by hidden_size".into(),
                             ));
                         }
-                        let s = delta_states[li].as_mut().ok_or_else(|| {
-                            EngineError::ShapeMismatch("missing delta recurrent state".into())
-                        })?;
-                        let mut core = gated_delta_step(GatedDeltaStep {
-                            q: &q,
-                            k: &k,
-                            v: &v,
-                            g: &g,
-                            beta: &beta,
-                            state: s,
-                            n_heads: dn.n_v_heads,
-                            dk: dn.head_k,
-                            dv: dn.head_v,
-                        })?;
-                        // RMSNormGated approx: rms(core) * silu(z)
-                        let ones = vec![1.0f32; dn.head_v];
-                        core = rms_norm(&core, &ones, 1e-6)?;
-                        let mut z_act = z;
-                        silu_vec(&mut z_act);
-                        for i in 0..core.len() {
-                            core[i] *= z_act[i];
+                        let k_dim = wk.data.len() / hidden;
+                        let v_dim = wv.data.len() / hidden;
+                        if k_dim != n_kv * head_dim || v_dim != n_kv * head_dim {
+                            return Err(EngineError::ShapeMismatch(format!(
+                                "kv dims {k_dim}/{v_dim} != n_kv*head_dim {}",
+                                n_kv * head_dim
+                            )));
                         }
-                        let ao = dn.out_proj.gemm(&core, hidden, value_dim)?;
-                        for i in 0..hidden {
-                            x[i] += ao[i];
+                        let mut k = wk.gemm(&xn, k_dim, hidden)?;
+                        let v = wv.gemm(&xn, v_dim, hidden)?;
+                        if let Some(kn) = &attn.k_norm {
+                            k = rms_norm(&k, kn, 1e-6)?;
                         }
+                        rope_half(&mut k, head_dim, pos, self.conf.rope_theta)?;
+                        state.k_caches[li].extend_from_slice(&k);
+                        state.v_caches[li].extend_from_slice(&v);
+                        state.last_kv_src.insert(attn.kind, li);
+                        (li, li)
+                    } else {
+                        let src = state.last_kv_src.get(&attn.kind).copied().ok_or_else(|| {
+                            EngineError::Format(format!(
+                                "KV-consumer layer {li} has no producer of kind {:?}",
+                                attn.kind
+                            ))
+                        })?;
+                        (src, src)
+                    };
+                    let attn_out = attention(
+                        &q,
+                        &state.k_caches[k_src],
+                        &state.v_caches[v_src],
+                        n_heads,
+                        n_kv,
+                        head_dim,
+                    )?;
+                    let ao = attn.wo.gemm(&attn_out, hidden, q_dim)?;
+                    for i in 0..hidden {
+                        x[i] += ao[i];
                     }
                 }
-                let xn2 = self.norm(&x, &layer.ffn_norm)?;
-                let down = self.apply_ffn(layer, &xn2, hidden)?;
-                for i in 0..hidden {
-                    x[i] += down[i];
+                LayerOp::Conv(conv) => {
+                    let bcx = conv.in_proj.gemm(&xn, 3 * hidden, hidden)?;
+                    let mut bx = vec![0.0f32; hidden];
+                    let mut c_gate = vec![0.0f32; hidden];
+                    for i in 0..hidden {
+                        let b = bcx[i];
+                        let c = bcx[hidden + i];
+                        let xx = bcx[2 * hidden + i];
+                        bx[i] = b * xx;
+                        c_gate[i] = c;
+                    }
+                    let cstate = state.conv_states[li].as_mut().ok_or_else(|| {
+                        EngineError::ShapeMismatch("missing conv state".into())
+                    })?;
+                    let conv_y =
+                        short_conv_step(&bx, &conv.kernel, cstate, hidden, conv.kernel_size)?;
+                    let mut y = vec![0.0f32; hidden];
+                    for i in 0..hidden {
+                        y[i] = c_gate[i] * conv_y[i];
+                    }
+                    let ao = conv.out_proj.gemm(&y, hidden, hidden)?;
+                    for i in 0..hidden {
+                        x[i] += ao[i];
+                    }
+                }
+                LayerOp::Linear(dn) => {
+                    let key_dim = dn.n_k_heads * dn.head_k;
+                    let value_dim = dn.n_v_heads * dn.head_v;
+                    let qkvz_out = 2 * key_dim + 2 * value_dim;
+                    let mixed = dn.qkvz.gemm(&xn, qkvz_out, hidden)?;
+                    let mut q = mixed[0..key_dim].to_vec();
+                    let mut k = mixed[key_dim..2 * key_dim].to_vec();
+                    let mut v = mixed[2 * key_dim..2 * key_dim + value_dim].to_vec();
+                    let z = mixed[2 * key_dim + value_dim..].to_vec();
+                    let mut qkv = Vec::with_capacity(key_dim * 2 + value_dim);
+                    qkv.extend_from_slice(&q);
+                    qkv.extend_from_slice(&k);
+                    qkv.extend_from_slice(&v);
+                    let conv_dim = qkv.len();
+                    let cstate = state.conv_states[li].as_mut().ok_or_else(|| {
+                        EngineError::ShapeMismatch("missing delta conv state".into())
+                    })?;
+                    let mut mixed_c =
+                        short_conv_step(&qkv, &dn.conv, cstate, conv_dim, dn.conv_k)?;
+                    silu_vec(&mut mixed_c);
+                    q.copy_from_slice(&mixed_c[0..key_dim]);
+                    k.copy_from_slice(&mixed_c[key_dim..2 * key_dim]);
+                    v.copy_from_slice(&mixed_c[2 * key_dim..]);
+                    let ba = dn.ba.gemm(&xn, 2 * dn.n_v_heads, hidden)?;
+                    let mut beta = vec![0.0f32; dn.n_v_heads];
+                    let mut g = vec![0.0f32; dn.n_v_heads];
+                    for h in 0..dn.n_v_heads {
+                        beta[h] = 1.0 / (1.0 + (-ba[h]).exp());
+                        let alpha =
+                            -dn.a_log[h].exp() * softplus(ba[dn.n_v_heads + h] + dn.dt_bias[h]);
+                        g[h] = alpha.exp();
+                    }
+                    if dn.n_v_heads != dn.n_k_heads {
+                        return Err(EngineError::Unsupported(
+                            "DeltaNet GQA (n_v != n_k) not implemented".into(),
+                        ));
+                    }
+                    let s = state.delta_states[li].as_mut().ok_or_else(|| {
+                        EngineError::ShapeMismatch("missing delta recurrent state".into())
+                    })?;
+                    let mut core = gated_delta_step(GatedDeltaStep {
+                        q: &q,
+                        k: &k,
+                        v: &v,
+                        g: &g,
+                        beta: &beta,
+                        state: s,
+                        n_heads: dn.n_v_heads,
+                        dk: dn.head_k,
+                        dv: dn.head_v,
+                    })?;
+                    // RMSNormGated approx: rms(core) * silu(z)
+                    let ones = vec![1.0f32; dn.head_v];
+                    core = rms_norm(&core, &ones, 1e-6)?;
+                    let mut z_act = z;
+                    silu_vec(&mut z_act);
+                    for i in 0..core.len() {
+                        core[i] *= z_act[i];
+                    }
+                    let ao = dn.out_proj.gemm(&core, hidden, value_dim)?;
+                    for i in 0..hidden {
+                        x[i] += ao[i];
+                    }
                 }
             }
+            let xn2 = self.norm(&x, &layer.ffn_norm)?;
+            let down = self.apply_ffn(layer, &xn2, hidden)?;
+            for i in 0..hidden {
+                x[i] += down[i];
+            }
         }
+        state.pos += 1;
         let xn = self.norm(&x, &self.weights.output_norm)?;
         if !self.weights.output.data.len().is_multiple_of(hidden) {
             return Err(EngineError::ShapeMismatch(format!(
@@ -1559,6 +1612,49 @@ mod tests {
         let b = s.generate(&prompt, &opts).unwrap();
         assert_eq!(a.tokens, b.tokens);
         assert_eq!(a.tokens.len(), 3);
+    }
+
+    #[test]
+    fn incremental_decode_matches_full_recompute() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        let prompt = s.encode_text("hi");
+        let max_tokens = 5usize;
+
+        // Legacy path: re-run full forward over the growing prefix each step.
+        let mut prefix = prompt.clone();
+        if prefix.is_empty() {
+            prefix.push(1);
+        }
+        let mut full_tokens = Vec::new();
+        for _ in 0..max_tokens {
+            let logits = s.forward(&prefix).unwrap();
+            let next = argmax(&logits);
+            full_tokens.push(next);
+            prefix.push(next);
+            if next == 0 {
+                break;
+            }
+        }
+
+        let incr = s
+            .generate(
+                &prompt,
+                &GenerateOpts {
+                    max_tokens,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            incr.tokens, full_tokens,
+            "incremental decode must match full-recompute greedy tokens"
+        );
     }
 
     #[test]
