@@ -368,7 +368,9 @@ impl Bundle {
     pub fn weight_loaded(&self, name: &str) -> Result<LoadedWeight, EngineError> {
         match self.tensors.get(name) {
             Some(TensorData::Codebook(q)) => {
+                let t0 = std::time::Instant::now();
                 let mut data = dequantize(q)?;
+                crate::profile::load_profile_add_dequant(crate::profile::elapsed_ms(t0));
                 let applied = q
                     .hadamard
                     .get("applied")
@@ -382,14 +384,13 @@ impl Bundle {
                             data.len()
                         )));
                     }
-                    // Match Python reconstruct_weight(obj, bundle_seed): bundle seed
-                    // overrides per-tensor seed when present.
                     let seed = self
                         .hadamard_seed
                         .or_else(|| q.hadamard.get("seed").and_then(|v| v.as_i64()));
-                    // k0==1 is identity in Python `_apply_blocked` (skip signs).
                     if k0 > 1 {
+                        let t1 = std::time::Instant::now();
                         hadamard_blocked_rows(&mut data, k0, n, seed, true)?;
+                        crate::profile::load_profile_add_unrotate(crate::profile::elapsed_ms(t1));
                     }
                 }
                 Ok(LoadedWeight {

@@ -12,7 +12,7 @@
 - **权重格式**：仅 `aria-quant-bundle`（`format_version: 1|2`）— `config.json` + `weight.bin` + tokenizer 侧车；**禁止**解析 / 导出 GGUF 与 Cactus 专有权重格式。
 - **位宽**：消费 `q1`–`q4` / `q8` / `q1.5` / `q2.54` / `q3.26`（与 `model` 产物一致）。
 - **模型覆盖**：§1.1 全部家族（与 `model/requirements.md` §1.1 对齐）。
-- **SIMD**：主路径 **ARM NEON**（`aarch64`）；可移植 **scalar** 覆盖 x86_64（WSL/CI）；AVX2 为后续优化，不阻塞 MVP。
+- **本机算力**（与 hybrid 路由正交）：`compute`=`auto`\|`cpu`\|`cuda`。CPU = `SimdMode::{Scalar, Neon, Avx2}`（`aarch64` Neon；x86_64 AVX2+FMA 若可用否则 scalar + 多线程 `linear`）。可选 **CUDA**（NVIDIA + cuBLAS SGEMM）；`auto` 探测到可用 CUDA 则用之，否则 CPU。`hybrid_execution=device` **不是** GPU 开关，仅禁止云 handoff。
 - 本增量与 **model** 协同 blocked Hadamard。
 
 ### 1.1 家族注册表（推理目标）
@@ -64,19 +64,19 @@
 
 | # | 特性 | 实现深度 |
 |---|------|----------|
-| 1 | **kernel** | matmul、attention、RMSNorm、RoPE、Softmax、SwiGLU、码本查表反量化、FWHT；`SimdMode::{Scalar, Neon}`；阶段 A：scalar 完整 + NEON `#[cfg(target_arch="aarch64")]` 入口；阶段 C：NEON 与 scalar 数值对拍 |
+| 1 | **kernel** | matmul、attention、RMSNorm、RoPE、Softmax、SwiGLU、码本查表反量化、FWHT；`SimdMode::{Scalar, Neon, Avx2}` + `ComputeBackend::{Cpu, Cuda}`；`linear`/`attention` 经 backend 分发；CUDA 与 scalar 相对误差有界；无 GPU 时 `--compute cuda` 硬失败（禁止静默 CPU） |
 | 2 | **graph** | Layer → Op → Tensor IR；`BufferPool`；mmap / `external` 零拷贝输入；融合节点 **HDM**（Hadamard + Dequant + MatMul）；阶段 A：LLM decode 所需 ops 可调度；图序列化可选（阶段 B+） |
 | 3 | **inference** | `load_bundle`（mmap `weight.bin`）；KV cache；greedy / 基础 sampling；tokenizer；§1.1 家族注册与图构建钩子；阶段 A：`gemma-4-e2b-it` **tiny q4** 黄金路径；阶段 B/C：见上表 |
 | 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排；CLI：`auth` / `download` / `list` / `clean` / `upgrade` / `serve` |
 | 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；凭证与模式来自 `~/.ariacompute/config.yml`（`CloudClient::new`）；`execution`=`hybrid`\|`device`\|`cloud`；阶段 A：mock + 单测；`device` / privacy 强制 Local，`cloud` 强制 Handoff |
-| 6 | **反量化语义** | 与 Python `model.common.quant.dequantize` 一致：**rotated-space** 重建；推理优先融合 HDM，**不**要求加载时整表逆 Hadamard 物化 |
+| 6 | **反量化语义** | 与 Python `dequantize` 一致的 **rotated-space** 码本重建。embedding **必须**原域行 gather（加载期整表 unrotate 或等价）；线性层可用融合 HDM **或** 原域 `linear`。禁止对旋转域 `W[token]` 做 lookup |
 | 7 | **HTTP** | **axum** 实现本地 serve |
 
 ### 2.1 非目标
 
 - 解析或导出 **GGUF**；Cactus `CACT` / `.graph` 等专有二进制格式
 - 通过 FFI 嵌入 Cactus C++（本仓为 **Rust 原生**重写，仅借鉴架构）
-- Metal / Vulkan / ANE / NPU（roadmap，不进本 Spec 验收）
+- Metal / Vulkan / ANE / NPU（roadmap，不进本 Spec 验收）。**CUDA 进入本增量**（cuBLAS f32 GEMM + attention 分发）；不引入 PyTorch/candle 重型框架；INT4 tensor core / 多卡不在本增量
 - 生产计费、云端密钥校验服务
 - 剪枝 / 蒸馏 / 对称 int8 旁路量化
 
@@ -84,9 +84,9 @@
 
 ### 3.1 `aria-kernel`
 
-- `SimdMode::{Scalar, Neon}`；测试可强制 Scalar。
-- 算子（至少）：`matmul`、`attention`、`rms_norm`、`rope`、`softmax`、`swiglu`、`dequant_lookup` / `dequant_gemm`、`fwht`。
-- 正常 + 维度不匹配异常路径单测。
+- `SimdMode::{Scalar, Neon, Avx2}`；测试可强制 Scalar。`ComputePref::{Auto, Cpu, Cuda}` → `ComputeBackend::{Cpu, Cuda}`。
+- 算子（至少）：`matmul`、`linear`（多线程 / AVX2）、`attention`（含 causal prefill）、`rms_norm`、`rope`、`softmax`、`swiglu`、`dequant_lookup` / `dequant_gemm`、`fwht`；可选运行时 cuBLAS `linear`。
+- 正常 + 维度不匹配异常路径单测；无 GPU 的 CI 不开 CUDA、不因缺卡失败。
 
 ### 3.2 `aria-graph`
 
@@ -107,7 +107,7 @@
 
 | 优先级 | 主题 | 要求 |
 |--------|------|------|
-| P0 | **Session HDM** | codebook 线性层走融合 HDM（或等价：先 unrotate 再 matmul）；禁止对 rotated-space `W` 直接当原域 `linear` |
+| P0 | **Session HDM** | codebook 线性层走融合 HDM **或** 先 unrotate 再 matmul；禁止对 rotated-space `W` 直接当原域 `linear`。embedding 禁止旋转域行 gather |
 | P0 | **RoPE 布局** | 与 HF `rotate_half`（及家族 partial factor）对齐；单测对照 fixture |
 | P0 | **LFM conv hybrid** | LFM2/2.5：`layer_types` / conv 层不要求 `q_proj`；实现 short-conv + cache；消费 `conv.*` 张量名 |
 | P0 | **MoE** | `lfm2-8b-a1b`、Inkling：真实 router + expert FFN；`text_moe_decoder_stub` 不得冒充生成；Inkling ArchClass 不得标纯 TextDense |
@@ -126,10 +126,10 @@
 - 请求/响应字段对齐 OpenAI Chat Completions 常用子集（`messages`、`temperature`、`max_tokens`、`stream`）。
 - **CLI（`aria-engine`）**
   - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。
-  - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`upgrade [version]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution]`；`-h` / `-v`。
+  - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`upgrade [version]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution] [--compute] [--profile]`；`-h` / `-v`。
   - `list`：`GET {site_url}/api/dashboard/models`（Bearer `cloud_api_key`）展开为可下载 bundle（`_q4`/`_q8`/`_q326`），对照本地缓存标记 `downloaded` / `not downloaded` / `incomplete`；另附 catalog 外本地项。
   - `upgrade [version]`：按 `upgrade_url`（组织根）拼 `{upgrade_url}/engine`，调 GitHub/Gitee Releases API；默认最新**正式** Release（忽略 prerelease/draft），可选 `0.7.2` / `v0.7.2`；下载本机平台 `engine_*` + `libaria_ffi_*`，原地原子替换当前 CLI，并将 FFI 装入 `~/.ariacompute/lib/`（提示 `ARIA_FFI_LIB`）。未配置 `upgrade_url` 时报错并提示先 `auth`；下载/解压失败不得损坏现有 CLI。
-  - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。
+  - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。`--compute auto|cpu|cuda` 覆盖本机算力（默认 config / `auto`）。`--profile` 启用加载/生成分段计时，经 `GET /v1/engine/profile` 读出。
   - **禁止** `ARIA_HYBRID_*` 环境变量；仅保留编译期 `ARIA_ENGINE_VERSION`。
   - **下载源**（恰三）：Dashboard 认证 API、Hugging Face、ModelScope；**禁止**引擎直连公开 S3/COS registry URL。模型 `download` 与 CLI `upgrade` 宿主（GitHub/Gitee）分离。
   - 每次 `download` 探测连通性 + 短速率采样，选最优可达源；中途失败回退次优已探测源；不持久化强制源。
@@ -146,6 +146,7 @@
 | `upgrade_url` | 组织根（`.com`→`https://github.com/ariacompute`；`.cn`→`https://gitee.com/ariacompute`）；`upgrade` 拼 `/engine` |
 | `hybrid_mode` | `cost` \| `balance` \| `intelligence` |
 | `hybrid_execution` | `hybrid` \| `device` \| `cloud` |
+| `compute` | `auto` \| `cpu` \| `cuda`（默认 `auto`；与 `hybrid_execution` 正交） |
 
 - `auth`：提示 API key → **用 key 探测** Dashboard（`GET /api/dashboard/models`）判定 `.com` / `.cn`，写入匹配的 `cloud_url`/`site_url`/`upgrade_url`（同 TLD）；两端均失败时回退 locale + 连通性。`list`/`download` 启动时若 URL 不一致或 key 被当前 site 拒绝会自动纠偏并回写 config（含刷新 `upgrade_url`）。
 - Gateway / site / upgrade 组织根始终成对（同为 `.com` 或同为 `.cn`）；模型下载源每次运行时探针选择。
@@ -371,6 +372,15 @@ python -m bench run \
 3. 报告同时产出 `.json` 与 `.md`。  
 4. 四后端适配器存在；未配置 URL 时 skip 而非崩溃。
 
+### 8.7 本机热点报告（`aria-engine --profile`）
+
+Report-only JSON（`GET /v1/engine/profile` 或 `scripts/profile_qwen3_serve.py`）：
+
+- **load**：`mmap_ms`、`dequant_ms`、`unrotate_ms`、`materialize_ms`、`cuda_upload_ms`（无 CUDA 则 0 / omit）
+- **generate**：`prefill_ms`、`decode_ms`、`gemm_attn_ms`、`gemm_ffn_ms`、`gemm_lm_head_ms`
+- 顶层：`compute`（cpu/cuda）、`simd` / device 名、`ci_fail: false`
+- 无 NVIDIA / 未链上 cuBLAS：`compute=cpu`；显式 `--compute cuda` 失败不得静默降级
+
 ## 9. 审核检查表
 
 - [x] §1.1 与 `model/requirements.md` §1.1 家族列表一致可接受
@@ -380,12 +390,13 @@ python -m bench run \
 - [x] OpenAI：阶段 A 仅 chat(+SSE)/models；ASR/RAG/Tool 属阶段 C 可接受
 - [x] Hybrid：阶段 A mock + config/`CloudClient::new` 可接受
 - [x] CLI：`~/.ariacompute` + auth/download/list/clean/upgrade/serve；无 `ARIA_HYBRID_*`；三源探针下载可接受
-- [x] Kernel：NEON 主路径 + x86 scalar CI 可接受
-- [x] 反量化 = rotated-space + 融合 HDM、不强制加载期逆 H 可接受
+- [x] Kernel：NEON/AVX2 CPU + 可选 CUDA；`compute=auto` 与 hybrid 正交可接受
+- [x] 反量化 = rotated-space；embedding 原域 gather；线性层 HDM 或原域 linear 可接受
 - [x] 五 crate 命名与目录映射可接受
 - [x] 非目标（不动 model、无 Metal/计费、无 Cactus FFI）可接受
 - [x] 验收门禁（`cargo test`、单测覆盖正常/异常）可接受
 - [x] §8 引擎对标评测（JSON+MD；aria/llamacpp/ollama/vllm；性能+质量；全家族；`bench/` Python）可接受
+- [x] §8.7 本机热点 profile（load/generate 分段；`--compute`；无 GPU skip）可接受
 - [ ] §3.7 SDK bindings（C ABI + 八语言；OpenAI FFI 面；host/device-farm 测；release.yml 多 registry 发布 fail-pass）可接受
 
 > **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。§3.7 SDK bindings 按 2026-08-15 计划实施。可据本 Spec 生成 / 执行 `task.md`。

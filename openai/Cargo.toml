@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 description = "OpenAI-compatible HTTP API for Aria engine"
 
+[features]
+default = []
+cuda = ["aria-kernel/cuda"]
+
 [[bin]]
 name = "aria-engine"
 path = "src/main.rs"

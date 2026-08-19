@@ -185,3 +185,23 @@
 
 ### T69 — Registry + model 字段
 - [x] 登记 `lfm2.5-2.6b`；消费扩展 `model` 元数据（`head_dim` / `layer_types` / `hidden_act` / MoE / `conv_l_cache`）
+
+### T70 — 本机热点 profile
+- [x] `Session` 加载 / generate 分段计时（默认关；`--profile`）
+- [x] `GET /v1/engine/profile`；`scripts/profile_qwen3_serve.py`
+
+### T71 — `compute=auto|cpu|cuda`
+- [x] `ComputePref` / `ComputeBackend`；serve `--compute` + config `compute`
+- [x] 探测 NVIDIA+cuBLAS；`--compute cuda` 不可用则硬失败
+- [x] serve 日志打印 `compute=` / device 或 simd
+
+### T72 — CPU 加载与 GEMM
+- [x] 并行 blocked unrotate；tied embed `Arc` 共享
+- [x] 多线程 + AVX2/Neon `linear`；Attn+Dense 层 batched prefill
+
+### T73 — CUDA linear / attention 分发
+- [x] 运行时 cuBLAS SGEMM（libloading，默认构建可探测）
+- [x] 权重 upload；greedy 与 CPU 对拍；无卡 skip
+
+### T74 — 文档
+- [x] README / README_cn / AGENTS：`--compute`、`--profile`、H200 `--features` 说明

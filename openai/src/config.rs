@@ -20,6 +20,8 @@ pub struct AriaConfig {
     pub hybrid_mode: String,
     #[serde(default = "default_hybrid_execution")]
     pub hybrid_execution: String,
+    #[serde(default = "default_compute")]
+    pub compute: String,
 }
 
 fn default_hybrid_mode() -> String {
@@ -28,6 +30,10 @@ fn default_hybrid_mode() -> String {
 
 fn default_hybrid_execution() -> String {
     "hybrid".into()
+}
+
+fn default_compute() -> String {
+    "auto".into()
 }
 
 impl Default for AriaConfig {
@@ -39,6 +45,7 @@ impl Default for AriaConfig {
             upgrade_url: String::new(),
             hybrid_mode: default_hybrid_mode(),
             hybrid_execution: default_hybrid_execution(),
+            compute: default_compute(),
         }
     }
 }
@@ -147,6 +154,7 @@ mod tests {
             upgrade_url: "https://github.com/ariacompute".into(),
             hybrid_mode: "cost".into(),
             hybrid_execution: "device".into(),
+            compute: "cpu".into(),
         };
         save_config(&cfg).unwrap();
         let loaded = load_config().unwrap();
@@ -162,5 +170,6 @@ mod tests {
         let cfg: AriaConfig = serde_yaml::from_str(raw).unwrap();
         assert!(cfg.upgrade_url.is_empty());
         assert_eq!(cfg.hybrid_mode, "balance");
+        assert_eq!(cfg.compute, "auto");
     }
 }

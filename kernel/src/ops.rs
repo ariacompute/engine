@@ -1,4 +1,5 @@
 use crate::{EngineError, SimdMode};
+use rayon::prelude::*;
 
 /// C = A @ B^T style? We use row-major: out[m,n] = sum_k a[m,k] * b[k,n]
 /// with `a`: [m,k], `b`: [k,n].
@@ -62,6 +63,106 @@ pub fn linear(x: &[f32], w: &[f32], out_f: usize, in_f: usize) -> Result<Vec<f32
             out[b * out_f + o] = s;
         }
     }
+    Ok(out)
+}
+
+fn dot_f32(a: &[f32], b: &[f32]) -> f32 {
+    debug_assert_eq!(a.len(), b.len());
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::is_x86_feature_detected!("avx2") && std::is_x86_feature_detected!("fma") {
+            return unsafe { dot_avx2(a, b) };
+        }
+    }
+    #[cfg(target_arch = "aarch64")]
+    {
+        unsafe { dot_neon(a, b) }
+    }
+    #[cfg(not(target_arch = "aarch64"))]
+    {
+        let mut s = 0.0f32;
+        for i in 0..a.len() {
+            s += a[i] * b[i];
+        }
+        s
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2,fma")]
+unsafe fn dot_avx2(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::x86_64::*;
+    let n = a.len();
+    let mut i = 0usize;
+    let mut acc = _mm256_setzero_ps();
+    while i + 8 <= n {
+        let va = _mm256_loadu_ps(a.as_ptr().add(i));
+        let vb = _mm256_loadu_ps(b.as_ptr().add(i));
+        acc = _mm256_fmadd_ps(va, vb, acc);
+        i += 8;
+    }
+    let mut tmp = [0.0f32; 8];
+    _mm256_storeu_ps(tmp.as_mut_ptr(), acc);
+    let mut s = tmp.iter().sum::<f32>();
+    while i < n {
+        s += a[i] * b[i];
+        i += 1;
+    }
+    s
+}
+
+#[cfg(target_arch = "aarch64")]
+unsafe fn dot_neon(a: &[f32], b: &[f32]) -> f32 {
+    use std::arch::aarch64::*;
+    let n = a.len();
+    let mut i = 0usize;
+    let mut acc = vdupq_n_f32(0.0);
+    while i + 4 <= n {
+        let va = vld1q_f32(a.as_ptr().add(i));
+        let vb = vld1q_f32(b.as_ptr().add(i));
+        acc = vfmaq_f32(acc, va, vb);
+        i += 4;
+    }
+    let mut tmp = [0.0f32; 4];
+    vst1q_f32(tmp.as_mut_ptr(), acc);
+    let mut s = tmp[0] + tmp[1] + tmp[2] + tmp[3];
+    while i < n {
+        s += a[i] * b[i];
+        i += 1;
+    }
+    s
+}
+
+/// Multi-threaded `linear` (AVX2/FMA or NEON dots). Numerically close to [`linear`].
+pub fn linear_cpu(x: &[f32], w: &[f32], out_f: usize, in_f: usize) -> Result<Vec<f32>, EngineError> {
+    if !x.len().is_multiple_of(in_f) {
+        return Err(EngineError::ShapeMismatch(format!(
+            "linear x len {} not divisible by in_f {in_f}",
+            x.len()
+        )));
+    }
+    if w.len() != out_f * in_f {
+        return Err(EngineError::ShapeMismatch(format!(
+            "linear weight length mismatch: got {} want out_f*in_f={out_f}*{in_f}={}",
+            w.len(),
+            out_f * in_f
+        )));
+    }
+    let batch = x.len() / in_f;
+    let mut out = vec![0.0f32; batch * out_f];
+    if batch == 0 || out_f == 0 {
+        return Ok(out);
+    }
+    // Parallelize over every (batch, out_feature) pair so decode lm_head
+    // (batch=1, out_f≈vocab) and prefill FFN both scale across cores.
+    out.par_iter_mut().enumerate().for_each(|(idx, slot)| {
+        let b = idx / out_f;
+        let o = idx % out_f;
+        *slot = dot_f32(
+            &w[o * in_f..(o + 1) * in_f],
+            &x[b * in_f..(b + 1) * in_f],
+        );
+    });
     Ok(out)
 }
 
@@ -186,6 +287,45 @@ pub fn attention(
                 oh[i] += scores[t] * vh[i];
             }
         }
+    }
+    Ok(out)
+}
+
+/// Causal attention for a batch of queries `[seq_q, n_heads*head_dim]`.
+/// When `seq_q == seq_kv`, query `t` attends to keys `0..=t` (prefill).
+/// When `seq_q == 1`, equivalent to [`attention`] (decode).
+pub fn attention_causal(
+    q: &[f32],
+    k_cache: &[f32],
+    v_cache: &[f32],
+    n_heads: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+) -> Result<Vec<f32>, EngineError> {
+    let q_dim = n_heads * head_dim;
+    if q_dim == 0 || !q.len().is_multiple_of(q_dim) {
+        return Err(EngineError::ShapeMismatch("attention_causal q shape".into()));
+    }
+    let seq_q = q.len() / q_dim;
+    if seq_q == 1 {
+        return attention(q, k_cache, v_cache, n_heads, n_kv_heads, head_dim);
+    }
+    let kv_dim = n_kv_heads * head_dim;
+    let seq_kv = k_cache.len() / kv_dim;
+    let causal = seq_q == seq_kv;
+    let mut out = vec![0.0f32; q.len()];
+    for tq in 0..seq_q {
+        let q_tok = &q[tq * q_dim..(tq + 1) * q_dim];
+        let k_end = if causal { tq + 1 } else { seq_kv };
+        let attn = attention(
+            q_tok,
+            &k_cache[..k_end * kv_dim],
+            &v_cache[..k_end * kv_dim],
+            n_heads,
+            n_kv_heads,
+            head_dim,
+        )?;
+        out[tq * q_dim..(tq + 1) * q_dim].copy_from_slice(&attn);
     }
     Ok(out)
 }
@@ -609,29 +749,35 @@ pub fn hadamard_blocked_rows(
             let src = (start + r) * cols;
             work[r * cols..(r + 1) * cols].copy_from_slice(&data[src..src + cols]);
         }
-        // Apply along axis 0 for each column: collect column into contiguous buffer.
-        let mut colbuf = vec![0.0f32; sz];
+        let col_out: Result<Vec<Vec<f32>>, EngineError> = (0..cols)
+            .into_par_iter()
+            .map(|c| {
+                let mut colbuf = vec![0.0f32; sz];
+                for r in 0..sz {
+                    colbuf[r] = work[r * cols + c];
+                }
+                if let Some(ref sg) = signs {
+                    if !inverse {
+                        for r in 0..sz {
+                            colbuf[r] *= sg[r];
+                        }
+                        fwht(&mut colbuf)?;
+                    } else {
+                        fwht(&mut colbuf)?;
+                        for r in 0..sz {
+                            colbuf[r] *= sg[r];
+                        }
+                    }
+                } else if sz > 1 {
+                    fwht(&mut colbuf)?;
+                }
+                Ok(colbuf)
+            })
+            .collect();
+        let col_out = col_out?;
         for c in 0..cols {
             for r in 0..sz {
-                colbuf[r] = work[r * cols + c];
-            }
-            if let Some(ref sg) = signs {
-                if !inverse {
-                    for r in 0..sz {
-                        colbuf[r] *= sg[r];
-                    }
-                    fwht(&mut colbuf)?;
-                } else {
-                    fwht(&mut colbuf)?;
-                    for r in 0..sz {
-                        colbuf[r] *= sg[r];
-                    }
-                }
-            } else if sz > 1 {
-                fwht(&mut colbuf)?;
-            }
-            for r in 0..sz {
-                work[r * cols + c] = colbuf[r];
+                work[r * cols + c] = col_out[c][r];
             }
         }
         for r in 0..sz {
@@ -748,18 +894,7 @@ pub fn matmul_dispatch(
 ) -> Result<Vec<f32>, EngineError> {
     match mode {
         SimdMode::Scalar => matmul(a, a_rows, a_cols, b, b_rows, b_cols, SimdMode::Scalar),
-        SimdMode::Neon => {
-            #[cfg(target_arch = "aarch64")]
-            {
-                // Prefer blocked layout matching NEON tile width; values must match scalar.
-                matmul_blocked(a, a_rows, a_cols, b, b_rows, b_cols, 8)
-            }
-            #[cfg(not(target_arch = "aarch64"))]
-            {
-                // Emulated Neon path for CI parity on x86_64.
-                matmul_blocked(a, a_rows, a_cols, b, b_rows, b_cols, 8)
-            }
-        }
+        SimdMode::Neon | SimdMode::Avx2 => matmul_blocked(a, a_rows, a_cols, b, b_rows, b_cols, 8),
     }
 }
 
@@ -1069,6 +1204,50 @@ mod tests {
         let y = hdm_linear(&x, &w_orig, out_f, in_f, seed).unwrap();
         for (a, b) in y.iter().zip(y_ref.iter()) {
             assert!((a - b).abs() < 1e-4, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn linear_cpu_matches_scalar_linear() {
+        let out_f = 7usize;
+        let in_f = 5usize;
+        let w: Vec<f32> = (0..out_f * in_f).map(|i| (i as f32) * 0.02 - 0.1).collect();
+        let x: Vec<f32> = (0..in_f * 3).map(|i| (i as f32) * 0.03).collect();
+        let a = linear(&x, &w, out_f, in_f).unwrap();
+        let b = linear_cpu(&x, &w, out_f, in_f).unwrap();
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 1e-4, "{x} vs {y}");
+        }
+    }
+
+    #[test]
+    fn attention_causal_matches_stepwise() {
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let seq = 3usize;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv * head_dim;
+        let q: Vec<f32> = (0..seq * q_dim).map(|i| (i as f32) * 0.01).collect();
+        let k: Vec<f32> = (0..seq * kv_dim).map(|i| (i as f32) * 0.02).collect();
+        let v: Vec<f32> = (0..seq * kv_dim).map(|i| (i as f32) * 0.03).collect();
+        let batched = attention_causal(&q, &k, &v, n_heads, n_kv, head_dim).unwrap();
+        let mut step = Vec::new();
+        for t in 0..seq {
+            let qi = &q[t * q_dim..(t + 1) * q_dim];
+            let a = attention(
+                qi,
+                &k[..(t + 1) * kv_dim],
+                &v[..(t + 1) * kv_dim],
+                n_heads,
+                n_kv,
+                head_dim,
+            )
+            .unwrap();
+            step.extend_from_slice(&a);
+        }
+        for (a, b) in batched.iter().zip(step.iter()) {
+            assert!((a - b).abs() < 1e-5, "{a} vs {b}");
         }
     }
 

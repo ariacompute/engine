@@ -5,8 +5,16 @@ edition.workspace = true
 license.workspace = true
 description = "Aria engine SIMD / scalar kernels"
 
+[features]
+default = []
+# Documents H200 / NVIDIA builds. CUDA is still runtime-loaded (libloading);
+# this flag does not require the CUDA toolkit at compile time.
+cuda = []
+
 [dependencies]
 thiserror = { workspace = true }
+rayon = { workspace = true }
+libloading = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

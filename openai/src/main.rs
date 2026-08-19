@@ -1,9 +1,10 @@
 use aria_hybrid::{CloudClient, ExecutionMode, ParetoMode, Router};
+use aria_kernel::ComputePref;
 use aria_openai::config::{self, AriaConfig};
 use aria_openai::download;
 use aria_openai::gateway_detect;
 use aria_openai::upgrade;
-use aria_openai::{app, build_state};
+use aria_openai::{app, build_state_with_opts};
 use std::env;
 use std::io::{self, BufRead, Write};
 use std::net::SocketAddr;
@@ -35,6 +36,7 @@ Usage:
   aria-engine clean [model]
   aria-engine upgrade [version]
   aria-engine serve <model> [--bind host:port] [--hybrid-mode MODE] [--hybrid-execution MODE]
+                         [--compute auto|cpu|cuda] [--profile]
   aria-engine -h | --help | help
   aria-engine -v | --version | version
 
@@ -54,6 +56,8 @@ serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
   --hybrid-mode      cost | balance | intelligence (overrides config for this process)
   --hybrid-execution hybrid | device | cloud (overrides config for this process)
+  --compute          auto | cpu | cuda (local GEMM; orthogonal to hybrid_execution)
+  --profile          record load/generate timings; GET /v1/engine/profile
 "
     );
 }
@@ -126,6 +130,7 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         );
         println!("hybrid_mode: {}", cfg.hybrid_mode);
         println!("hybrid_execution: {}", cfg.hybrid_execution);
+        println!("compute: {}", cfg.compute);
         println!("config: {}", config::config_path()?.display());
         println!("lib: {}", config::lib_dir()?.display());
         return Ok(());
@@ -155,6 +160,7 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     )?;
     let hybrid_execution =
         prompt_choice("hybrid_execution", &["hybrid", "device", "cloud"], "hybrid")?;
+    let compute = prompt_choice("compute", &["auto", "cpu", "cuda"], "auto")?;
 
     let cfg = AriaConfig {
         cloud_api_key: api_key,
@@ -163,6 +169,7 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         upgrade_url: pair.upgrade_url().to_string(),
         hybrid_mode,
         hybrid_execution,
+        compute,
     };
     config::save_config(&cfg)?;
     println!("wrote {}", config::config_path()?.display());
@@ -216,6 +223,8 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut bind = "127.0.0.1:8080".to_string();
     let mut mode_override = None;
     let mut exec_override = None;
+    let mut compute_override = None;
+    let mut profile = false;
     let mut i = 0;
     while i < args.len() {
         match args[i].as_str() {
@@ -241,6 +250,17 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                         .cloned()
                         .ok_or("--hybrid-execution requires a value")?,
                 );
+            }
+            "--compute" => {
+                i += 1;
+                compute_override = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("--compute requires auto|cpu|cuda")?,
+                );
+            }
+            "--profile" => {
+                profile = true;
             }
             other if other.starts_with('-') => {
                 return Err(format!("unknown flag: {other}").into());
@@ -268,6 +288,11 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .unwrap_or(cfg.hybrid_execution.as_str()),
     )?;
+    let compute = ComputePref::parse(
+        compute_override
+            .as_deref()
+            .unwrap_or(cfg.compute.as_str()),
+    )?;
     let cloud_url = if cfg.cloud_url.is_empty() {
         "https://gateway.ariacompute.com".to_string()
     } else {
@@ -276,19 +301,27 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let router = Router::new()?
         .with_mode(mode)
         .with_execution(execution);
-    let state = build_state(
+    let state = build_state_with_opts(
         model_path.to_str().ok_or("invalid model path")?,
         router,
         CloudClient::new(cloud_url, cfg.cloud_api_key.clone()),
+        compute,
+        profile,
     )?;
+    let compute_label = state
+        .session
+        .lock()
+        .map(|s| s.compute_label().to_string())
+        .unwrap_or_else(|_| "unknown".into());
     let app = app(state);
     let addr: SocketAddr = bind.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     eprintln!(
-        "aria-openai listening on http://{addr} (model={} execution={:?} mode={:?})",
+        "aria-openai listening on http://{addr} (model={} execution={:?} mode={:?} compute={})",
         model_path.display(),
         execution,
-        mode
+        mode,
+        compute_label
     );
     axum::serve(listener, app).await?;
     Ok(())

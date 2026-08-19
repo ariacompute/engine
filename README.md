@@ -23,6 +23,7 @@ Credentials and hybrid prefs live in `~/.ariacompute/config.yml` (via `aria-engi
 | `upgrade_url` | Org root for CLI/FFI upgrades (`.com`→GitHub, `.cn`→Gitee) | — |
 | `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
 | `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
+| `compute` | `auto` / `cpu` / `cuda` (local GEMM; **not** a hybrid switch) | `auto` |
 
 ```bash
 # Auth
@@ -44,7 +45,8 @@ aria-engine upgrade 0.7.2
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --hybrid-mode balance \
-  --hybrid-execution hybrid
+  --hybrid-execution hybrid \
+  --compute auto
 ```
 
 `download` probes Serve (if keyed) / HuggingFace / ModelScope each run and picks the fastest reachable source. On a TTY it shows a green progress bar for the transfer.
@@ -52,6 +54,19 @@ aria-engine serve gemma-4-e2b-it_q4 \
 `list` queries `{site_url}/api/dashboard/models` (requires `aria-engine auth`) and prints each downloadable bundle as `downloaded` / `not downloaded` (plus local-only caches).
 
 `serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`.
+
+`--hybrid-execution` only controls cloud handoff (`device` never leaves the box). `--compute auto|cpu|cuda` selects **local** GEMM: `auto` uses CUDA when `libcudart`/`libcublas` load and `cudaGetDeviceCount>0`, otherwise CPU (AVX2+FMA on x86_64, NEON on aarch64). `--compute cuda` **fails** if no NVIDIA device — it does not silently fall back. CUDA is runtime-loaded (no toolkit at compile time); on H200 you can still pass `--features cuda` as a documentation flag:
+
+```bash
+cargo build -p aria-openai --release --features cuda
+aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profile
+```
+
+`--profile` records load/generate timings. Read them with `GET /v1/engine/profile` or:
+
+```bash
+python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engine_profile_qwen3.json
+```
 
 In `--hybrid-execution hybrid`, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `--hybrid-execution device` never handoffs; `--hybrid-execution cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.
 
@@ -62,6 +77,9 @@ Assuming the server is on `http://127.0.0.1:8080`:
 ```bash
 # List models
 curl -s http://127.0.0.1:8080/v1/models | jq .
+
+# Load / generate timings (requires serve --profile)
+curl -s http://127.0.0.1:8080/v1/engine/profile | jq .
 
 # Chat (non-stream)
 curl -s http://127.0.0.1:8080/v1/chat/completions \
@@ -123,7 +141,8 @@ Read `chat.fp32` vs `chat.reconstruct`, plus `template_string_match` / `prompt_i
 # from this repo; keep --hybrid-execution device so hybrid cannot mask local decode
 ./aria-engine serve qwen3-0.6b_q4 \
   --bind 127.0.0.1:8080 \
-  --hybrid-execution device
+  --hybrid-execution device \
+  --compute auto --profile
 python scripts/diag_qwen3_chat.py \
   --url http://127.0.0.1:8080 \
   --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \

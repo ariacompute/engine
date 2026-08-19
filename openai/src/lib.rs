@@ -10,7 +10,8 @@ use aria_hybrid::{
     RouteOutcome, RouteSignal, Router, CLOUD_GATEWAY_MODEL,
 };
 use aria_inference::{
-    infer_family_path, rag_pack_context, ChatTurn, GenerateOpts, Session, SessionBuilder,
+    infer_family_path, rag_pack_context, ChatTurn, ComputePref, GenerateOpts, Session,
+    SessionBuilder,
 };
 use aria_kernel::EngineError;
 use axum::extract::State;
@@ -116,6 +117,7 @@ pub fn app(state: AppState) -> AxumRouter {
         .route("/v1/chat/completions", post(chat_completions))
         .route("/v1/audio/transcriptions", post(audio_transcriptions))
         .route("/v1/embeddings", post(embeddings))
+        .route("/v1/engine/profile", get(engine_profile))
         .with_state(state)
 }
 
@@ -134,6 +136,35 @@ async fn list_models(State(st): State<AppState>) -> Json<Value> {
     Json(json!({
         "object": "list",
         "data": data
+    }))
+}
+
+async fn engine_profile(State(st): State<AppState>) -> Response {
+    match handle_engine_profile(&st) {
+        Ok(v) => Json(v).into_response(),
+        Err(e) => engine_err(e),
+    }
+}
+
+fn handle_engine_profile(st: &AppState) -> Result<Value, EngineError> {
+    let sess = st
+        .session
+        .lock()
+        .map_err(|e| EngineError::Io(e.to_string()))?;
+    if let Some(p) = sess.last_profile() {
+        return serde_json::to_value(p).map_err(|e| EngineError::Format(e.to_string()));
+    }
+    Ok(json!({
+        "compute": sess.compute_label(),
+        "load": {
+            "mmap_ms": 0.0,
+            "dequant_ms": 0.0,
+            "unrotate_ms": 0.0,
+            "materialize_ms": 0.0,
+            "cuda_upload_ms": 0.0
+        },
+        "generate": Value::Null,
+        "ci_fail": false
     }))
 }
 
@@ -499,13 +530,23 @@ pub fn build_state(
     router: Router,
     cloud: CloudClient,
 ) -> Result<AppState, EngineError> {
+    build_state_with_opts(model_dir, router, cloud, ComputePref::Auto, false)
+}
+
+pub fn build_state_with_opts(
+    model_dir: impl AsRef<std::path::Path>,
+    router: Router,
+    cloud: CloudClient,
+    compute: ComputePref,
+    profile: bool,
+) -> Result<AppState, EngineError> {
     let model_dir = model_dir.as_ref();
     let family = model_dir
         .file_name()
         .and_then(|s| s.to_str())
         .and_then(infer_family_path)
         .unwrap_or("gemma/gemma-4-e2b-it");
-    build_state_with_family(model_dir, family, router, cloud)
+    build_state_with_family_opts(model_dir, family, router, cloud, compute, profile)
 }
 
 pub fn build_state_with_family(
@@ -514,10 +555,23 @@ pub fn build_state_with_family(
     router: Router,
     cloud: CloudClient,
 ) -> Result<AppState, EngineError> {
+    build_state_with_family_opts(model_dir, family, router, cloud, ComputePref::Auto, false)
+}
+
+fn build_state_with_family_opts(
+    model_dir: impl AsRef<std::path::Path>,
+    family: &str,
+    router: Router,
+    cloud: CloudClient,
+    compute: ComputePref,
+    profile: bool,
+) -> Result<AppState, EngineError> {
     let model_dir = model_dir.as_ref();
     let session = SessionBuilder::new()
         .model(model_dir)
         .family(family)
+        .compute(compute)
+        .profile(profile)
         .build()?;
     // Local OpenAI model id = bundle directory name (e.g. qwen3-0.6b_q4), not the
     // internal family path used for graph wiring (often still stage-A gemma).
@@ -546,6 +600,7 @@ mod tests {
     use super::*;
     use aria_hybrid::{MockMode, ParetoMode, POLICY_VERSION};
     use aria_inference::fixture::write_tiny_q4_bundle;
+    use aria_inference::ComputePref;
     use axum::body::Body;
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
@@ -652,6 +707,57 @@ mod tests {
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         let s = String::from_utf8_lossy(&bytes);
         assert!(s.contains("data:"));
+    }
+
+    #[tokio::test]
+    async fn engine_profile_after_chat() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let state = build_state_with_opts(
+            dir.path(),
+            Router::new().unwrap(),
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"cloud"}}]
+            }))),
+            ComputePref::Cpu,
+            true,
+        )
+        .unwrap();
+        let app = app(state);
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"hi"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/engine/profile")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["ci_fail"], false);
+        assert!(v["compute"].as_str().unwrap().contains("cpu"));
+        assert!(v["generate"].is_object());
+        assert!(v["load"]["materialize_ms"].as_f64().unwrap() >= 0.0);
     }
 
     #[tokio::test]

@@ -10,14 +10,21 @@ use crate::tensor_names::{
     linear_in_proj_qkvz_names, linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names,
     moe_expert_up_names, moe_router_names, output_names, output_norm_names, vision_proj_names,
 };
+use crate::profile::{
+    elapsed_ms, load_profile_begin, load_profile_set_cuda_upload, load_profile_set_materialize,
+    load_profile_set_mmap, load_profile_take, EngineProfile, GenerateProfile,
+};
 use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use aria_kernel::{
-    attention, gated_delta_step, geglu, hdm_linear, linear, moe_topk_route, rms_norm,
-    rms_norm_gemma, rope_half, short_conv_step, silu_vec, softplus, swiglu, EngineError,
-    GatedDeltaStep,
+    attention, attention_causal, gated_delta_step, geglu, hdm_linear, linear_cpu, moe_topk_route,
+    resolve_compute, rms_norm, rms_norm_gemma, rope_half, short_conv_step, silu_vec, softplus,
+    swiglu, ComputeBackend, ComputePref, CudaContext, EngineError, GatedDeltaStep,
 };
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::Path;
+use std::sync::Arc;
+use std::time::Instant;
 
 #[derive(Debug, Clone)]
 pub struct GenerateOpts {
@@ -42,27 +49,25 @@ pub struct Generation {
 
 #[derive(Clone)]
 struct MatWeight {
-    data: Vec<f32>,
+    data: Arc<Vec<f32>>,
     hdm_seed: Option<i64>,
 }
 
 impl MatWeight {
     fn from_loaded(w: LoadedWeight) -> Self {
         Self {
-            data: w.data,
+            data: Arc::new(w.data),
             hdm_seed: w.hdm_seed,
         }
     }
+}
 
-    fn gemm(&self, x: &[f32], out_f: usize, in_f: usize) -> Result<Vec<f32>, EngineError> {
-        // Codebook weights are unrotated at load (`reconstruct_weight`). Fused
-        // hdm_linear is only for leftover rotated-space tensors.
-        if let Some(seed) = self.hdm_seed {
-            hdm_linear(x, &self.data, out_f, in_f, Some(seed))
-        } else {
-            linear(x, &self.data, out_f, in_f)
-        }
-    }
+#[derive(Clone, Copy)]
+enum GemmAcct {
+    Attn,
+    Ffn,
+    LmHead,
+    Other,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -174,6 +179,12 @@ pub struct Session {
     tokenizer: Option<BundleTokenizer>,
     /// Cleared at the start of each `generate`; reused across decode steps.
     decode: Option<DecodeState>,
+    compute: ComputeBackend,
+    compute_label: String,
+    cuda: Option<CudaContext>,
+    profile_on: bool,
+    last_profile: Option<EngineProfile>,
+    gen_acc: RefCell<GenerateProfile>,
 }
 
 impl std::fmt::Debug for Session {
@@ -188,6 +199,8 @@ impl std::fmt::Debug for Session {
 pub struct SessionBuilder {
     path: Option<std::path::PathBuf>,
     family_path: String,
+    compute: ComputePref,
+    profile: bool,
 }
 
 impl SessionBuilder {
@@ -195,6 +208,8 @@ impl SessionBuilder {
         Self {
             path: None,
             family_path: "gemma/gemma-4-e2b-it".into(),
+            compute: ComputePref::Auto,
+            profile: false,
         }
     }
 
@@ -208,16 +223,40 @@ impl SessionBuilder {
         self
     }
 
+    pub fn compute(mut self, pref: ComputePref) -> Self {
+        self.compute = pref;
+        self
+    }
+
+    pub fn profile(mut self, on: bool) -> Self {
+        self.profile = on;
+        self
+    }
+
     pub fn build(self) -> Result<Session, EngineError> {
         let family = require_runnable(&self.family_path)?;
         let _hook = graph_hook(family.arch);
         let path = self
             .path
             .ok_or_else(|| EngineError::InvalidParam("model path required".into()))?;
+        let (compute, compute_label) = resolve_compute(self.compute)?;
+        load_profile_begin(self.profile);
+        let t_mmap = Instant::now();
         let bundle = load_bundle(&path)?;
+        load_profile_set_mmap(elapsed_ms(t_mmap));
         reject_unsupported_geometry(&bundle.model, family)?;
         let tokenizer = BundleTokenizer::try_load(&path)?;
+        let t_mat = Instant::now();
         let weights = materialize(&bundle, family)?;
+        load_profile_set_materialize(elapsed_ms(t_mat));
+        let mut cuda = None;
+        if compute == ComputeBackend::Cuda {
+            let t_up = Instant::now();
+            let ctx = CudaContext::new()?;
+            upload_weights(&ctx, &weights)?;
+            load_profile_set_cuda_upload(elapsed_ms(t_up));
+            cuda = Some(ctx);
+        }
         let mut conf = bundle.model.clone();
         conf.rope_theta = effective_rope_theta(family.path(), conf.rope_theta);
         let act = conf
@@ -226,8 +265,14 @@ impl SessionBuilder {
             .unwrap_or("")
             .to_ascii_lowercase();
         let use_geglu = act.contains("gelu");
-        // Never apply Gemma (1+w) RMSNorm to Qwen/LFM/… even if act string is odd.
         let use_gemma_norm = family.path().contains("gemma");
+        let load = load_profile_take();
+        let last_profile = self.profile.then(|| EngineProfile {
+            compute: compute_label.clone(),
+            load,
+            generate: None,
+            ci_fail: false,
+        });
         Ok(Session {
             family,
             bundle,
@@ -237,6 +282,12 @@ impl SessionBuilder {
             use_geglu,
             tokenizer,
             decode: None,
+            compute,
+            compute_label,
+            cuda,
+            profile_on: self.profile,
+            last_profile,
+            gen_acc: RefCell::new(GenerateProfile::default()),
         })
     }
 }
@@ -303,7 +354,7 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
         Ok(MatWeight::from_loaded(b.weight_loaded_any(&refs)?))
     }
     fn any_vec(b: &Bundle, names: &[String]) -> Result<Vec<f32>, EngineError> {
-        Ok(any_mat(b, names)?.data)
+        Ok((*any_mat(b, names)?.data).clone())
     }
     fn optional_vec(b: &Bundle, names: &[String]) -> Option<Vec<f32>> {
         any_vec(b, names).ok()
@@ -347,7 +398,7 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
                     kw.data.len()
                 )));
             }
-            let kernel = kw.data;
+            let kernel = (*kw.data).clone();
             if in_proj.data.len() != 3 * hidden * hidden {
                 return Err(EngineError::ShapeMismatch(format!(
                     "layer {layer} conv in_proj len {} != 3*hidden*hidden",
@@ -433,7 +484,7 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
             LayerOp::Linear(DeltaWeights {
                 qkvz,
                 ba,
-                conv: conv_w.data,
+                conv: (*conv_w.data).clone(),
                 conv_k,
                 out_proj,
                 a_log,
@@ -562,6 +613,56 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
     })
 }
 
+fn upload_weights(ctx: &CudaContext, w: &ModelWeights) -> Result<(), EngineError> {
+    ctx.upload(&w.emb.data)?;
+    ctx.upload(&w.output.data)?;
+    if let Some(v) = &w.vision {
+        ctx.upload(&v.data)?;
+    }
+    if let Some(a) = &w.action {
+        ctx.upload(&a.data)?;
+    }
+    for layer in &w.layers {
+        match &layer.op {
+            LayerOp::Attn(attn) => {
+                ctx.upload(&attn.wq.data)?;
+                if let Some(wk) = &attn.wk {
+                    ctx.upload(&wk.data)?;
+                }
+                if let Some(wv) = &attn.wv {
+                    ctx.upload(&wv.data)?;
+                }
+                ctx.upload(&attn.wo.data)?;
+            }
+            LayerOp::Conv(c) => {
+                ctx.upload(&c.in_proj.data)?;
+                ctx.upload(&c.out_proj.data)?;
+            }
+            LayerOp::Linear(d) => {
+                ctx.upload(&d.qkvz.data)?;
+                ctx.upload(&d.ba.data)?;
+                ctx.upload(&d.out_proj.data)?;
+            }
+        }
+        match &layer.ffn {
+            FfnWeights::Dense { gate, up, down } => {
+                ctx.upload(&gate.data)?;
+                ctx.upload(&up.data)?;
+                ctx.upload(&down.data)?;
+            }
+            FfnWeights::MoE { router, experts, .. } => {
+                ctx.upload(&router.data)?;
+                for e in experts {
+                    ctx.upload(&e.gate.data)?;
+                    ctx.upload(&e.up.data)?;
+                    ctx.upload(&e.down.data)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 impl Session {
     pub fn family(&self) -> Family {
         self.family
@@ -579,6 +680,52 @@ impl Session {
         &self.bundle
     }
 
+    pub fn compute_label(&self) -> &str {
+        &self.compute_label
+    }
+
+    pub fn last_profile(&self) -> Option<&EngineProfile> {
+        self.last_profile.as_ref()
+    }
+
+    fn wmm(
+        &self,
+        w: &MatWeight,
+        x: &[f32],
+        out_f: usize,
+        in_f: usize,
+        acct: GemmAcct,
+    ) -> Result<Vec<f32>, EngineError> {
+        let t0 = Instant::now();
+        let y = if let Some(seed) = w.hdm_seed {
+            hdm_linear(x, &w.data, out_f, in_f, Some(seed))?
+        } else if self.compute == ComputeBackend::Cuda {
+            let ctx = self.cuda.as_ref().ok_or_else(|| {
+                EngineError::Unsupported("compute=cuda but CudaContext missing".into())
+            })?;
+            ctx.linear(x, &w.data, out_f, in_f)?
+        } else {
+            linear_cpu(x, &w.data, out_f, in_f)?
+        };
+        if self.profile_on {
+            let ms = elapsed_ms(t0);
+            let mut g = self.gen_acc.borrow_mut();
+            match acct {
+                GemmAcct::Attn => g.gemm_attn_ms += ms,
+                GemmAcct::Ffn => g.gemm_ffn_ms += ms,
+                GemmAcct::LmHead => g.gemm_lm_head_ms += ms,
+                GemmAcct::Other => {}
+            }
+        }
+        Ok(y)
+    }
+
+    fn can_batch_prefill(&self) -> bool {
+        self.weights.layers.iter().all(|layer| {
+            matches!(layer.op, LayerOp::Attn(_)) && matches!(layer.ffn, FfnWeights::Dense { .. })
+        })
+    }
+
     /// Greedy (temperature<=0) generation from prompt token ids.
     /// Prefills the prompt once, then runs one incremental decode step per new token.
     pub fn generate(
@@ -594,19 +741,26 @@ impl Session {
             tokens.push(1);
         }
         self.decode = Some(self.fresh_decode_state());
+        *self.gen_acc.borrow_mut() = GenerateProfile::default();
         let result = (|| {
-            let mut logits = Vec::new();
-            for &tok in &tokens {
-                logits = self.forward_step(tok)?;
+            let t_pre = Instant::now();
+            let mut logits = if self.can_batch_prefill() && tokens.len() > 1 {
+                self.forward_prompt(&tokens)?
+            } else {
+                let mut last = Vec::new();
+                for &tok in &tokens {
+                    last = self.forward_step(tok)?;
+                }
+                last
+            };
+            if self.profile_on {
+                self.gen_acc.borrow_mut().prefill_ms = elapsed_ms(t_pre);
             }
             let mut generated = Vec::new();
+            let t_dec = Instant::now();
             for _ in 0..opts.max_tokens {
-                let next = if opts.temperature <= 0.0 {
-                    argmax(&logits)
-                } else {
-                    // Stage A: still greedy for determinism; temperature reserved.
-                    argmax(&logits)
-                };
+                // Stage A: greedy for determinism; temperature reserved.
+                let next = argmax(&logits);
                 generated.push(next);
                 tokens.push(next);
                 if self.is_stop_id(next) {
@@ -615,12 +769,25 @@ impl Session {
                 }
                 logits = self.forward_step(next)?;
             }
+            if self.profile_on {
+                self.gen_acc.borrow_mut().decode_ms = elapsed_ms(t_dec);
+            }
             let text = self.decode_tokens(&generated);
             Ok(Generation {
                 tokens: generated,
                 text,
             })
         })();
+        if self.profile_on {
+            let mut p = self.last_profile.take().unwrap_or(EngineProfile {
+                compute: self.compute_label.clone(),
+                load: load_profile_take(),
+                generate: None,
+                ci_fail: false,
+            });
+            p.generate = Some(self.gen_acc.borrow().clone());
+            self.last_profile = Some(p);
+        }
         self.decode = None;
         result
     }
@@ -754,7 +921,7 @@ impl Session {
                 feat[i] = rgb[i % need] as f32 / 255.0;
             }
         }
-        proj.gemm(&feat, hidden, in_f)
+        self.wmm(proj, &feat, hidden, in_f, GemmAcct::Other)
     }
 
     /// Stage C VLA: project last-token embedding with bundle action weights.
@@ -787,7 +954,7 @@ impl Session {
                 "action head out {out_f} != requested {action_dim}"
             )));
         }
-        head.gemm(&h, out_f, hidden)
+        self.wmm(head, &h, out_f, hidden, GemmAcct::Other)
     }
 
     /// Stage C ASR stub bound to session vocab.
@@ -825,14 +992,14 @@ impl Session {
                         "dense FFN weight shape mismatch".into(),
                     ));
                 }
-                let g = gate.gemm(xn2, inter, hidden)?;
-                let u = up.gemm(xn2, inter, hidden)?;
+                let g = self.wmm(gate, xn2, inter, hidden, GemmAcct::Ffn)?;
+                let u = self.wmm(up, xn2, inter, hidden, GemmAcct::Ffn)?;
                 let h = if self.use_geglu {
                     geglu(&g, &u)?
                 } else {
                     swiglu(&g, &u)?
                 };
-                down.gemm(&h, hidden, inter)
+                self.wmm(down, &h, hidden, inter, GemmAcct::Ffn)
             }
             FfnWeights::MoE {
                 router,
@@ -841,7 +1008,7 @@ impl Session {
                 use_sigmoid,
             } => {
                 let n_exp = experts.len();
-                let logits = router.gemm(xn2, n_exp, hidden)?;
+                let logits = self.wmm(router, xn2, n_exp, hidden, GemmAcct::Ffn)?;
                 let (ids, weights) = moe_topk_route(&logits, *top_k, *use_sigmoid)?;
                 let mut acc = vec![0.0f32; hidden];
                 for (ei, &w) in ids.iter().zip(weights.iter()) {
@@ -852,10 +1019,10 @@ impl Session {
                         ));
                     }
                     let inter = ex.gate.data.len() / hidden;
-                    let g = ex.gate.gemm(xn2, inter, hidden)?;
-                    let u = ex.up.gemm(xn2, inter, hidden)?;
+                    let g = self.wmm(&ex.gate, xn2, inter, hidden, GemmAcct::Ffn)?;
+                    let u = self.wmm(&ex.up, xn2, inter, hidden, GemmAcct::Ffn)?;
                     let h = swiglu(&g, &u)?;
-                    let down = ex.down.gemm(&h, hidden, inter)?;
+                    let down = self.wmm(&ex.down, &h, hidden, inter, GemmAcct::Ffn)?;
                     for i in 0..hidden {
                         acc[i] += w * down[i];
                     }
@@ -910,6 +1077,194 @@ impl Session {
             logits = self.forward_step_with(&mut state, tok)?;
         }
         Ok(logits)
+    }
+
+    fn forward_prompt(&mut self, toks: &[u32]) -> Result<Vec<f32>, EngineError> {
+        let mut owned = self.decode.take().ok_or_else(|| {
+            EngineError::InvalidParam("decode state missing; call generate/prefill first".into())
+        })?;
+        let logits = self.forward_prompt_with(&mut owned, toks);
+        self.decode = Some(owned);
+        logits
+    }
+
+    fn apply_rope_seq(
+        x: &mut [f32],
+        seq: usize,
+        tok_dim: usize,
+        head_dim: usize,
+        pos0: usize,
+        theta: f32,
+    ) -> Result<(), EngineError> {
+        if x.len() != seq * tok_dim {
+            return Err(EngineError::ShapeMismatch(
+                "rope seq buffer length mismatch".into(),
+            ));
+        }
+        for t in 0..seq {
+            rope_half(
+                &mut x[t * tok_dim..(t + 1) * tok_dim],
+                head_dim,
+                pos0 + t,
+                theta,
+            )?;
+        }
+        Ok(())
+    }
+
+    fn forward_prompt_with(
+        &self,
+        state: &mut DecodeState,
+        toks: &[u32],
+    ) -> Result<Vec<f32>, EngineError> {
+        if toks.is_empty() {
+            return Err(EngineError::InvalidParam("empty prompt".into()));
+        }
+        let hidden = self.conf.hidden_size;
+        let n_heads = self.conf.num_attention_heads;
+        let n_kv = self.conf.num_kv_heads;
+        let vocab = self.conf.vocab_size;
+        let seq = toks.len();
+        if hidden == 0 {
+            return Err(EngineError::ShapeMismatch("hidden_size is 0".into()));
+        }
+        if self.weights.emb.data.len() < vocab.saturating_mul(hidden)
+            || !self.weights.emb.data.len().is_multiple_of(hidden)
+        {
+            return Err(EngineError::ShapeMismatch(format!(
+                "embedding length {} not compatible with vocab={vocab} hidden={hidden}",
+                self.weights.emb.data.len()
+            )));
+        }
+        let pos0 = state.pos;
+        let mut x = vec![0.0f32; seq * hidden];
+        for (t, &tok) in toks.iter().enumerate() {
+            let tid = (tok as usize) % vocab;
+            x[t * hidden..(t + 1) * hidden]
+                .copy_from_slice(&self.weights.emb.data[tid * hidden..(tid + 1) * hidden]);
+        }
+
+        for (li, layer) in self.weights.layers.iter().enumerate() {
+            let xn = self.norm(&x, &layer.attn_norm)?;
+            match &layer.op {
+                LayerOp::Attn(attn) => {
+                    if attn.wq.data.len() % hidden != 0 {
+                        return Err(EngineError::ShapeMismatch(
+                            "attn q proj weight not divisible by hidden_size".into(),
+                        ));
+                    }
+                    let q_dim = attn.wq.data.len() / hidden;
+                    if n_heads == 0 || !q_dim.is_multiple_of(n_heads) {
+                        return Err(EngineError::ShapeMismatch(
+                            "q_dim not divisible by num_attention_heads".into(),
+                        ));
+                    }
+                    let head_dim = self
+                        .conf
+                        .head_dim
+                        .filter(|d| *d > 0 && q_dim == n_heads * *d)
+                        .unwrap_or(q_dim / n_heads);
+                    if attn.wo.data.len() != hidden * q_dim {
+                        return Err(EngineError::ShapeMismatch(
+                            "attn output proj weight shape mismatch".into(),
+                        ));
+                    }
+                    let mut q = self.wmm(&attn.wq, &xn, q_dim, hidden, GemmAcct::Attn)?;
+                    if let Some(qn) = &attn.q_norm {
+                        q = rms_norm(&q, qn, 1e-6)?;
+                    }
+                    Self::apply_rope_seq(
+                        &mut q,
+                        seq,
+                        q_dim,
+                        head_dim,
+                        pos0,
+                        self.conf.rope_theta,
+                    )?;
+
+                    let (k_src, v_src) = if let (Some(wk), Some(wv)) = (&attn.wk, &attn.wv) {
+                        if wk.data.len() % hidden != 0 || wv.data.len() % hidden != 0 {
+                            return Err(EngineError::ShapeMismatch(
+                                "attn kv proj weight not divisible by hidden_size".into(),
+                            ));
+                        }
+                        let k_dim = wk.data.len() / hidden;
+                        let v_dim = wv.data.len() / hidden;
+                        if k_dim != n_kv * head_dim || v_dim != n_kv * head_dim {
+                            return Err(EngineError::ShapeMismatch(format!(
+                                "kv dims {k_dim}/{v_dim} != n_kv*head_dim {}",
+                                n_kv * head_dim
+                            )));
+                        }
+                        let mut k = self.wmm(wk, &xn, k_dim, hidden, GemmAcct::Attn)?;
+                        let v = self.wmm(wv, &xn, v_dim, hidden, GemmAcct::Attn)?;
+                        if let Some(kn) = &attn.k_norm {
+                            k = rms_norm(&k, kn, 1e-6)?;
+                        }
+                        Self::apply_rope_seq(
+                            &mut k,
+                            seq,
+                            k_dim,
+                            head_dim,
+                            pos0,
+                            self.conf.rope_theta,
+                        )?;
+                        state.k_caches[li] = k;
+                        state.v_caches[li] = v;
+                        state.last_kv_src.insert(attn.kind, li);
+                        (li, li)
+                    } else {
+                        let src = state.last_kv_src.get(&attn.kind).copied().ok_or_else(|| {
+                            EngineError::Format(format!(
+                                "KV-consumer layer {li} has no producer of kind {:?}",
+                                attn.kind
+                            ))
+                        })?;
+                        (src, src)
+                    };
+                    let attn_out = attention_causal(
+                        &q,
+                        &state.k_caches[k_src],
+                        &state.v_caches[v_src],
+                        n_heads,
+                        n_kv,
+                        head_dim,
+                    )?;
+                    let ao = self.wmm(&attn.wo, &attn_out, hidden, q_dim, GemmAcct::Attn)?;
+                    for i in 0..x.len() {
+                        x[i] += ao[i];
+                    }
+                }
+                LayerOp::Conv(_) | LayerOp::Linear(_) => {
+                    return Err(EngineError::Unsupported(
+                        "batched prefill is only implemented for attention+dense FFN layers"
+                            .into(),
+                    ));
+                }
+            }
+            let xn2 = self.norm(&x, &layer.ffn_norm)?;
+            let down = self.apply_ffn(layer, &xn2, hidden)?;
+            for i in 0..x.len() {
+                x[i] += down[i];
+            }
+        }
+        state.pos = pos0 + seq;
+        let last = &x[(seq - 1) * hidden..seq * hidden];
+        let xn = self.norm(last, &self.weights.output_norm)?;
+        if !self.weights.output.data.len().is_multiple_of(hidden) {
+            return Err(EngineError::ShapeMismatch(format!(
+                "lm_head len {} not divisible by hidden {hidden}",
+                self.weights.output.data.len()
+            )));
+        }
+        let out_rows = self.weights.output.data.len() / hidden;
+        self.wmm(
+            &self.weights.output,
+            &xn,
+            out_rows,
+            hidden,
+            GemmAcct::LmHead,
+        )
     }
 
     fn forward_step(&mut self, tok: u32) -> Result<Vec<f32>, EngineError> {
@@ -971,7 +1326,7 @@ impl Session {
                             "attn output proj weight shape mismatch".into(),
                         ));
                     }
-                    let mut q = attn.wq.gemm(&xn, q_dim, hidden)?;
+                    let mut q = self.wmm(&attn.wq, &xn, q_dim, hidden, GemmAcct::Attn)?;
                     if let Some(qn) = &attn.q_norm {
                         q = rms_norm(&q, qn, 1e-6)?;
                     }
@@ -991,8 +1346,8 @@ impl Session {
                                 n_kv * head_dim
                             )));
                         }
-                        let mut k = wk.gemm(&xn, k_dim, hidden)?;
-                        let v = wv.gemm(&xn, v_dim, hidden)?;
+                        let mut k = self.wmm(wk, &xn, k_dim, hidden, GemmAcct::Attn)?;
+                        let v = self.wmm(wv, &xn, v_dim, hidden, GemmAcct::Attn)?;
                         if let Some(kn) = &attn.k_norm {
                             k = rms_norm(&k, kn, 1e-6)?;
                         }
@@ -1018,13 +1373,13 @@ impl Session {
                         n_kv,
                         head_dim,
                     )?;
-                    let ao = attn.wo.gemm(&attn_out, hidden, q_dim)?;
+                    let ao = self.wmm(&attn.wo, &attn_out, hidden, q_dim, GemmAcct::Attn)?;
                     for i in 0..hidden {
                         x[i] += ao[i];
                     }
                 }
                 LayerOp::Conv(conv) => {
-                    let bcx = conv.in_proj.gemm(&xn, 3 * hidden, hidden)?;
+                    let bcx = self.wmm(&conv.in_proj, &xn, 3 * hidden, hidden, GemmAcct::Attn)?;
                     let mut bx = vec![0.0f32; hidden];
                     let mut c_gate = vec![0.0f32; hidden];
                     for i in 0..hidden {
@@ -1043,7 +1398,7 @@ impl Session {
                     for i in 0..hidden {
                         y[i] = c_gate[i] * conv_y[i];
                     }
-                    let ao = conv.out_proj.gemm(&y, hidden, hidden)?;
+                    let ao = self.wmm(&conv.out_proj, &y, hidden, hidden, GemmAcct::Attn)?;
                     for i in 0..hidden {
                         x[i] += ao[i];
                     }
@@ -1052,7 +1407,7 @@ impl Session {
                     let key_dim = dn.n_k_heads * dn.head_k;
                     let value_dim = dn.n_v_heads * dn.head_v;
                     let qkvz_out = 2 * key_dim + 2 * value_dim;
-                    let mixed = dn.qkvz.gemm(&xn, qkvz_out, hidden)?;
+                    let mixed = self.wmm(&dn.qkvz, &xn, qkvz_out, hidden, GemmAcct::Attn)?;
                     let mut q = mixed[0..key_dim].to_vec();
                     let mut k = mixed[key_dim..2 * key_dim].to_vec();
                     let mut v = mixed[2 * key_dim..2 * key_dim + value_dim].to_vec();
@@ -1070,7 +1425,7 @@ impl Session {
                     q.copy_from_slice(&mixed_c[0..key_dim]);
                     k.copy_from_slice(&mixed_c[key_dim..2 * key_dim]);
                     v.copy_from_slice(&mixed_c[2 * key_dim..]);
-                    let ba = dn.ba.gemm(&xn, 2 * dn.n_v_heads, hidden)?;
+                    let ba = self.wmm(&dn.ba, &xn, 2 * dn.n_v_heads, hidden, GemmAcct::Attn)?;
                     let mut beta = vec![0.0f32; dn.n_v_heads];
                     let mut g = vec![0.0f32; dn.n_v_heads];
                     for h in 0..dn.n_v_heads {
@@ -1106,7 +1461,7 @@ impl Session {
                     for i in 0..core.len() {
                         core[i] *= z_act[i];
                     }
-                    let ao = dn.out_proj.gemm(&core, hidden, value_dim)?;
+                    let ao = self.wmm(&dn.out_proj, &core, hidden, value_dim, GemmAcct::Attn)?;
                     for i in 0..hidden {
                         x[i] += ao[i];
                     }
@@ -1127,7 +1482,7 @@ impl Session {
             )));
         }
         let out_rows = self.weights.output.data.len() / hidden;
-        self.weights.output.gemm(&xn, out_rows, hidden)
+        self.wmm(&self.weights.output, &xn, out_rows, hidden, GemmAcct::LmHead)
     }
 }
 
@@ -1175,6 +1530,7 @@ mod tests {
     use super::*;
     use crate::family::{arch_class_representatives, graph_hook, lookup_family, require_stage_b};
     use crate::fixture::write_tiny_q4_bundle;
+    use aria_kernel::{resolve_compute, ComputePref};
     use serde_json::{json, Value};
 
     #[test]
@@ -1746,6 +2102,69 @@ mod tests {
         assert_eq!(
             incr.tokens, full_tokens,
             "incremental decode must match full-recompute greedy tokens"
+        );
+    }
+
+    #[test]
+    fn profile_records_load_and_generate() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .compute(ComputePref::Cpu)
+            .profile(true)
+            .build()
+            .unwrap();
+        assert!(s.compute_label().contains("cpu"));
+        let load = s.last_profile().expect("load profile");
+        assert!(!load.ci_fail);
+        assert!(load.load.materialize_ms >= 0.0);
+        s.generate(
+            &s.encode_text("hi"),
+            &GenerateOpts {
+                max_tokens: 2,
+                temperature: 0.0,
+            },
+        )
+        .unwrap();
+        let p = s.last_profile().expect("generate profile");
+        let g = p.generate.as_ref().expect("generate timings");
+        assert!(g.prefill_ms >= 0.0);
+        assert!(g.decode_ms >= 0.0);
+    }
+
+    #[test]
+    fn cuda_greedy_matches_cpu_if_available() {
+        if resolve_compute(ComputePref::Cuda).is_err() {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let prompt_text = "hi";
+        let opts = GenerateOpts {
+            max_tokens: 4,
+            temperature: 0.0,
+        };
+        let mut cpu = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .compute(ComputePref::Cpu)
+            .build()
+            .unwrap();
+        let mut gpu = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .compute(ComputePref::Cuda)
+            .build()
+            .unwrap();
+        assert!(gpu.compute_label().contains("cuda"));
+        let prompt = cpu.encode_text(prompt_text);
+        let a = cpu.generate(&prompt, &opts).unwrap();
+        let b = gpu.generate(&prompt, &opts).unwrap();
+        assert_eq!(
+            a.tokens, b.tokens,
+            "CUDA greedy tokens must match CPU (tiny bundle)"
         );
     }
 

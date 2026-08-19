@@ -5,22 +5,21 @@
 ## 概述
 `engine` 仓库 = aria 推理引擎（Rust）：参考 Cactus Engine / Graph / Kernels / Hybrid。
 五层：`openai`（OpenAI 兼容 API）→ `hybrid`（端云路由）→ `inference`（全家族推理）
-→ `graph`（零拷贝计算图）→ `kernel`（ARM NEON + 可移植 scalar）。
+→ `graph`（零拷贝计算图）→ `kernel`（NEON / AVX2 scalar + 可选 CUDA）。
 权重格式：**仅** Aria bundle（`aria-quant-bundle` **v1|v2**：`weight.bin` + `config.json` + tokenizer）。
 评测：`bench/` Python，对标 aria / llama.cpp / ollama / vllm，产出 JSON+MD（report-only）。
 
 ## 架构
 `openai` → `hybrid` → `inference`（Bundle + Session + 家族图）→ `graph` → `kernel`。
 位宽消费：`q1`–`q4` / `q8` / 混合 `q1.5` / `q2.54` / `q3.26`（与 `model` 产物对齐）。
-反量化：与 Python `dequantize` 一致的 **rotated-space** 重建；推理用融合 HDM
-（blocked Hadamard + Dequant + MatMul），不强制整表逆 Hadamard 物化。v2 = blocked tiles。
+反量化：rotated-space 码本；embedding 加载期整表 unrotate；线性层原域 `linear` 或融合 HDM。v2 = blocked tiles。
 
 ## 目录
 - `openai/`：`aria-openai` — HTTP（chat / audio·embeddings·tools）
 - `hybrid/`：`aria-hybrid` — 信号→投影→决策、Pareto 模式、会话粘性、`cloud_handoff`、Outcome
 - `inference/`：`aria-inference` — Bundle 加载、Prefill/Decode、家族注册表
 - `graph/`：`aria-graph` — Op DAG、BufferPool、mmap / external 零拷贝
-- `kernel/`：`aria-kernel` — matmul / attention / norm / RoPE / dequant / FWHT
+- `kernel/`：`aria-kernel` — matmul / attention / norm / RoPE / dequant / FWHT / CUDA GEMM
 - `ffi/`：`aria-ffi` — C ABI（cdylib/staticlib）；`bindings/` 八语言 SDK
 - `bench/`：Python 引擎对标评测（§1.1 全家族；性能+质量；JSON+MD）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
@@ -41,11 +40,11 @@
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8 评测、§3.7 SDK、§3.4 `upgrade`、**§3.3.1 全家族对齐**）。`task.md` T50–T54 / **T60–T69** 主路径已落地；滑动窗口 mask、双 RoPE、PLE、DeltaNet GQA、完整 ViT 仍待。
+Spec 见 `requirements.md`（含 §8.7 profile、**§3.4 `compute=auto`**、§3.3.1）。`task.md` T50–T54 / T60–T69 主路径已落地；**T70–T74** 本机算力。滑动窗口 mask、双 RoPE、PLE、DeltaNet GQA、完整 ViT 仍待。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。
 - 全家族 §1.1：`ArchClass` + `graph_hook`；VL/VLA 见 `multimodal`。
 - 评测对齐 `model` `audit_cli`：缺后端 skip、`ci_fail: false`；不启动第三方引擎进程。
-- NEON：`SimdMode::Neon`；混合云：`~/.ariacompute/config.yml`；下载探针 Dashboard/HF/MS。
+- NEON/AVX2 CPU；`compute=auto` 可选 CUDA；混合云：`~/.ariacompute/config.yml`；下载探针 Dashboard/HF/MS。
 - 与 **model** 协同 blocked Hadamard（`format_version=2`）。C ABI 变更须更新 `bindings/testdata/cases.json` 与宿主测。

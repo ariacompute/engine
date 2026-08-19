@@ -23,6 +23,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `upgrade_url` | CLI/FFI 升级组织根（`.com`→GitHub，`.cn`→Gitee） | — |
 | `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
 | `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
+| `compute` | `auto` / `cpu` / `cuda`（本机 GEMM；**不是** hybrid 开关） | `auto` |
 
 ```bash
 # 认证
@@ -44,7 +45,8 @@ aria-engine upgrade 0.7.2
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --hybrid-mode balance \
-  --hybrid-execution hybrid
+  --hybrid-execution hybrid \
+  --compute auto
 ```
 
 `download` 每次运行会探测 Serve（若已配置密钥）/ HuggingFace / ModelScope，并选择当前可达且最快的源。在 TTY 下会显示绿色下载进度条。
@@ -52,6 +54,19 @@ aria-engine serve gemma-4-e2b-it_q4 \
 `list` 查询 `{site_url}/api/dashboard/models`（需先 `aria-engine auth`），按可下载 bundle 列出并标记 `downloaded` / `not downloaded`（另附仅本地缓存项）。
 
 `serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。
+
+`--hybrid-execution` 只控制云 handoff（`device` 永不离机）。`--compute auto|cpu|cuda` 选择**本机** GEMM：`auto` 在能加载 `libcudart`/`libcublas` 且 `cudaGetDeviceCount>0` 时用 CUDA，否则 CPU（x86_64 AVX2+FMA，aarch64 NEON）。`--compute cuda` 在无 NVIDIA 设备时**硬失败**，不会静默降到 CPU。CUDA 为运行时 libloading（编译不依赖 CUDA toolkit）；H200 上仍可用 `--features cuda` 作为文档旗标：
+
+```bash
+cargo build -p aria-openai --release --features cuda
+aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profile
+```
+
+`--profile` 记录加载/生成分段计时。用 `GET /v1/engine/profile` 读取，或：
+
+```bash
+python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engine_profile_qwen3.json
+```
 
 在 `--hybrid-execution hybrid` 下，路由依据提示复杂度 / 上下文溢出 / modality / 本地失败 / `FORCE_CLOUD`。`cost` 更偏端侧；`intelligence` 更偏云端；`balance` 为中性自动。用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`--hybrid-execution device` 永不切换云端；`--hybrid-execution cloud` 始终云端推理（隐私敏感请求仍留本地）。云端 handoff 请求的 `model` 固定为 `ariacompute/ariamodel`。
 
@@ -62,6 +77,9 @@ aria-engine serve gemma-4-e2b-it_q4 \
 ```bash
 # 列出模型
 curl -s http://127.0.0.1:8080/v1/models | jq .
+
+# 加载 / 生成分段计时（需 serve --profile）
+curl -s http://127.0.0.1:8080/v1/engine/profile | jq .
 
 # Chat（非流式）
 curl -s http://127.0.0.1:8080/v1/chat/completions \
@@ -123,7 +141,8 @@ python scripts/diag_qwen3_chat.py \
 # 在本仓库；用 --hybrid-execution device，避免 hybrid 掩盖本地 decode
 ./aria-engine serve qwen3-0.6b_q4 \
   --bind 127.0.0.1:8080 \
-  --hybrid-execution device
+  --hybrid-execution device \
+  --compute auto --profile
 python scripts/diag_qwen3_chat.py \
   --url http://127.0.0.1:8080 \
   --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
