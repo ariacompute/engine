@@ -40,7 +40,7 @@
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8.7 profile、**§3.4 `compute=auto`**、§3.3.1）。`task.md` T50–T54 / T60–T69 主路径已落地；**T70–T74** 本机算力。滑动窗口 mask、双 RoPE、PLE、DeltaNet GQA、完整 ViT 仍待。
+Spec 见 `requirements.md`（含 §8.7 profile、**§3.4 `compute=auto`**、§3.3.1）。`task.md` T50–T54 / T60–T69 主路径已落地；**T70–T74** 本机算力。DeltaNet GQA、完整 ViT 仍待。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。

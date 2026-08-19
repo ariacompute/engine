@@ -4,11 +4,14 @@ use crate::family::{effective_rope_theta, graph_hook, require_runnable, ArchClas
 use crate::multimodal::asr_transcribe_pcm16le;
 use crate::tensor_names::{
     action_head_names, attn_k_names, attn_k_norm_names, attn_norm_names, attn_o_names,
-    attn_q_names, attn_q_norm_names, attn_v_names, conv_in_proj_names, conv_kernel_names,
-    conv_out_proj_names, emb_names, ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_up_names,
-    linear_a_log_names, linear_conv1d_names, linear_dt_bias_names, linear_in_proj_ba_names,
-    linear_in_proj_qkvz_names, linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names,
-    moe_expert_up_names, moe_router_names, output_names, output_norm_names, vision_proj_names,
+    attn_post_norm_names, attn_q_names, attn_q_norm_names, attn_v_names, attn_v_norm_names,
+    conv_in_proj_names, conv_kernel_names, conv_out_proj_names, emb_names, embed_per_layer_names,
+    ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_post_norm_names, ffn_up_names,
+    layer_ple_gate_names, layer_ple_post_norm_names, layer_ple_proj_names, linear_a_log_names,
+    linear_conv1d_names, linear_dt_bias_names, linear_in_proj_ba_names, linear_in_proj_qkvz_names,
+    linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names, moe_expert_up_names,
+    moe_router_names, output_names, output_norm_names, per_layer_model_projection_names,
+    per_layer_projection_norm_names, pre_feedforward_norm_names, vision_proj_names,
 };
 use crate::profile::{
     elapsed_ms, load_profile_begin, load_profile_set_cuda_upload, load_profile_set_materialize,
@@ -16,9 +19,10 @@ use crate::profile::{
 };
 use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use aria_kernel::{
-    attention, attention_causal, gated_delta_step, geglu, hdm_linear, linear_cpu, moe_topk_route,
-    resolve_compute, rms_norm, rms_norm_gemma, rope_half, short_conv_step, silu_vec, softplus,
-    swiglu, ComputeBackend, ComputePref, CudaContext, EngineError, GatedDeltaStep,
+    attention_causal_with_scale, attention_with_scale, gated_delta_step, geglu, gelu_pytorch_tanh,
+    hdm_linear, kv_sliding_view, linear_cpu, moe_topk_route, resolve_compute, rms_norm,
+    rms_norm_gemma, rope_half, rope_half_proportional, short_conv_step, silu_vec, softplus, swiglu,
+    ComputeBackend, ComputePref, CudaContext, EngineError, GatedDeltaStep,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -96,6 +100,7 @@ struct AttnWeights {
     wo: MatWeight,
     q_norm: Option<Vec<f32>>,
     k_norm: Option<Vec<f32>>,
+    v_norm: Option<Vec<f32>>,
     kind: AttnKind,
 }
 
@@ -153,9 +158,25 @@ enum FfnWeights {
     },
 }
 
+struct LayerPle {
+    gate: MatWeight,
+    proj: MatWeight,
+    post_norm: Vec<f32>,
+}
+
+struct PleModel {
+    embed: Arc<Vec<f32>>,
+    proj: MatWeight,
+    proj_norm: Vec<f32>,
+    d: usize,
+}
+
 struct LayerWeights {
     attn_norm: Vec<f32>,
     ffn_norm: Vec<f32>,
+    post_attn_norm: Option<Vec<f32>>,
+    post_ffn_norm: Option<Vec<f32>>,
+    ple: Option<LayerPle>,
     op: LayerOp,
     ffn: FfnWeights,
 }
@@ -167,6 +188,7 @@ struct ModelWeights {
     output: MatWeight,
     vision: Option<MatWeight>,
     action: Option<MatWeight>,
+    ple: Option<PleModel>,
 }
 
 pub struct Session {
@@ -175,7 +197,9 @@ pub struct Session {
     weights: ModelWeights,
     conf: crate::bundle::ModelConfig,
     use_gemma_norm: bool,
+    use_gemma4: bool,
     use_geglu: bool,
+    embed_scale: f32,
     tokenizer: Option<BundleTokenizer>,
     /// Cleared at the start of each `generate`; reused across decode steps.
     decode: Option<DecodeState>,
@@ -264,8 +288,20 @@ impl SessionBuilder {
             .as_deref()
             .unwrap_or("")
             .to_ascii_lowercase();
-        let use_geglu = act.contains("gelu");
-        let use_gemma_norm = family.path().contains("gemma");
+        let use_gemma4 = family.path().contains("gemma-4");
+        let use_gemma_norm = family.path().contains("gemma") && !use_gemma4;
+        let use_geglu = act.contains("gelu") || use_gemma4;
+        if use_gemma4 && conf.layer_types.is_none() {
+            conf.layer_types = Some(default_gemma4_layer_types(conf.num_layers));
+        }
+        if use_gemma4 && conf.sliding_window.unwrap_or(0) == 0 {
+            conf.sliding_window = Some(512);
+        }
+        let embed_scale = if family.path().contains("gemma") {
+            (conf.hidden_size as f32).sqrt()
+        } else {
+            1.0
+        };
         let load = load_profile_take();
         let last_profile = self.profile.then(|| EngineProfile {
             compute: compute_label.clone(),
@@ -279,7 +315,9 @@ impl SessionBuilder {
             weights,
             conf,
             use_gemma_norm,
+            use_gemma4,
             use_geglu,
+            embed_scale,
             tokenizer,
             decode: None,
             compute,
@@ -348,6 +386,22 @@ fn is_kv_consumer(conf: &crate::bundle::ModelConfig, layer: usize) -> bool {
     n > 0 && layer >= conf.num_layers.saturating_sub(n)
 }
 
+/// HF Gemma-4 default: 5 sliding + 1 full, last layer always full attention.
+fn default_gemma4_layer_types(n: usize) -> Vec<String> {
+    let mut types = Vec::with_capacity(n);
+    for i in 0..n {
+        if (i + 1) % 6 == 0 {
+            types.push("full_attention".into());
+        } else {
+            types.push("sliding_attention".into());
+        }
+    }
+    if n > 0 {
+        types[n - 1] = "full_attention".into();
+    }
+    types
+}
+
 fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> {
     fn any_mat(b: &Bundle, names: &[String]) -> Result<MatWeight, EngineError> {
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
@@ -360,7 +414,11 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
         any_vec(b, names).ok()
     }
 
-    let m = &b.model;
+    let mut model = b.model.clone();
+    if family.path().contains("gemma-4") && model.layer_types.is_none() {
+        model.layer_types = Some(default_gemma4_layer_types(model.num_layers));
+    }
+    let m = &model;
     let hidden = m.hidden_size;
     let n_experts = m.num_experts.unwrap_or(0);
     let top_k = m.num_experts_per_tok.unwrap_or(1).max(1);
@@ -372,7 +430,18 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
     let mut prev_wv: Option<MatWeight> = None;
     for layer in 0..m.num_layers {
         let attn_norm = any_vec(b, &attn_norm_names(layer))?;
-        let ffn_norm = any_vec(b, &ffn_norm_names(layer))?;
+        let pre_ff = optional_vec(b, &pre_feedforward_norm_names(layer));
+        let post_attn_norm = if pre_ff.is_some() {
+            optional_vec(b, &attn_post_norm_names(layer))
+        } else {
+            None
+        };
+        let post_ffn_norm = optional_vec(b, &ffn_post_norm_names(layer));
+        let ffn_norm = if let Some(v) = pre_ff {
+            v
+        } else {
+            any_vec(b, &ffn_norm_names(layer))?
+        };
 
         let op = if layer_is_conv(m, layer) {
             let in_proj = any_mat(b, &conv_in_proj_names(layer))?;
@@ -530,6 +599,7 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
                 wo: any_mat(b, &attn_o_names(layer))?,
                 q_norm: optional_vec(b, &attn_q_norm_names(layer)),
                 k_norm: optional_vec(b, &attn_k_norm_names(layer)),
+                v_norm: optional_vec(b, &attn_v_norm_names(layer)),
                 kind: attn_kind(m, layer),
             })
         };
@@ -575,9 +645,25 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
             }
         };
 
+        let ple = match (
+            any_mat(b, &layer_ple_gate_names(layer)),
+            any_mat(b, &layer_ple_proj_names(layer)),
+            optional_vec(b, &layer_ple_post_norm_names(layer)),
+        ) {
+            (Ok(gate), Ok(proj), Some(post_norm)) => Some(LayerPle {
+                gate,
+                proj,
+                post_norm,
+            }),
+            _ => None,
+        };
+
         layers.push(LayerWeights {
             attn_norm,
             ffn_norm,
+            post_attn_norm,
+            post_ffn_norm,
+            ple,
             op,
             ffn,
         });
@@ -595,14 +681,74 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
         .collect();
     let emb = MatWeight::from_loaded(b.weight_loaded_any(&emb_n)?);
     let output = if m.tie_word_embeddings.unwrap_or(false)
+        || family.path().contains("gemma-4")
         || (family.path().contains("qwen3") && !family.path().contains("qwen3.5"))
     {
-        // Qwen3-0.6B/1.7B tie lm_head to embed; prefer embed even if a separate
-        // lm_head tensor exists (often a worse-quantized copy).
+        // Qwen3-0.6B/1.7B and Gemma-4 tie lm_head to embed; prefer embed even
+        // if a separate lm_head tensor exists (often a worse-quantized copy).
         emb.clone()
     } else {
         MatWeight::from_loaded(b.weight_loaded_any(&out_n)?)
     };
+    let ple = {
+        let embed_n = embed_per_layer_names();
+        let proj_n: Vec<String> = per_layer_model_projection_names()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        let norm_n: Vec<String> = per_layer_projection_norm_names()
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        match (
+            b.weight_loaded_any(&embed_n),
+            any_mat(b, &proj_n),
+            optional_vec(b, &norm_n),
+        ) {
+            (Ok(embed), Ok(proj), Some(proj_norm)) => {
+                let d = proj_norm.len();
+                if d == 0 {
+                    return Err(EngineError::ShapeMismatch(
+                        "PLE projection norm dim is 0".into(),
+                    ));
+                }
+                Some(PleModel {
+                    embed: Arc::new(embed.data),
+                    proj,
+                    proj_norm,
+                    d,
+                })
+            }
+            _ => None,
+        }
+    };
+    if let Some(ple) = &ple {
+        let packed = m.num_layers.saturating_mul(ple.d);
+        if packed == 0
+            || !ple.embed.len().is_multiple_of(packed)
+            || ple.proj.data.len() != packed * hidden
+        {
+            return Err(EngineError::ShapeMismatch(format!(
+                "PLE shapes: embed {} proj {} expected packed={} hidden={hidden}",
+                ple.embed.len(),
+                ple.proj.data.len(),
+                packed
+            )));
+        }
+        for (i, layer) in layers.iter().enumerate() {
+            let Some(lp) = &layer.ple else {
+                return Err(EngineError::Format(format!(
+                    "PLE model tensors present but layer {i} missing gate/proj/norm"
+                )));
+            };
+            if lp.gate.data.len() != ple.d * hidden || lp.proj.data.len() != hidden * ple.d {
+                return Err(EngineError::ShapeMismatch(format!(
+                    "layer {i} PLE gate/proj shape mismatch (d={}, hidden={hidden})",
+                    ple.d
+                )));
+            }
+        }
+    }
     Ok(ModelWeights {
         emb,
         layers,
@@ -610,6 +756,7 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
         output,
         vision: any_mat(b, &vis_n).ok(),
         action: any_mat(b, &act_n).ok(),
+        ple,
     })
 }
 
@@ -621,6 +768,10 @@ fn upload_weights(ctx: &CudaContext, w: &ModelWeights) -> Result<(), EngineError
     }
     if let Some(a) = &w.action {
         ctx.upload(&a.data)?;
+    }
+    if let Some(ple) = &w.ple {
+        ctx.upload(&ple.embed)?;
+        ctx.upload(&ple.proj.data)?;
     }
     for layer in &w.layers {
         match &layer.op {
@@ -643,6 +794,10 @@ fn upload_weights(ctx: &CudaContext, w: &ModelWeights) -> Result<(), EngineError
                 ctx.upload(&d.ba.data)?;
                 ctx.upload(&d.out_proj.data)?;
             }
+        }
+        if let Some(ple) = &layer.ple {
+            ctx.upload(&ple.gate.data)?;
+            ctx.upload(&ple.proj.data)?;
         }
         match &layer.ffn {
             FfnWeights::Dense { gate, up, down } => {
@@ -970,6 +1125,169 @@ impl Session {
         }
     }
 
+    fn add_normed_residual(
+        &self,
+        x: &mut [f32],
+        y: &[f32],
+        post_norm: Option<&[f32]>,
+    ) -> Result<(), EngineError> {
+        if y.len() != x.len() {
+            return Err(EngineError::ShapeMismatch(
+                "residual length mismatch".into(),
+            ));
+        }
+        if let Some(w) = post_norm {
+            let yn = self.norm(y, w)?;
+            for (a, b) in x.iter_mut().zip(yn.iter()) {
+                *a += *b;
+            }
+        } else {
+            for (a, b) in x.iter_mut().zip(y.iter()) {
+                *a += *b;
+            }
+        }
+        Ok(())
+    }
+
+    fn attn_scale(&self, head_dim: usize) -> f32 {
+        if self.use_gemma4 {
+            1.0
+        } else {
+            1.0 / (head_dim as f32).sqrt()
+        }
+    }
+
+    /// Sliding layers attend to the last `sliding_window` keys (Gemma-4: 512).
+    /// Full-attention layers keep the causal prefix. KV cache itself is not cropped
+    /// so shared-KV producers still keep full history.
+    fn attn_window(&self, kind: AttnKind) -> Option<usize> {
+        if kind != AttnKind::Sliding {
+            return None;
+        }
+        self.conf.sliding_window.filter(|w| *w > 0)
+    }
+
+    fn layer_rope_params(&self, kind: AttnKind) -> (f32, Option<f32>) {
+        if self.use_gemma4 {
+            match kind {
+                AttnKind::Sliding => (10_000.0, None),
+                AttnKind::Full => (1_000_000.0, Some(0.25)),
+            }
+        } else {
+            (self.conf.rope_theta, None)
+        }
+    }
+
+    fn apply_rope(
+        x: &mut [f32],
+        head_dim: usize,
+        pos: usize,
+        theta: f32,
+        proportional: Option<f32>,
+    ) -> Result<(), EngineError> {
+        if let Some(factor) = proportional {
+            rope_half_proportional(x, head_dim, factor, pos, theta)
+        } else {
+            rope_half(x, head_dim, pos, theta)
+        }
+    }
+
+    fn apply_v_norm(
+        &self,
+        v: Vec<f32>,
+        v_norm: Option<&[f32]>,
+        head_dim: usize,
+    ) -> Result<Vec<f32>, EngineError> {
+        if let Some(vn) = v_norm {
+            rms_norm(&v, vn, 1e-6)
+        } else if self.use_gemma4 {
+            let ones = vec![1.0f32; head_dim];
+            rms_norm(&v, &ones, 1e-6)
+        } else {
+            Ok(v)
+        }
+    }
+
+    fn compute_ple_inputs(
+        &self,
+        toks: &[u32],
+        embeds: &[f32],
+    ) -> Result<Option<Vec<f32>>, EngineError> {
+        let Some(ple) = &self.weights.ple else {
+            return Ok(None);
+        };
+        let hidden = self.conf.hidden_size;
+        let n_layers = self.weights.layers.len();
+        let d = ple.d;
+        let packed = n_layers * d;
+        let seq = toks.len();
+        if seq == 0 || embeds.len() != seq * hidden {
+            return Err(EngineError::ShapeMismatch(
+                "PLE embed sequence length mismatch".into(),
+            ));
+        }
+        let scale_lookup = (d as f32).sqrt();
+        let ple_vocab = ple.embed.len() / packed;
+        if ple_vocab == 0 {
+            return Err(EngineError::ShapeMismatch("PLE embed vocab is 0".into()));
+        }
+        let mut lookup = vec![0.0f32; seq * packed];
+        for (t, &tok) in toks.iter().enumerate() {
+            let tid = (tok as usize) % ple_vocab;
+            let row = &ple.embed[tid * packed..(tid + 1) * packed];
+            for i in 0..packed {
+                lookup[t * packed + i] = row[i] * scale_lookup;
+            }
+        }
+        let proj_scale = (hidden as f32).sqrt().recip();
+        let mut proj = self.wmm(&ple.proj, embeds, packed, hidden, GemmAcct::Other)?;
+        for v in &mut proj {
+            *v *= proj_scale;
+        }
+        proj = rms_norm(&proj, &ple.proj_norm, 1e-6)?;
+        let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
+        for i in 0..proj.len() {
+            proj[i] = (proj[i] + lookup[i]) * inv_sqrt2;
+        }
+        Ok(Some(proj))
+    }
+
+    fn apply_ple(
+        &self,
+        x: &mut [f32],
+        layer: &LayerWeights,
+        li: usize,
+        ple_tok: Option<&[f32]>,
+        hidden: usize,
+    ) -> Result<(), EngineError> {
+        let (Some(ple), Some(ple_tok)) = (&layer.ple, ple_tok) else {
+            return Ok(());
+        };
+        let d = self
+            .weights
+            .ple
+            .as_ref()
+            .map(|p| p.d)
+            .ok_or_else(|| EngineError::Format("layer PLE without model PLE".into()))?;
+        let n_layers = self.weights.layers.len();
+        let seq = x.len() / hidden;
+        let gate_out = self.wmm(&ple.gate, x, d, hidden, GemmAcct::Ffn)?;
+        let mut gated = vec![0.0f32; seq * d];
+        for t in 0..seq {
+            for i in 0..d {
+                let g = gelu_pytorch_tanh(gate_out[t * d + i]);
+                let p = ple_tok[t * n_layers * d + li * d + i];
+                gated[t * d + i] = g * p;
+            }
+        }
+        let proj = self.wmm(&ple.proj, &gated, hidden, d, GemmAcct::Ffn)?;
+        let nrm = self.norm(&proj, &ple.post_norm)?;
+        for (a, b) in x.iter_mut().zip(nrm.iter()) {
+            *a += *b;
+        }
+        Ok(())
+    }
+
     fn apply_ffn(
         &self,
         layer: &LayerWeights,
@@ -1095,6 +1413,7 @@ impl Session {
         head_dim: usize,
         pos0: usize,
         theta: f32,
+        proportional: Option<f32>,
     ) -> Result<(), EngineError> {
         if x.len() != seq * tok_dim {
             return Err(EngineError::ShapeMismatch(
@@ -1102,11 +1421,12 @@ impl Session {
             ));
         }
         for t in 0..seq {
-            rope_half(
+            Self::apply_rope(
                 &mut x[t * tok_dim..(t + 1) * tok_dim],
                 head_dim,
                 pos0 + t,
                 theta,
+                proportional,
             )?;
         }
         Ok(())
@@ -1143,6 +1463,12 @@ impl Session {
             x[t * hidden..(t + 1) * hidden]
                 .copy_from_slice(&self.weights.emb.data[tid * hidden..(tid + 1) * hidden]);
         }
+        if self.embed_scale != 1.0 {
+            for v in &mut x {
+                *v *= self.embed_scale;
+            }
+        }
+        let ple_tok = self.compute_ple_inputs(toks, &x)?;
 
         for (li, layer) in self.weights.layers.iter().enumerate() {
             let xn = self.norm(&x, &layer.attn_norm)?;
@@ -1173,13 +1499,15 @@ impl Session {
                     if let Some(qn) = &attn.q_norm {
                         q = rms_norm(&q, qn, 1e-6)?;
                     }
+                    let (theta, proportional) = self.layer_rope_params(attn.kind);
                     Self::apply_rope_seq(
                         &mut q,
                         seq,
                         q_dim,
                         head_dim,
                         pos0,
-                        self.conf.rope_theta,
+                        theta,
+                        proportional,
                     )?;
 
                     let (k_src, v_src) = if let (Some(wk), Some(wv)) = (&attn.wk, &attn.wv) {
@@ -1197,7 +1525,7 @@ impl Session {
                             )));
                         }
                         let mut k = self.wmm(wk, &xn, k_dim, hidden, GemmAcct::Attn)?;
-                        let v = self.wmm(wv, &xn, v_dim, hidden, GemmAcct::Attn)?;
+                        let mut v = self.wmm(wv, &xn, v_dim, hidden, GemmAcct::Attn)?;
                         if let Some(kn) = &attn.k_norm {
                             k = rms_norm(&k, kn, 1e-6)?;
                         }
@@ -1207,8 +1535,10 @@ impl Session {
                             k_dim,
                             head_dim,
                             pos0,
-                            self.conf.rope_theta,
+                            theta,
+                            proportional,
                         )?;
+                        v = self.apply_v_norm(v, attn.v_norm.as_deref(), head_dim)?;
                         state.k_caches[li] = k;
                         state.v_caches[li] = v;
                         state.last_kv_src.insert(attn.kind, li);
@@ -1222,18 +1552,18 @@ impl Session {
                         })?;
                         (src, src)
                     };
-                    let attn_out = attention_causal(
+                    let attn_out = attention_causal_with_scale(
                         &q,
                         &state.k_caches[k_src],
                         &state.v_caches[v_src],
                         n_heads,
                         n_kv,
                         head_dim,
+                        self.attn_scale(head_dim),
+                        self.attn_window(attn.kind),
                     )?;
                     let ao = self.wmm(&attn.wo, &attn_out, hidden, q_dim, GemmAcct::Attn)?;
-                    for i in 0..x.len() {
-                        x[i] += ao[i];
-                    }
+                    self.add_normed_residual(&mut x, &ao, layer.post_attn_norm.as_deref())?;
                 }
                 LayerOp::Conv(_) | LayerOp::Linear(_) => {
                     return Err(EngineError::Unsupported(
@@ -1244,9 +1574,8 @@ impl Session {
             }
             let xn2 = self.norm(&x, &layer.ffn_norm)?;
             let down = self.apply_ffn(layer, &xn2, hidden)?;
-            for i in 0..x.len() {
-                x[i] += down[i];
-            }
+            self.add_normed_residual(&mut x, &down, layer.post_ffn_norm.as_deref())?;
+            self.apply_ple(&mut x, layer, li, ple_tok.as_deref(), hidden)?;
         }
         state.pos = pos0 + seq;
         let last = &x[(seq - 1) * hidden..seq * hidden];
@@ -1300,6 +1629,12 @@ impl Session {
         let tid = (tok as usize) % vocab;
         let mut x = vec![0.0f32; hidden];
         x.copy_from_slice(&self.weights.emb.data[tid * hidden..(tid + 1) * hidden]);
+        if self.embed_scale != 1.0 {
+            for v in &mut x {
+                *v *= self.embed_scale;
+            }
+        }
+        let ple_tok = self.compute_ple_inputs(&[tok], &x)?;
 
         for (li, layer) in self.weights.layers.iter().enumerate() {
             let xn = self.norm(&x, &layer.attn_norm)?;
@@ -1330,7 +1665,8 @@ impl Session {
                     if let Some(qn) = &attn.q_norm {
                         q = rms_norm(&q, qn, 1e-6)?;
                     }
-                    rope_half(&mut q, head_dim, pos, self.conf.rope_theta)?;
+                    let (theta, proportional) = self.layer_rope_params(attn.kind);
+                    Self::apply_rope(&mut q, head_dim, pos, theta, proportional)?;
 
                     let (k_src, v_src) = if let (Some(wk), Some(wv)) = (&attn.wk, &attn.wv) {
                         if wk.data.len() % hidden != 0 || wv.data.len() % hidden != 0 {
@@ -1347,11 +1683,12 @@ impl Session {
                             )));
                         }
                         let mut k = self.wmm(wk, &xn, k_dim, hidden, GemmAcct::Attn)?;
-                        let v = self.wmm(wv, &xn, v_dim, hidden, GemmAcct::Attn)?;
+                        let mut v = self.wmm(wv, &xn, v_dim, hidden, GemmAcct::Attn)?;
                         if let Some(kn) = &attn.k_norm {
                             k = rms_norm(&k, kn, 1e-6)?;
                         }
-                        rope_half(&mut k, head_dim, pos, self.conf.rope_theta)?;
+                        Self::apply_rope(&mut k, head_dim, pos, theta, proportional)?;
+                        v = self.apply_v_norm(v, attn.v_norm.as_deref(), head_dim)?;
                         state.k_caches[li].extend_from_slice(&k);
                         state.v_caches[li].extend_from_slice(&v);
                         state.last_kv_src.insert(attn.kind, li);
@@ -1365,18 +1702,24 @@ impl Session {
                         })?;
                         (src, src)
                     };
-                    let attn_out = attention(
-                        &q,
+                    let kv_dim = n_kv * head_dim;
+                    let (k_view, v_view) = kv_sliding_view(
                         &state.k_caches[k_src],
                         &state.v_caches[v_src],
+                        kv_dim,
+                        self.attn_window(attn.kind),
+                    )?;
+                    let attn_out = attention_with_scale(
+                        &q,
+                        k_view,
+                        v_view,
                         n_heads,
                         n_kv,
                         head_dim,
+                        self.attn_scale(head_dim),
                     )?;
                     let ao = self.wmm(&attn.wo, &attn_out, hidden, q_dim, GemmAcct::Attn)?;
-                    for i in 0..hidden {
-                        x[i] += ao[i];
-                    }
+                    self.add_normed_residual(&mut x, &ao, layer.post_attn_norm.as_deref())?;
                 }
                 LayerOp::Conv(conv) => {
                     let bcx = self.wmm(&conv.in_proj, &xn, 3 * hidden, hidden, GemmAcct::Attn)?;
@@ -1399,9 +1742,7 @@ impl Session {
                         y[i] = c_gate[i] * conv_y[i];
                     }
                     let ao = self.wmm(&conv.out_proj, &y, hidden, hidden, GemmAcct::Attn)?;
-                    for i in 0..hidden {
-                        x[i] += ao[i];
-                    }
+                    self.add_normed_residual(&mut x, &ao, layer.post_attn_norm.as_deref())?;
                 }
                 LayerOp::Linear(dn) => {
                     let key_dim = dn.n_k_heads * dn.head_k;
@@ -1462,16 +1803,13 @@ impl Session {
                         core[i] *= z_act[i];
                     }
                     let ao = self.wmm(&dn.out_proj, &core, hidden, value_dim, GemmAcct::Attn)?;
-                    for i in 0..hidden {
-                        x[i] += ao[i];
-                    }
+                    self.add_normed_residual(&mut x, &ao, layer.post_attn_norm.as_deref())?;
                 }
             }
             let xn2 = self.norm(&x, &layer.ffn_norm)?;
             let down = self.apply_ffn(layer, &xn2, hidden)?;
-            for i in 0..hidden {
-                x[i] += down[i];
-            }
+            self.add_normed_residual(&mut x, &down, layer.post_ffn_norm.as_deref())?;
+            self.apply_ple(&mut x, layer, li, ple_tok.as_deref(), hidden)?;
         }
         state.pos += 1;
         let xn = self.norm(&x, &self.weights.output_norm)?;
@@ -1542,6 +1880,9 @@ mod tests {
             .family("gemma/gemma-4-e2b-it")
             .build()
             .unwrap();
+        assert_eq!(s.config().sliding_window, Some(512));
+        assert_eq!(s.attn_window(AttnKind::Sliding), Some(512));
+        assert_eq!(s.attn_window(AttnKind::Full), None);
         let prompt = s.encode_text("hi");
         let gen = s
             .generate(
@@ -2940,5 +3281,264 @@ mod tests {
             .expect("HF-named qwen bundle should materialize");
         assert!(s.config().num_layers > 0);
         assert!(s.config().hidden_size > 0);
+    }
+
+    #[test]
+    fn gemma4_four_norm_ple_and_tied_embed_generate() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = 8usize;
+        let layers = 1usize;
+        let inter = 16usize;
+        let vocab = 16usize;
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let q_dim = n_heads * head_dim;
+        let k_dim = n_kv * head_dim;
+        let ple_d = 4usize;
+        let p = "model.language_model";
+
+        let mut tensors = serde_json::Map::new();
+        let mut bin = Vec::new();
+        let mut add_raw = |name: &str, shape: Vec<usize>, data: &[f32]| {
+            let offset = bin.len();
+            for &v in data {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+            let nbytes = data.len() * 4;
+            let mut meta = serde_json::Map::new();
+            meta.insert("kind".into(), json!("raw"));
+            meta.insert("dtype".into(), json!("f32"));
+            meta.insert("shape".into(), json!(shape));
+            meta.insert("offsets".into(), json!({ "data": [offset, nbytes] }));
+            tensors.insert(name.to_string(), Value::Object(meta));
+        };
+        let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
+        add_raw(
+            &format!("{p}.embed_tokens.weight"),
+            vec![vocab, hidden],
+            &emb,
+        );
+        let n1 = vec![1.0f32; hidden];
+        add_raw(
+            &format!("{p}.layers.0.input_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.post_attention_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.pre_feedforward_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.post_feedforward_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        let wq = vec![0.01f32; q_dim * hidden];
+        let wk = vec![0.01f32; k_dim * hidden];
+        let wv = vec![0.01f32; k_dim * hidden];
+        let wo = vec![0.01f32; hidden * q_dim];
+        add_raw(
+            &format!("{p}.layers.0.self_attn.q_proj.weight"),
+            vec![q_dim, hidden],
+            &wq,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.k_proj.weight"),
+            vec![k_dim, hidden],
+            &wk,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.v_proj.weight"),
+            vec![k_dim, hidden],
+            &wv,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.o_proj.weight"),
+            vec![hidden, q_dim],
+            &wo,
+        );
+        let g = vec![0.01f32; inter * hidden];
+        let d = vec![0.01f32; hidden * inter];
+        add_raw(
+            &format!("{p}.layers.0.mlp.gate_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.up_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.down_proj.weight"),
+            vec![hidden, inter],
+            &d,
+        );
+        let packed = layers * ple_d;
+        let ple_emb = vec![0.02f32; vocab * packed];
+        add_raw(
+            &format!("{p}.embed_tokens_per_layer.weight"),
+            vec![vocab, packed],
+            &ple_emb,
+        );
+        let ple_proj = vec![0.01f32; packed * hidden];
+        add_raw(
+            &format!("{p}.per_layer_model_projection.weight"),
+            vec![packed, hidden],
+            &ple_proj,
+        );
+        let ple_pn = vec![1.0f32; ple_d];
+        add_raw(
+            &format!("{p}.per_layer_projection_norm.weight"),
+            vec![ple_d],
+            &ple_pn,
+        );
+        let ple_gate = vec![0.01f32; ple_d * hidden];
+        let ple_out = vec![0.01f32; hidden * ple_d];
+        add_raw(
+            &format!("{p}.layers.0.per_layer_input_gate.weight"),
+            vec![ple_d, hidden],
+            &ple_gate,
+        );
+        add_raw(
+            &format!("{p}.layers.0.per_layer_projection.weight"),
+            vec![hidden, ple_d],
+            &ple_out,
+        );
+        add_raw(
+            &format!("{p}.layers.0.post_per_layer_input_norm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(&format!("{p}.norm.weight"), vec![hidden], &n1);
+        add_raw("lm_head.weight", vec![vocab, hidden], &emb);
+
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "test",
+            "group_size_default": 32,
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": layers,
+                "num_attention_heads": n_heads,
+                "num_kv_heads": n_kv,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 10000.0,
+                "hidden_act": "gelu_pytorch_tanh",
+                "tie_word_embeddings": true,
+                "layer_types": ["full_attention"]
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        assert!((s.embed_scale - (hidden as f32).sqrt()).abs() < 1e-5);
+        assert!(s.weights.ple.is_some());
+        assert!(s.weights.layers[0].post_attn_norm.is_some());
+        assert!(s.weights.layers[0].post_ffn_norm.is_some());
+        let prompt = vec![1u32, 2];
+        let batched = s
+            .generate(
+                &prompt,
+                &GenerateOpts {
+                    max_tokens: 3,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        let step = s
+            .generate(
+                &prompt,
+                &GenerateOpts {
+                    max_tokens: 3,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(batched.tokens, step.tokens);
+        assert_eq!(batched.tokens.len(), 3);
+        assert_eq!(s.config().sliding_window, Some(512));
+    }
+
+    #[test]
+    fn gemma4_sliding_window_config_and_generate() {
+        let dir_wide = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir_wide.path()).unwrap();
+        let dir_narrow = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir_narrow.path()).unwrap();
+        let patch = |path: &std::path::Path, window: usize| {
+            let cfg_path = path.join("config.json");
+            let raw = std::fs::read_to_string(&cfg_path).unwrap();
+            let mut cfg: Value = serde_json::from_str(&raw).unwrap();
+            cfg["model"]["sliding_window"] = json!(window);
+            cfg["model"]["layer_types"] = json!(["sliding_attention", "sliding_attention"]);
+            std::fs::write(&cfg_path, cfg.to_string()).unwrap();
+        };
+        patch(dir_wide.path(), 512);
+        patch(dir_narrow.path(), 1);
+        let wide = SessionBuilder::new()
+            .model(dir_wide.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        let mut narrow = SessionBuilder::new()
+            .model(dir_narrow.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        assert_eq!(wide.config().sliding_window, Some(512));
+        assert_eq!(narrow.config().sliding_window, Some(1));
+        assert_eq!(wide.attn_window(AttnKind::Sliding), Some(512));
+        assert_eq!(narrow.attn_window(AttnKind::Sliding), Some(1));
+        for layer in &narrow.weights.layers {
+            if let LayerOp::Attn(attn) = &layer.op {
+                assert_eq!(attn.kind, AttnKind::Sliding);
+            }
+        }
+        let prompt = vec![1u32, 2, 3, 4];
+        let gen = narrow
+            .generate(
+                &prompt,
+                &GenerateOpts {
+                    max_tokens: 3,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 3);
+
+        // Prefill window slice must match stepwise decode (same mask).
+        let mut incr = SessionBuilder::new()
+            .model(dir_narrow.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        let again = incr
+            .generate(
+                &prompt,
+                &GenerateOpts {
+                    max_tokens: 3,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(gen.tokens, again.tokens);
     }
 }

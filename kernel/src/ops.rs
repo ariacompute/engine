@@ -249,6 +249,50 @@ pub fn attention(
     n_kv_heads: usize,
     head_dim: usize,
 ) -> Result<Vec<f32>, EngineError> {
+    let scale = 1.0 / (head_dim as f32).sqrt();
+    attention_with_scale(q, k_cache, v_cache, n_heads, n_kv_heads, head_dim, scale)
+}
+
+fn sliding_kv_start(seq: usize, window: Option<usize>) -> usize {
+    match window {
+        Some(w) if w > 0 => seq.saturating_sub(w),
+        _ => 0,
+    }
+}
+
+/// Restrict KV to the last `window` tokens (HF sliding-window). `None` is a no-op.
+pub fn kv_sliding_view<'a>(
+    k_cache: &'a [f32],
+    v_cache: &'a [f32],
+    kv_dim: usize,
+    window: Option<usize>,
+) -> Result<(&'a [f32], &'a [f32]), EngineError> {
+    if kv_dim == 0
+        || k_cache.len() != v_cache.len()
+        || !k_cache.len().is_multiple_of(kv_dim)
+    {
+        return Err(EngineError::ShapeMismatch(
+            "sliding kv view shape".into(),
+        ));
+    }
+    let seq = k_cache.len() / kv_dim;
+    let start = sliding_kv_start(seq, window);
+    Ok((
+        &k_cache[start * kv_dim..],
+        &v_cache[start * kv_dim..],
+    ))
+}
+
+/// Causal attention with an explicit softmax scale (Gemma-4 uses `1.0` after QK-norm).
+pub fn attention_with_scale(
+    q: &[f32],
+    k_cache: &[f32],
+    v_cache: &[f32],
+    n_heads: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+    scale: f32,
+) -> Result<Vec<f32>, EngineError> {
     if n_heads == 0 || head_dim == 0 || n_kv_heads == 0 || !n_heads.is_multiple_of(n_kv_heads) {
         return Err(EngineError::ShapeMismatch(
             "attention invalid head configuration".into(),
@@ -265,7 +309,6 @@ pub fn attention(
     }
     let seq = k_cache.len() / kv_dim;
     let rep = n_heads / n_kv_heads;
-    let scale = 1.0 / (head_dim as f32).sqrt();
     let mut out = vec![0.0f32; n_heads * head_dim];
     for h in 0..n_heads {
         let kv_h = h / rep;
@@ -325,6 +368,47 @@ pub fn attention_causal(
             n_kv_heads,
             head_dim,
         )?;
+        out[tq * q_dim..(tq + 1) * q_dim].copy_from_slice(&attn);
+    }
+    Ok(out)
+}
+
+/// Prefill causal attention with an explicit softmax scale.
+/// `window` is the sliding-window length (`None` = full causal prefix).
+#[allow(clippy::too_many_arguments)]
+pub fn attention_causal_with_scale(
+    q: &[f32],
+    k_cache: &[f32],
+    v_cache: &[f32],
+    n_heads: usize,
+    n_kv_heads: usize,
+    head_dim: usize,
+    scale: f32,
+    window: Option<usize>,
+) -> Result<Vec<f32>, EngineError> {
+    let q_dim = n_heads * head_dim;
+    if q_dim == 0 || !q.len().is_multiple_of(q_dim) {
+        return Err(EngineError::ShapeMismatch("attention_causal q shape".into()));
+    }
+    let seq_q = q.len() / q_dim;
+    let kv_dim = n_kv_heads * head_dim;
+    if seq_q == 1 {
+        let (k, v) = kv_sliding_view(k_cache, v_cache, kv_dim, window)?;
+        return attention_with_scale(q, k, v, n_heads, n_kv_heads, head_dim, scale);
+    }
+    let seq_kv = k_cache.len() / kv_dim;
+    let causal = seq_q == seq_kv;
+    let mut out = vec![0.0f32; q.len()];
+    for tq in 0..seq_q {
+        let q_tok = &q[tq * q_dim..(tq + 1) * q_dim];
+        let k_end = if causal { tq + 1 } else { seq_kv };
+        let (k, v) = kv_sliding_view(
+            &k_cache[..k_end * kv_dim],
+            &v_cache[..k_end * kv_dim],
+            kv_dim,
+            window,
+        )?;
+        let attn = attention_with_scale(q_tok, k, v, n_heads, n_kv_heads, head_dim, scale)?;
         out[tq * q_dim..(tq + 1) * q_dim].copy_from_slice(&attn);
     }
     Ok(out)
@@ -622,6 +706,84 @@ pub fn rope_half(
     for h in 0..n_heads {
         let base = h * head_dim;
         for i in 0..half {
+            let freq = 1.0 / theta.powf((2 * i) as f32 / head_dim as f32);
+            let angle = pos as f32 * freq;
+            let (c, s) = (angle.cos(), angle.sin());
+            let u = x[base + i];
+            let v = x[base + i + half];
+            x[base + i] = u * c - v * s;
+            x[base + i + half] = u * s + v * c;
+        }
+    }
+    Ok(())
+}
+
+/// Rotate only the first `rotary_dim` dims of each head (`partial_rotary_factor`).
+pub fn rope_half_partial(
+    x: &mut [f32],
+    head_dim: usize,
+    rotary_dim: usize,
+    pos: usize,
+    theta: f32,
+) -> Result<(), EngineError> {
+    if rotary_dim == 0 || rotary_dim > head_dim || !rotary_dim.is_multiple_of(2) {
+        return Err(EngineError::ShapeMismatch(
+            "rope_half_partial rotary_dim must be positive even and <= head_dim".into(),
+        ));
+    }
+    if rotary_dim == head_dim {
+        return rope_half(x, head_dim, pos, theta);
+    }
+    if !x.len().is_multiple_of(head_dim) {
+        return Err(EngineError::ShapeMismatch(
+            "rope_half_partial x len not divisible by head_dim".into(),
+        ));
+    }
+    let n_heads = x.len() / head_dim;
+    for h in 0..n_heads {
+        let sl = &mut x[h * head_dim..h * head_dim + rotary_dim];
+        rope_half(sl, rotary_dim, pos, theta)?;
+    }
+    Ok(())
+}
+
+/// Gemma-4 global (p-RoPE): rotate the first `factor * head_dim/2` pairs of
+/// `rotate_half` layout; remaining pairs stay identity. Frequencies use the
+/// full `head_dim` denominator (not the rotated subset).
+pub fn rope_half_proportional(
+    x: &mut [f32],
+    head_dim: usize,
+    factor: f32,
+    pos: usize,
+    theta: f32,
+) -> Result<(), EngineError> {
+    if !(0.0..=1.0).contains(&factor) {
+        return Err(EngineError::ShapeMismatch(
+            "rope_half_proportional factor must be in [0, 1]".into(),
+        ));
+    }
+    if (factor - 1.0).abs() < 1e-6 {
+        return rope_half(x, head_dim, pos, theta);
+    }
+    if head_dim == 0 || !head_dim.is_multiple_of(2) {
+        return Err(EngineError::ShapeMismatch(
+            "rope_half_proportional head_dim must be positive even".into(),
+        ));
+    }
+    if !x.len().is_multiple_of(head_dim) {
+        return Err(EngineError::ShapeMismatch(
+            "rope_half_proportional x len not divisible by head_dim".into(),
+        ));
+    }
+    let half = head_dim / 2;
+    let rope_angles = (factor * head_dim as f32 / 2.0) as usize;
+    if rope_angles == 0 {
+        return Ok(());
+    }
+    let n_heads = x.len() / head_dim;
+    for h in 0..n_heads {
+        let base = h * head_dim;
+        for i in 0..rope_angles.min(half) {
             let freq = 1.0 / theta.powf((2 * i) as f32 / head_dim as f32);
             let angle = pos as f32 * freq;
             let (c, s) = (angle.cos(), angle.sin());
@@ -1193,6 +1355,40 @@ mod tests {
     }
 
     #[test]
+    fn rope_half_partial_full_matches_rope_half() {
+        let mut a = [1.0f32, 2.0, 3.0, 4.0];
+        let mut b = a;
+        rope_half(&mut a, 4, 2, 10000.0).unwrap();
+        rope_half_partial(&mut b, 4, 4, 2, 10000.0).unwrap();
+        for (x, y) in a.iter().zip(b.iter()) {
+            assert!((x - y).abs() < 1e-6);
+        }
+        let mut c = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let tail = [5.0f32, 6.0, 7.0, 8.0];
+        rope_half_partial(&mut c, 8, 4, 1, 10000.0).unwrap();
+        assert_eq!(&c[4..], &tail);
+    }
+
+    #[test]
+    fn rope_half_proportional_identity_tail() {
+        let mut full = [1.0f32, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+        let orig = full;
+        rope_half(&mut full, 8, 3, 10000.0).unwrap();
+        let mut prop = orig;
+        rope_half_proportional(&mut prop, 8, 1.0, 3, 10000.0).unwrap();
+        for (a, b) in full.iter().zip(prop.iter()) {
+            assert!((a - b).abs() < 1e-6);
+        }
+        let mut half = orig;
+        rope_half_proportional(&mut half, 8, 0.25, 3, 10000.0).unwrap();
+        // rope_angles = int(0.25 * 8 / 2) = 1: only pair (x0, x4) rotates.
+        assert!((half[0] - orig[0]).abs() > 1e-6);
+        assert!((half[4] - orig[4]).abs() > 1e-6);
+        assert_eq!(&half[1..4], &orig[1..4]);
+        assert_eq!(&half[5..], &orig[5..]);
+    }
+
+    #[test]
     fn hdm_linear_matches_unrotated_weight() {
         let out_f = 8usize;
         let in_f = 4usize;
@@ -1248,6 +1444,71 @@ mod tests {
         }
         for (a, b) in batched.iter().zip(step.iter()) {
             assert!((a - b).abs() < 1e-5, "{a} vs {b}");
+        }
+    }
+
+    #[test]
+    fn sliding_window_matches_truncated_kv() {
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let seq = 6usize;
+        let window = 2usize;
+        let q_dim = n_heads * head_dim;
+        let kv_dim = n_kv * head_dim;
+        let scale = 1.0 / (head_dim as f32).sqrt();
+        let q: Vec<f32> = (0..seq * q_dim).map(|i| (i as f32) * 0.01).collect();
+        let k: Vec<f32> = (0..seq * kv_dim).map(|i| (i as f32) * 0.02).collect();
+        let v: Vec<f32> = (0..seq * kv_dim).map(|i| (i as f32) * 0.03).collect();
+
+        let wide = attention_causal_with_scale(&q, &k, &v, n_heads, n_kv, head_dim, scale, None)
+            .unwrap();
+        let win = attention_causal_with_scale(
+            &q,
+            &k,
+            &v,
+            n_heads,
+            n_kv,
+            head_dim,
+            scale,
+            Some(window),
+        )
+        .unwrap();
+        // Early tokens have prefix shorter than window → identical to causal.
+        for i in 0..window * q_dim {
+            assert!((wide[i] - win[i]).abs() < 1e-6, "prefix {i}");
+        }
+        assert!(
+            wide.iter()
+                .zip(win.iter())
+                .any(|(a, b)| (a - b).abs() > 1e-5),
+            "window must change scores once seq > window"
+        );
+
+        let last_q = &q[(seq - 1) * q_dim..];
+        let start = seq - window;
+        let sliced = attention_with_scale(
+            last_q,
+            &k[start * kv_dim..],
+            &v[start * kv_dim..],
+            n_heads,
+            n_kv,
+            head_dim,
+            scale,
+        )
+        .unwrap();
+        let (k_win, v_win) = kv_sliding_view(&k, &v, kv_dim, Some(window)).unwrap();
+        let via_window =
+            attention_with_scale(last_q, k_win, v_win, n_heads, n_kv, head_dim, scale).unwrap();
+        for (a, b) in sliced.iter().zip(via_window.iter()) {
+            assert!((a - b).abs() < 1e-6, "{a} vs {b}");
+        }
+        let (k_noop, v_noop) = kv_sliding_view(&k, &v, kv_dim, Some(seq + 8)).unwrap();
+        let noop =
+            attention_with_scale(last_q, k_noop, v_noop, n_heads, n_kv, head_dim, scale).unwrap();
+        let full = attention_with_scale(last_q, &k, &v, n_heads, n_kv, head_dim, scale).unwrap();
+        for (a, b) in noop.iter().zip(full.iter()) {
+            assert!((a - b).abs() < 1e-6);
         }
     }
 

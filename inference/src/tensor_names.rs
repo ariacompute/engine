@@ -67,11 +67,72 @@ pub fn attn_norm_names(layer: usize) -> Vec<String> {
 pub fn ffn_norm_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.ffn_norm.weight")];
     // Gemma-2 / Gemma-3 / Gemma-4: dedicated pre-FFN norm first.
-    names.extend(with_layer_suffix(layer, "pre_feedforward_layernorm.weight"));
+    names.extend(pre_feedforward_norm_names(layer));
     // LLaMA / Qwen: post-attention = pre-FFN.
     names.extend(with_layer_suffix(layer, "post_attention_layernorm.weight"));
     // LFM2 dense / conv layers.
     names.extend(with_layer_suffix(layer, "ffn_norm.weight"));
+    names
+}
+
+/// Gemma-2+ dedicated pre-FFN norm (presence implies the 4-norm residual graph).
+pub fn pre_feedforward_norm_names(layer: usize) -> Vec<String> {
+    with_layer_suffix(layer, "pre_feedforward_layernorm.weight")
+}
+
+/// Gemma-2+ residual post-attn norm (not the LLaMA FFN norm alias).
+pub fn attn_post_norm_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.attn_post_norm.weight")];
+    names.extend(with_layer_suffix(layer, "post_attention_layernorm.weight"));
+    names
+}
+
+/// Gemma-2+ residual post-FFN norm.
+pub fn ffn_post_norm_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.ffn_post_norm.weight")];
+    names.extend(with_layer_suffix(layer, "post_feedforward_layernorm.weight"));
+    names
+}
+
+pub fn embed_per_layer_names() -> Vec<&'static str> {
+    vec![
+        "model.embed_tokens_per_layer.weight",
+        "model.language_model.embed_tokens_per_layer.weight",
+        "language_model.model.embed_tokens_per_layer.weight",
+    ]
+}
+
+pub fn per_layer_model_projection_names() -> Vec<&'static str> {
+    vec![
+        "model.per_layer_model_projection.weight",
+        "model.language_model.per_layer_model_projection.weight",
+        "language_model.model.per_layer_model_projection.weight",
+    ]
+}
+
+pub fn per_layer_projection_norm_names() -> Vec<&'static str> {
+    vec![
+        "model.per_layer_projection_norm.weight",
+        "model.language_model.per_layer_projection_norm.weight",
+        "language_model.model.per_layer_projection_norm.weight",
+    ]
+}
+
+pub fn layer_ple_gate_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.ple_gate.weight")];
+    names.extend(with_layer_suffix(layer, "per_layer_input_gate.weight"));
+    names
+}
+
+pub fn layer_ple_proj_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.ple_proj.weight")];
+    names.extend(with_layer_suffix(layer, "per_layer_projection.weight"));
+    names
+}
+
+pub fn layer_ple_post_norm_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.ple_post_norm.weight")];
+    names.extend(with_layer_suffix(layer, "post_per_layer_input_norm.weight"));
     names
 }
 
@@ -86,6 +147,13 @@ pub fn attn_k_norm_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.attn_k_norm.weight")];
     names.extend(with_layer_suffix(layer, "self_attn.k_norm.weight"));
     names.extend(with_layer_suffix(layer, "self_attn.key_layernorm.weight"));
+    names
+}
+
+pub fn attn_v_norm_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.attn_v_norm.weight")];
+    names.extend(with_layer_suffix(layer, "self_attn.v_norm.weight"));
+    names.extend(with_layer_suffix(layer, "self_attn.value_layernorm.weight"));
     names
 }
 
@@ -336,5 +404,16 @@ mod tests {
         assert!(emb_names().contains(&"model.language_model.embed_tokens.weight"));
         assert!(output_names().contains(&"lm_head.weight"));
         assert!(output_norm_names().contains(&"model.language_model.norm.weight"));
+        assert!(embed_per_layer_names()
+            .contains(&"model.language_model.embed_tokens_per_layer.weight"));
+        assert!(attn_post_norm_names(0)
+            .iter()
+            .any(|s| s == "model.layers.0.post_attention_layernorm.weight"));
+        assert!(ffn_post_norm_names(0)
+            .iter()
+            .any(|s| s.contains("post_feedforward_layernorm")));
+        assert!(layer_ple_gate_names(0)
+            .iter()
+            .any(|s| s.contains("per_layer_input_gate.weight")));
     }
 }

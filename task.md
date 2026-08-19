@@ -159,7 +159,8 @@
 ### T63 — Gemma 正确性
 - [x] GeGLU + RMSNorm `(1+w)` + 四 norm 别名；`ffn_norm` 优先 `pre_feedforward_layernorm`
 - [x] Gemma-4 KV **cache** 按 `num_kv_shared_layers` + `layer_types` 同类复用（不 clone `wk`/`wv`）
-- [ ] 滑动窗口 mask / 双 RoPE / PLE 仍未做
+- [x] Gemma-4 双 RoPE（sliding θ=1e4 / full p-RoPE θ=1e6）+ 四 norm + PLE + embed `sqrt(H)` + attn scale `1.0`
+- [x] 滑动窗口 mask（Gemma-4 `sliding_window=512`；只裁 attention，不裁共享 KV cache）
 
 ### T64 — QK-Norm
 - [x] 别名 + op；Qwen3 / Gemma / LFM attn 路径

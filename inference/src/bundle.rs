@@ -41,6 +41,9 @@ pub struct ModelConfig {
     /// LFM2 short-conv kernel / cache length (HF `conv_L_cache`, default 3).
     #[serde(default)]
     pub conv_l_cache: Option<usize>,
+    /// Sliding-window attention length (HF `sliding_window`). Gemma-4 default 512.
+    #[serde(default)]
+    pub sliding_window: Option<usize>,
 }
 
 fn default_rope() -> f32 {
