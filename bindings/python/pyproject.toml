@@ -13,3 +13,11 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["aria_engine*"]
+
+[tool.setuptools.package-data]
+aria_engine = ["lib/*.so", "lib/*.dylib", "lib/*.dll"]
+
+[tool.cibuildwheel]
+build = "cp310-* cp311-* cp312-* cp313-*"
+archs = ["auto"]
+test-command = "python -c \"from aria_engine import _load_lib; _load_lib(); print('ffi ok')\""

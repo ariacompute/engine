@@ -202,11 +202,6 @@ jobs:
           cargo publish -p aria-engine || echo "crates.io publish failed (fail-pass)"
       - name: PyPI aria-engine
         continue-on-error: true
-        env:
-          TWINE_USERNAME: __token__
-          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
-          cd bindings/python
-          pip install build twine || true
-          python -m build || true
-          twine upload dist/* || echo "PyPI publish failed (fail-pass)"
+          echo "PyPI publish handled by publish-pypi.yml (cibuildwheel platform wheels)"
+          echo "PyPI publish stub (fail-pass)"

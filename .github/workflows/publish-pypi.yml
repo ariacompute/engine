@@ -1,0 +1,81 @@
+name: Publish PyPI (aria-engine)
+
+# Build platform wheels via cibuildwheel (manylinux x86_64/aarch64, macOS
+# x86_64/arm64, Windows x86_64) and upload to PyPI as owner `ariacompute`.
+#
+# Secrets required:
+#   PYPI_TOKEN  — PyPI API token (project-scoped for aria-engine, Owner role)
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (default: tag with v stripped)"
+        required: false
+
+jobs:
+  build:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            arch: x86_64
+          - name: linux-aarch64
+            os: ubuntu-24.04-arm
+            arch: aarch64
+          - name: macos-x86_64
+            os: macos-13
+            arch: x86_64
+          - name: macos-arm64
+            os: macos-14
+            arch: arm64
+          - name: windows-x86_64
+            os: windows-latest
+            arch: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Inject version into pyproject.toml
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+          [ -n "$VERSION" ] || VERSION="0.0.0"
+          sed -i "s/^version = .*/version = \"$VERSION\"/" bindings/python/pyproject.toml
+          echo "Publishing version=$VERSION"
+      - uses: pypa/cibuildwheel@v2.23.2
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BEFORE_ALL: bash scripts/build-python-ffi.sh
+        with:
+          package-dir: bindings/python
+          output-dir: wheelhouse
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheel-${{ matrix.name }}
+          path: wheelhouse/*.whl
+
+  publish:
+    name: Upload to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Twine check + upload
+        env:
+          TWINE_USERNAME: __token__
+          TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
+        run: |
+          python -m pip install --upgrade pip twine
+          ls -la dist
+          twine check dist/*.whl
+          twine upload dist/*.whl

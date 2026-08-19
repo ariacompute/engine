@@ -4,14 +4,40 @@ from __future__ import annotations
 import ctypes
 import json
 import os
+import sys
 from ctypes import c_char_p, c_int, c_size_t, c_void_p, POINTER, c_ubyte
 from typing import Any, Optional
 
+__version__ = "0.1.0"
 
-def _load_lib():
-    path = os.environ.get("ARIA_FFI_LIB")
+_LIB_NAMES = {
+    "win32": "aria_ffi.dll",
+    "darwin": "libaria_ffi.dylib",
+}
+
+
+def _default_lib_path(package_dir: Optional[str] = None) -> Optional[str]:
+    """Locate the platform dynamic library bundled inside the wheel.
+
+    Wheels ship the FFI under ``aria_engine/lib/`` (built by
+    ``scripts/build-python-ffi.sh`` during cibuildwheel). Returns ``None``
+    when the library is not present (e.g. a source checkout).
+    """
+    pkg_dir = os.path.dirname(os.path.abspath(__file__)) if package_dir is None else package_dir
+    name = _LIB_NAMES.get(sys.platform, "libaria_ffi.so")
+    candidate = os.path.join(pkg_dir, "lib", name)
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _load_lib(path: Optional[str] = None):
+    """Resolve the FFI library: explicit path > ARIA_FFI_LIB env > bundled lib."""
     if not path:
-        raise RuntimeError("Set ARIA_FFI_LIB to libaria_ffi.so / .dylib / .dll")
+        path = os.environ.get("ARIA_FFI_LIB") or _default_lib_path()
+    if not path:
+        raise RuntimeError(
+            "Cannot locate libaria_ffi. Install the aria-engine wheel (bundles the "
+            "library) or set ARIA_FFI_LIB to libaria_ffi.so / .dylib / .dll"
+        )
     return ctypes.CDLL(path)
 
 

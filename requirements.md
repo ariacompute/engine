@@ -397,9 +397,10 @@ Report-only JSON（`GET /v1/engine/profile` 或 `scripts/profile_qwen3_serve.py`
 - [x] 验收门禁（`cargo test`、单测覆盖正常/异常）可接受
 - [x] §8 引擎对标评测（JSON+MD；aria/llamacpp/ollama/vllm；性能+质量；全家族；`bench/` Python）可接受
 - [x] §8.7 本机热点 profile（load/generate 分段；`--compute`；无 GPU skip）可接受
-- [ ] §3.7 SDK bindings（C ABI + 八语言；OpenAI FFI 面；host/device-farm 测；release.yml 多 registry 发布 fail-pass）可接受
+- [x] §3.7 SDK bindings（C ABI + 八语言；OpenAI FFI 面；host/device-farm 测；release.yml 多 registry 发布 fail-pass）可接受
+- [x] §3.7 PyPI 发布方案 B（cibuildwheel 多平台 wheel + 内嵌动态库 + `_load_lib` 回退 + `publish-pypi.yml`）可接受
 
-> **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。§3.7 SDK bindings 按 2026-08-15 计划实施。可据本 Spec 生成 / 执行 `task.md`。
+> **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。§3.7 SDK bindings 按 2026-08-15 计划实施。§3.7 PyPI 发布方案 B 经 2026-08-19 用户确认 **已通过（approved）**。可据本 Spec 生成 / 执行 `task.md`。
 
 ## 10. 参考
 

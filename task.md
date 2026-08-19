@@ -206,3 +206,14 @@
 
 ### T74 — 文档
 - [x] README / README_cn / AGENTS：`--compute`、`--profile`、H200 `--features` 说明
+
+## PyPI 发布（方案 B：cibuildwheel + auditwheel 多平台 wheel）
+
+### T75 — `aria-engine` PyPI 发布
+- [x] `bindings/python/pyproject.toml`：动态 version 注入点 + `[tool.cibuildwheel]` + `package-data` 含 `lib/*`；`setup.py` `BinaryDistribution` 强制平台 wheel tag
+- [x] `aria_engine/_load_lib()`：`ARIA_FFI_LIB` env → 包内 `aria_engine/lib/`（按平台 .so/.dylib/.dll）→ 报错提示；`__version__` 暴露
+- [x] `scripts/build-python-ffi.sh`：`cargo build --release -p aria-ffi` + 按平台拷贝动态库进 `aria_engine/lib/`
+- [x] `.github/workflows/publish-pypi.yml`：linux x86_64/aarch64（容器内 rustup + auditwheel）+ macos x86_64/arm64 + windows x86_64；版本 = tag 去 `v` sed 注入；`twine check` + `twine upload`（`PYPI_TOKEN`）
+- [x] 单测 `tests/test_load_lib.py`：env 优先 / 包内回退（三平台文件名）/ 缺失报错
+- [x] 文档：`bindings/python/README.md`（`pip install aria-engine` 即用）、AGENTS 命令、`.gitignore` 忽略 `aria_engine/lib/`
+- [x] 验证：本机 `cargo build -p aria-ffi` + `python -m build --wheel` 冒烟（wheel 含 .so + 平台 tag）、`unittest` 全绿、`cargo test` 不回归

@@ -38,9 +38,10 @@
 - `./scripts/run-binding-tests.sh`
 - `python -m unittest discover -s bench/tests -t .`
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`
+- `bash scripts/build-python-ffi.sh` + `cibuildwheel`（PyPI 平台 wheel 构建）
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8.7 profile、**§3.4 `compute=auto`**、§3.3.1）。`task.md` T50–T54 / T60–T69 主路径已落地；**T70–T74** 本机算力。DeltaNet GQA、完整 ViT 仍待。
+Spec 见 `requirements.md`（含 §8.7 profile、**§3.4 `compute=auto`**、§3.3.1、§3.7 PyPI 发布）。`task.md` T50–T54 / T60–T69 主路径已落地；T70–T74 本机算力；**T75** PyPI `aria-engine` 发布（cibuildwheel + `publish-pypi.yml`）。DeltaNet GQA、完整 ViT 仍待。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。
