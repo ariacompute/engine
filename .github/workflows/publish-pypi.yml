@@ -1,7 +1,9 @@
 name: Publish PyPI (aria-engine)
 
 # Build platform wheels via cibuildwheel (manylinux x86_64/aarch64, macOS
-# x86_64/arm64, Windows x86_64) and upload to PyPI as owner `ariacompute`.
+# arm64, Windows x86_64) and upload to PyPI as owner `ariacompute`.
+# Note: the macOS x86_64 wheel was dropped — macos-13 is the only GitHub
+# hosted Intel macOS runner and its queue can stall for hours in 2026.
 #
 # Secrets required:
 #   PYPI_TOKEN  — PyPI API token (project-scoped for aria-engine, Owner role)
@@ -29,9 +31,6 @@ jobs:
           - name: linux-aarch64
             os: ubuntu-24.04-arm
             arch: aarch64
-          - name: macos-x86_64
-            os: macos-13
-            arch: x86_64
           - name: macos-arm64
             os: macos-14
             arch: arm64
