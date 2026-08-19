@@ -1,4 +1,5 @@
 use crate::bundle::{load_bundle, Bundle, LoadedWeight};
+use crate::tokenizer::{decode_placeholders, BundleTokenizer};
 use crate::family::{graph_hook, require_runnable, ArchClass, Family};
 use crate::multimodal::asr_transcribe_pcm16le;
 use crate::tensor_names::{
@@ -155,6 +156,7 @@ pub struct Session {
     conf: crate::bundle::ModelConfig,
     use_gemma_norm: bool,
     use_geglu: bool,
+    tokenizer: Option<BundleTokenizer>,
 }
 
 impl std::fmt::Debug for Session {
@@ -197,6 +199,7 @@ impl SessionBuilder {
             .ok_or_else(|| EngineError::InvalidParam("model path required".into()))?;
         let bundle = load_bundle(&path)?;
         reject_unsupported_geometry(&bundle.model, family)?;
+        let tokenizer = BundleTokenizer::try_load(&path)?;
         let weights = materialize(&bundle)?;
         let conf = bundle.model.clone();
         let act = conf
@@ -213,6 +216,7 @@ impl SessionBuilder {
             conf,
             use_gemma_norm,
             use_geglu,
+            tokenizer,
         })
     }
 }
@@ -559,15 +563,20 @@ impl Session {
                 break;
             }
         }
-        let text = generated
-            .iter()
-            .map(|t| format!("<{t}>"))
-            .collect::<Vec<_>>()
-            .join("");
+        let text = self.decode_tokens(&generated);
         Ok(Generation {
             tokens: generated,
             text,
         })
+    }
+
+    /// Map token ids → UTF-8 via bundle `tokenizer.json` (byte-level when applicable).
+    /// Falls back to `<id>` placeholders when no sidecar is present.
+    pub fn decode_tokens(&self, ids: &[u32]) -> String {
+        match &self.tokenizer {
+            Some(tok) => tok.decode(ids),
+            None => decode_placeholders(ids),
+        }
     }
 
     /// Naive whitespace / char tokenizer for demos (no HF tokenizer required).

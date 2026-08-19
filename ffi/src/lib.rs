@@ -218,11 +218,9 @@ fn complete_inner(
     };
 
     if let Some(cb) = stream_cb {
-        for t in &gen.tokens {
-            let chunk = format!("<{t}>");
-            if let Ok(c) = CString::new(chunk) {
-                unsafe { cb(c.as_ptr(), user_data) };
-            }
+        // Stream decoded text (same as gen.text), not raw `<id>` placeholders.
+        if let Ok(c) = CString::new(gen.text.as_str()) {
+            unsafe { cb(c.as_ptr(), user_data) };
         }
     }
 

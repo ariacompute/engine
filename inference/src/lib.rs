@@ -7,6 +7,7 @@ pub mod multimodal;
 mod pack;
 mod session;
 mod tensor_names;
+mod tokenizer;
 
 pub use aria_kernel::EngineError;
 pub use bundle::{dequantize, load_bundle, Bundle, ModelConfig, QuantTensor, TensorData};
@@ -18,3 +19,4 @@ pub use multimodal::{action_head, asr_transcribe_pcm16le, rag_pack_context, visi
 pub use session::{
     confidence_from_logits, GenerateOpts, Generation, Session, SessionBuilder,
 };
+pub use tokenizer::{decode_placeholders, BundleTokenizer};
