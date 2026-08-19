@@ -35,9 +35,10 @@ jobs:
           - name: macos-arm64
             os: macos-14
             arch: arm64
-          - name: windows-x86_64
+          - name: windows-amd64
             os: windows-latest
-            arch: x86_64
+            # Windows accepts AMD64/ARM64/x86 only (x86_64 is a Linux alias)
+            arch: AMD64
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
@@ -45,9 +46,18 @@ jobs:
         shell: bash
         run: |
           VERSION="${{ inputs.version }}"
-          if [ -z "$VERSION" ]; then VERSION="${GITHUB_REF_NAME#v}"; fi
+          # release event: GITHUB_REF_NAME is the tag (e.g. v0.2.0 -> 0.2.0)
+          if [ -z "$VERSION" ] && [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          # manual dispatch without a version: fall back to the newest tag
+          if [ -z "$VERSION" ]; then
+            VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+          fi
           [ -n "$VERSION" ] || VERSION="0.0.0"
-          sed -i "s/^version = .*/version = \"$VERSION\"/" bindings/python/pyproject.toml
+          # -i.bak works on both GNU sed (linux/windows git-bash) and BSD sed (macOS)
+          sed -i.bak "s/^version = .*/version = \"$VERSION\"/" bindings/python/pyproject.toml
+          rm -f bindings/python/pyproject.toml.bak
           echo "Publishing version=$VERSION"
       - uses: pypa/cibuildwheel@v2.23.2
         env:
