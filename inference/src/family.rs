@@ -1,4 +1,5 @@
 use aria_kernel::EngineError;
+use std::path::Path;
 
 /// Delivery phase for a registered family (requirements §1.1).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -233,6 +234,45 @@ pub fn lookup_family(path: &str) -> Result<&'static FamilyEntry, EngineError> {
         .ok_or_else(|| EngineError::UnsupportedFamily(path.to_string()))
 }
 
+/// Map a bundle directory or `slug_q4` name onto a registry path.
+pub fn infer_family_path(hint: &str) -> Option<&'static str> {
+    let name = Path::new(hint)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or(hint);
+    let slug = strip_quant_suffix(name);
+    if slug.is_empty() {
+        return None;
+    }
+    if let Ok(e) = lookup_family(slug) {
+        return Some(e.path);
+    }
+    let mut best: Option<&'static str> = None;
+    let mut best_len = 0usize;
+    for e in FAMILY_REGISTRY {
+        let tail = e.path.rsplit('/').next().unwrap_or(e.path);
+        if slug == tail && tail.len() > best_len {
+            best = Some(e.path);
+            best_len = tail.len();
+        }
+    }
+    best
+}
+
+fn strip_quant_suffix(name: &str) -> &str {
+    let mut s = name;
+    if let Some(stripped) = s.strip_suffix("_tiny") {
+        s = stripped;
+    }
+    if let Some(idx) = s.rfind("_q") {
+        let suffix = &s[idx + 2..];
+        if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit() || c == '.') {
+            s = &s[..idx];
+        }
+    }
+    s
+}
+
 pub fn family_phase(path: &str) -> Result<FamilyPhase, EngineError> {
     Ok(lookup_family(path)?.phase)
 }
@@ -379,5 +419,22 @@ mod tests {
         assert_eq!(lookup_family("lfm/lfm2-8b-a1b").unwrap().arch, ArchClass::TextMoE);
         assert_eq!(lookup_family("lfm/lfm2-vl-450m").unwrap().arch, ArchClass::VL);
         assert_eq!(lookup_family("openvla/openvla-7b").unwrap().arch, ArchClass::VLA);
+    }
+
+    #[test]
+    fn infer_family_from_bundle_dirname() {
+        assert_eq!(
+            infer_family_path("qwen3-0.6b_q4"),
+            Some("qwen/qwen3-0.6b")
+        );
+        assert_eq!(
+            infer_family_path("/home/ubuntu/.ariacompute/models/qwen3-0.6b_q4"),
+            Some("qwen/qwen3-0.6b")
+        );
+        assert_eq!(
+            infer_family_path("gemma-4-e2b-it_q8"),
+            Some("gemma/gemma-4-e2b-it")
+        );
+        assert!(infer_family_path("totally-unknown_q4").is_none());
     }
 }

@@ -1,4 +1,5 @@
 use crate::bundle::{load_bundle, Bundle, LoadedWeight};
+use crate::chat::{apply_chat_template, ChatTurn};
 use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use crate::family::{graph_hook, require_runnable, ArchClass, Family};
 use crate::multimodal::asr_transcribe_pcm16le;
@@ -579,7 +580,8 @@ impl Session {
                 };
                 generated.push(next);
                 tokens.push(next);
-                if next == 0 {
+                if self.is_stop_id(next) {
+                    generated.pop();
                     break;
                 }
                 logits = self.forward_step(next)?;
@@ -612,6 +614,24 @@ impl Session {
                 Err(_) => encode_naive(text, self.conf.vocab_size as u32),
             },
             None => encode_naive(text, self.conf.vocab_size as u32),
+        }
+    }
+
+    /// Encode OpenAI-style messages with the family / tokenizer chat template.
+    pub fn encode_chat(&self, messages: &[ChatTurn]) -> Vec<u32> {
+        let family = self
+            .tokenizer
+            .as_ref()
+            .and_then(|t| t.chat_family_hint())
+            .unwrap_or(self.family.path());
+        let prompt = apply_chat_template(family, messages);
+        self.encode_text(&prompt)
+    }
+
+    fn is_stop_id(&self, id: u32) -> bool {
+        match &self.tokenizer {
+            Some(t) => t.is_stop(id),
+            None => id == 0,
         }
     }
 
@@ -1616,6 +1636,25 @@ mod tests {
     }
 
     #[test]
+    fn encode_chat_is_longer_than_raw_user_text() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let s = SessionBuilder::new()
+            .model(dir.path())
+            .family("qwen/qwen3-0.6b")
+            .build()
+            .unwrap();
+        let raw = s.encode_text("Hello");
+        let chat = s.encode_chat(&[ChatTurn::new("user", "Hello")]);
+        assert!(
+            chat.len() > raw.len(),
+            "chat template should wrap the user turn (raw={}, chat={})",
+            raw.len(),
+            chat.len()
+        );
+    }
+
+    #[test]
     fn incremental_decode_matches_full_recompute() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
@@ -1638,7 +1677,8 @@ mod tests {
             let next = argmax(&logits);
             full_tokens.push(next);
             prefix.push(next);
-            if next == 0 {
+            if s.is_stop_id(next) {
+                full_tokens.pop();
                 break;
             }
         }

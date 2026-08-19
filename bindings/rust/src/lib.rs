@@ -18,7 +18,8 @@ impl Engine {
     }
 
     pub fn complete(&mut self, prompt: &str, opts: &GenerateOpts) -> Result<Generation, aria_inference::EngineError> {
-        let tokens = self.session.encode_text(prompt);
+        let turns = [aria_inference::ChatTurn::new("user", prompt)];
+        let tokens = self.session.encode_chat(&turns);
         self.session.generate(&tokens, opts)
     }
 

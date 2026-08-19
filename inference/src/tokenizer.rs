@@ -8,20 +8,40 @@ use std::path::Path;
 use std::sync::Arc;
 use tokenizers::Tokenizer;
 
+const STOP_TOKEN_STRINGS: &[&str] = &[
+    "<|im_end|>",
+    "<|endoftext|>",
+    "<|eot_id|>",
+    "</s>",
+    "<end_of_turn>",
+    "<eos>",
+    "<|end|>",
+];
+
 #[derive(Clone)]
 pub struct BundleTokenizer {
     inner: Arc<Tokenizer>,
+    stop_ids: Vec<u32>,
 }
 
 impl std::fmt::Debug for BundleTokenizer {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("BundleTokenizer")
             .field("vocab_size", &self.inner.get_vocab_size(false))
+            .field("stop_ids", &self.stop_ids)
             .finish()
     }
 }
 
 impl BundleTokenizer {
+    fn wrap(tok: Tokenizer) -> Self {
+        let stop_ids = collect_stop_ids(&tok);
+        Self {
+            inner: Arc::new(tok),
+            stop_ids,
+        }
+    }
+
     /// Load from a bundle directory. Returns `Ok(None)` if no `tokenizer.json`.
     pub fn try_load(dir: &Path) -> Result<Option<Self>, EngineError> {
         let path = dir.join("tokenizer.json");
@@ -31,20 +51,16 @@ impl BundleTokenizer {
         let tok = Tokenizer::from_file(&path).map_err(|e| {
             EngineError::Format(format!("tokenizer.json load failed ({}): {e}", path.display()))
         })?;
-        Ok(Some(Self {
-            inner: Arc::new(tok),
-        }))
+        Ok(Some(Self::wrap(tok)))
     }
 
     pub fn from_tokenizer_json(raw: &str) -> Result<Self, EngineError> {
         let tok = Tokenizer::from_bytes(raw.as_bytes())
             .map_err(|e| EngineError::Format(format!("tokenizer.json parse failed: {e}")))?;
-        Ok(Self {
-            inner: Arc::new(tok),
-        })
+        Ok(Self::wrap(tok))
     }
 
-    /// Encode text → token ids (no special tokens added; chat templates stay caller-side).
+    /// Encode text → token ids (no extra specials; chat template is already in `text`).
     pub fn encode(&self, text: &str) -> Result<Vec<u32>, EngineError> {
         let enc = self
             .inner
@@ -64,6 +80,48 @@ impl BundleTokenizer {
             Err(_) => decode_placeholders(ids),
         }
     }
+
+    pub fn is_stop(&self, id: u32) -> bool {
+        self.stop_ids.contains(&id)
+    }
+
+    pub fn stop_ids(&self) -> &[u32] {
+        &self.stop_ids
+    }
+
+    pub fn has_token(&self, token: &str) -> bool {
+        self.inner.token_to_id(token).is_some()
+    }
+
+    /// Prefer tokenizer specials over a possibly-wrong Session family (serve used to
+    /// hardcode gemma even for Qwen bundles).
+    pub fn chat_family_hint(&self) -> Option<&'static str> {
+        if self.has_token("<|im_start|>") {
+            if self.has_token("<think>") {
+                Some("qwen/qwen3-0.6b")
+            } else {
+                Some("chatml")
+            }
+        } else if self.has_token("<start_of_turn>") {
+            Some("gemma/gemma-4-e2b-it")
+        } else if self.has_token("<|eot_id|>") {
+            Some("llama")
+        } else {
+            None
+        }
+    }
+}
+
+fn collect_stop_ids(tok: &Tokenizer) -> Vec<u32> {
+    let mut ids = Vec::new();
+    for name in STOP_TOKEN_STRINGS {
+        if let Some(id) = tok.token_to_id(name) {
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+    }
+    ids
 }
 
 /// Fallback when no tokenizer sidecar: stable `<id>` placeholders (legacy demos).
@@ -150,5 +208,26 @@ mod tests {
     fn naive_encode_fallback() {
         assert_eq!(encode_naive("AB", 256), vec![65, 66]);
         assert_eq!(encode_naive("", 16), vec![1]);
+    }
+
+    #[test]
+    fn stop_ids_from_added_tokens() {
+        let mut v: serde_json::Value = serde_json::from_str(&word_level_json()).unwrap();
+        v["added_tokens"]
+            .as_array_mut()
+            .unwrap()
+            .push(serde_json::json!({
+                "id": 3,
+                "content": "<|im_end|>",
+                "single_word": false,
+                "lstrip": false,
+                "rstrip": false,
+                "normalized": false,
+                "special": true
+            }));
+        v["model"]["vocab"]["<|im_end|>"] = serde_json::json!(3);
+        let tok = BundleTokenizer::from_tokenizer_json(&v.to_string()).unwrap();
+        assert!(tok.is_stop(3));
+        assert!(!tok.is_stop(0));
     }
 }

@@ -3,7 +3,7 @@
 #![allow(clippy::not_unsafe_ptr_arg_deref)] // C ABI: pointers are caller-owned
 #![allow(clippy::too_many_arguments)]
 
-use aria_inference::{GenerateOpts, Session, SessionBuilder};
+use aria_inference::{ChatTurn, GenerateOpts, Session, SessionBuilder};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 use std::ffi::{CStr, CString};
@@ -58,18 +58,26 @@ fn write_out(out: *mut c_char, out_len: usize, s: &str) -> c_int {
     0
 }
 
-fn parse_messages(messages_json: &str) -> Result<String, String> {
+fn parse_messages(messages_json: &str) -> Result<Vec<ChatTurn>, String> {
     let v: Value = serde_json::from_str(messages_json).map_err(|e| e.to_string())?;
     let arr = v
         .as_array()
         .ok_or_else(|| "messages must be a JSON array".to_string())?;
-    let mut parts = Vec::new();
+    let mut turns = Vec::new();
     for m in arr {
-        let role = m.get("role").and_then(|x| x.as_str()).unwrap_or("user");
-        let content = m.get("content").and_then(|x| x.as_str()).unwrap_or("");
-        parts.push(format!("{role}: {content}"));
+        let role = m
+            .get("role")
+            .and_then(|x| x.as_str())
+            .unwrap_or("user")
+            .to_string();
+        let content = m
+            .get("content")
+            .and_then(|x| x.as_str())
+            .unwrap_or("")
+            .to_string();
+        turns.push(ChatTurn { role, content });
     }
-    Ok(parts.join("\n"))
+    Ok(turns)
 }
 
 fn parse_options(options_json: Option<&str>) -> GenerateOpts {
@@ -192,7 +200,7 @@ fn complete_inner(
         }
     };
 
-    let prompt = match parse_messages(messages) {
+    let turns = match parse_messages(messages) {
         Ok(p) => p,
         Err(e) => {
             set_error(e);
@@ -208,7 +216,7 @@ fn complete_inner(
     };
     let opts = parse_options(options);
     let m = unsafe { &mut *model };
-    let tokens = m.session.encode_text(&prompt);
+    let tokens = m.session.encode_chat(&turns);
     let gen = match m.session.generate(&tokens, &opts) {
         Ok(g) => g,
         Err(e) => {

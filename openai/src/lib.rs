@@ -9,7 +9,9 @@ use aria_hybrid::{
     estimate_route_signals, CloudChatRequest, CloudClient, CloudMessage, ExecutionMode, RouteAction,
     RouteOutcome, RouteSignal, Router, CLOUD_GATEWAY_MODEL,
 };
-use aria_inference::{rag_pack_context, GenerateOpts, Session, SessionBuilder};
+use aria_inference::{
+    infer_family_path, rag_pack_context, ChatTurn, GenerateOpts, Session, SessionBuilder,
+};
 use aria_kernel::EngineError;
 use axum::extract::State;
 use axum::http::StatusCode;
@@ -375,7 +377,20 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                 .session
                 .lock()
                 .map_err(|e| EngineError::Io(e.to_string()))?;
-            let prompt = sess.encode_text(&prompt_text);
+            let mut turns: Vec<ChatTurn> = req
+                .messages
+                .iter()
+                .map(|m| ChatTurn {
+                    role: m.role.clone(),
+                    content: m.content.clone(),
+                })
+                .collect();
+            if turns.is_empty() {
+                turns.push(ChatTurn::new("user", prompt_text.clone()));
+            } else if let Some(last) = turns.iter_mut().rev().find(|t| t.role == "user") {
+                last.content = prompt_text.clone();
+            }
+            let prompt = sess.encode_chat(&turns);
             let gen = sess.generate(
                 &prompt,
                 &GenerateOpts {
@@ -484,7 +499,13 @@ pub fn build_state(
     router: Router,
     cloud: CloudClient,
 ) -> Result<AppState, EngineError> {
-    build_state_with_family(model_dir, "gemma/gemma-4-e2b-it", router, cloud)
+    let model_dir = model_dir.as_ref();
+    let family = model_dir
+        .file_name()
+        .and_then(|s| s.to_str())
+        .and_then(infer_family_path)
+        .unwrap_or("gemma/gemma-4-e2b-it");
+    build_state_with_family(model_dir, family, router, cloud)
 }
 
 pub fn build_state_with_family(
