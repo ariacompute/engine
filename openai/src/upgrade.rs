@@ -169,10 +169,18 @@ pub fn select_release<'a>(
     version: Option<&str>,
 ) -> io::Result<&'a ReleaseInfo> {
     match version {
-        None => releases
-            .iter()
-            .find(|r| !r.draft && !r.prerelease)
-            .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no stable release found")),
+        None => {
+            // Releases APIs do not guarantee semver order (Gitee often doesn't).
+            // Pick the highest stable (non-draft, non-prerelease) by semver.
+            releases
+                .iter()
+                .filter(|r| !r.draft && !r.prerelease)
+                .filter(|r| parse_semver(&r.tag).is_some())
+                .max_by_key(|r| parse_semver(&r.tag).unwrap_or((0, 0, 0)))
+                .ok_or_else(|| {
+                    io::Error::new(io::ErrorKind::NotFound, "no stable release found")
+                })
+        }
         Some(v) => {
             let want = normalize_tag(v);
             releases
@@ -186,6 +194,20 @@ pub fn select_release<'a>(
                 })
         }
     }
+}
+
+/// Parse `v1.2.3` / `1.2.3` / `1.2.3-rc1` → `(major, minor, patch)` from the numeric core.
+pub fn parse_semver(tag: &str) -> Option<(u64, u64, u64)> {
+    let s = strip_v(tag);
+    let core = s.split(['-', '+']).next().unwrap_or("");
+    if core.is_empty() {
+        return None;
+    }
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
 }
 
 pub fn normalize_tag(v: &str) -> String {
@@ -428,10 +450,23 @@ mod tests {
     use super::*;
 
     fn sample_releases() -> Vec<ReleaseInfo> {
+        // Deliberately unordered vs semver (mirrors Gitee listing quirks).
         vec![
             ReleaseInfo {
                 tag: "v0.8.0-rc1".into(),
                 prerelease: true,
+                draft: false,
+                assets: vec![],
+            },
+            ReleaseInfo {
+                tag: "v0.7.1".into(),
+                prerelease: false,
+                draft: false,
+                assets: vec![],
+            },
+            ReleaseInfo {
+                tag: "v0.8.0".into(),
+                prerelease: false,
                 draft: false,
                 assets: vec![],
             },
@@ -451,7 +486,7 @@ mod tests {
                 ],
             },
             ReleaseInfo {
-                tag: "v0.7.1".into(),
+                tag: "v0.9.1".into(),
                 prerelease: false,
                 draft: false,
                 assets: vec![],
@@ -463,7 +498,43 @@ mod tests {
     fn selects_latest_stable_skipping_prerelease() {
         let r = sample_releases();
         let got = select_release(&r, None).unwrap();
-        assert_eq!(got.tag, "v0.7.2");
+        assert_eq!(got.tag, "v0.9.1");
+    }
+
+    #[test]
+    fn selects_newest_by_semver_not_api_order() {
+        let r = vec![
+            ReleaseInfo {
+                tag: "v0.8.0".into(),
+                prerelease: false,
+                draft: false,
+                assets: vec![],
+            },
+            ReleaseInfo {
+                tag: "v0.9.1".into(),
+                prerelease: false,
+                draft: false,
+                assets: vec![],
+            },
+            ReleaseInfo {
+                tag: "v0.10.0".into(),
+                prerelease: false,
+                draft: false,
+                assets: vec![],
+            },
+        ];
+        // Oldest-first listing must still pick 0.10.0.
+        assert_eq!(select_release(&r, None).unwrap().tag, "v0.10.0");
+        let rev: Vec<_> = r.into_iter().rev().collect();
+        assert_eq!(select_release(&rev, None).unwrap().tag, "v0.10.0");
+    }
+
+    #[test]
+    fn parse_semver_core() {
+        assert_eq!(parse_semver("v0.9.1"), Some((0, 9, 1)));
+        assert_eq!(parse_semver("0.8.0"), Some((0, 8, 0)));
+        assert_eq!(parse_semver("v1.2.3-rc1"), Some((1, 2, 3)));
+        assert_eq!(parse_semver("not-a-version"), None);
     }
 
     #[test]
