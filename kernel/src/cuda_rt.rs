@@ -4,6 +4,7 @@ use crate::EngineError;
 use libloading::{Library, Symbol};
 use std::collections::HashMap;
 use std::ffi::{c_char, c_int, c_void, CStr};
+#[cfg(unix)]
 use std::path::Path;
 use std::sync::Mutex;
 
