@@ -27,8 +27,21 @@ fi
 
 echo "==> cargo $(cargo --version) (CARGO_TARGET_DIR=${CARGO_TARGET_DIR:-<default>})"
 
-# --- build the FFI cdylib ------------------------------------------------
-cargo build --release -p aria-ffi
+# --- refuse to build inside a musl (Alpine/musllinux) container ----------
+# musl targets default to crt-static, where rustc drops the cdylib crate
+# type, so no shared library is ever produced. musllinux wheels are disabled
+# (CIBW_SKIP=musllinux*); if this check trips the skip is not being applied.
+HOST_TRIPLE="$(rustc -vV | sed -n 's/^host: //p')"
+case "$HOST_TRIPLE" in
+  *-musl*)
+    echo "ERROR: rust host triple is '$HOST_TRIPLE' (musl)." >&2
+    echo "Rust drops the cdylib crate type on musl targets (crt-static default)," >&2
+    echo "so libaria_ffi.so cannot be produced here. musllinux wheels are" >&2
+    echo "disabled; make sure CIBW_SKIP=musllinux* is applied so only manylinux" >&2
+    echo "builds run." >&2
+    exit 1
+    ;;
+esac
 
 # --- locate the built library (CARGO_TARGET_DIR aware) ------------------
 case "$(uname -s)" in
@@ -36,6 +49,9 @@ case "$(uname -s)" in
   MINGW*|MSYS*|CYGWIN*) LIB="aria_ffi.dll";;
   *)               LIB="libaria_ffi.so";;
 esac
+
+# --- build the FFI cdylib ------------------------------------------------
+cargo build --release -p aria-ffi
 
 SRC=""
 for c in "target/release/$LIB" "${CARGO_TARGET_DIR:+$CARGO_TARGET_DIR/release/$LIB}"; do
