@@ -849,6 +849,7 @@ impl Session {
     }
 
     /// Full-sequence forward (allocates fresh caches). Used by tests / parity checks.
+    #[cfg(test)]
     fn forward(&self, tokens: &[u32]) -> Result<Vec<f32>, EngineError> {
         let mut state = self.fresh_decode_state();
         let mut logits = Vec::new();
