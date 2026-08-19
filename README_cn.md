@@ -162,6 +162,44 @@ python scripts/diag_qwen3_chat.py \
 
 引擎的教师信号是 **HF + reconstruct 注入**，不是裸 fp32。更多说明见 [`../model/README_cn.md`](../model/README_cn.md)（质量审计）。
 
+## Gemma-4 对话诊断
+
+当 `gemma-4-e2b-it_q4` 的 `/v1/chat/completions` 乱码（`engine.log` Hello → `"uhnyaчь…"` / `prompt_tokens: 28`），而同机 Qwen3 已正常时，用这一对脚本拆分。两侧共用 `gemma_it`（`<bos><start_of_turn>user…<start_of_turn>model\n`），默认 user `Hello`，greedy `max_tokens=32`。
+
+| 脚本 | 隔离什么 |
+|------|----------|
+| [`../model/scripts/diag_gemma4_chat.py`](../model/scripts/diag_gemma4_chat.py) | **量化 + 模板**：HF fp32 vs 把 `reconstruct_weight` 注入同一张 HF 图 |
+| [`scripts/diag_gemma4_chat.py`](scripts/diag_gemma4_chat.py) | **引擎图**：本服务 vs model 侧 JSON（`--peer-report`） |
+
+**1. model 教师**（并列的 `model` 仓库；建议 GPU）：
+
+```bash
+# 在 ../model
+pip install torch transformers
+python scripts/diag_gemma4_chat.py \
+  --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \
+  --hf google/gemma-4-E2B-it \
+  --device cuda \
+  --report ./out/model_diag_gemma4.json
+```
+
+**2. engine**（必须 `serve` **同一份** bundle，且不走云 handoff）：
+
+```bash
+# 在本仓库；用 --hybrid-execution device，避免 hybrid 掩盖本地 decode
+./aria-engine serve gemma-4-e2b-it_q4 \
+  --bind 127.0.0.1:8080 \
+  --hybrid-execution device \
+  --compute auto --profile
+python scripts/diag_gemma4_chat.py \
+  --url http://127.0.0.1:8080 \
+  --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \
+  --peer-report ../model/out/model_diag_gemma4.json \
+  --report ./out/engine_diag_gemma4.json
+```
+
+`hints` 读法与 Qwen3 相同（`TEMPLATE` / `QUANT` / `ENGINE_GRAPH`）。Hello 的 `prompt_tokens` 若对齐 `engine.log` 应为 **28**。
+
 ## 评测（Bench）
 
 ```bash

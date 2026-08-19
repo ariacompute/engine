@@ -162,6 +162,44 @@ python scripts/diag_qwen3_chat.py \
 
 Teacher for the engine is **HF + reconstruct inject**, not raw fp32. More detail: [`../model/README.md`](../model/README.md) (Quality audit).
 
+## Gemma-4 chat diagnostic
+
+Use this pair when `gemma-4-e2b-it_q4` `/v1/chat/completions` is garbage (engine.log Hello → `"uhnyaчь…"` / `prompt_tokens: 28`) while Qwen3 on the same host is fine. Both sides share `gemma_it` (`<bos><start_of_turn>user…<start_of_turn>model\n`), default user `Hello`, greedy `max_tokens=32`.
+
+| Script | What it isolates |
+|--------|------------------|
+| [`../model/scripts/diag_gemma4_chat.py`](../model/scripts/diag_gemma4_chat.py) | **Quant + template**: HF fp32 vs `reconstruct_weight` inject into the same HF graph |
+| [`scripts/diag_gemma4_chat.py`](scripts/diag_gemma4_chat.py) | **Engine graph**: this server vs the model JSON (`--peer-report`) |
+
+**1. Model teacher** (sibling `model` repo; GPU recommended):
+
+```bash
+# from ../model
+pip install torch transformers
+python scripts/diag_gemma4_chat.py \
+  --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \
+  --hf google/gemma-4-E2B-it \
+  --device cuda \
+  --report ./out/model_diag_gemma4.json
+```
+
+**2. Engine** (serve the **same** bundle, no cloud handoff):
+
+```bash
+# from this repo; keep --hybrid-execution device so hybrid cannot mask local decode
+./aria-engine serve gemma-4-e2b-it_q4 \
+  --bind 127.0.0.1:8080 \
+  --hybrid-execution device \
+  --compute auto --profile
+python scripts/diag_gemma4_chat.py \
+  --url http://127.0.0.1:8080 \
+  --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \
+  --peer-report ../model/out/model_diag_gemma4.json \
+  --report ./out/engine_diag_gemma4.json
+```
+
+Read `hints` like Qwen3 (`TEMPLATE` / `QUANT` / `ENGINE_GRAPH`). Hello `prompt_tokens` should stay **28** if encode matches `engine.log`.
+
 ## Bench
 
 ```bash
