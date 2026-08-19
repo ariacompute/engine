@@ -92,6 +92,57 @@ curl -s http://127.0.0.1:8080/v1/audio/transcriptions \
   -d '{"file_b64":"AAECAwQFBgc="}' | jq .
 ```
 
+## Qwen3 对话诊断
+
+当 `/v1/chat/completions` 乱码（例如 Hello → `"olum啦…"`）但同一份 Aria bundle 在 HF 上正常时，用这一对脚本拆分问题。两侧共用同一段 ChatML（`enable_thinking=False` / 空 `<think>`），默认 user `Hello`，greedy `max_tokens=32`。
+
+| 脚本 | 隔离什么 |
+|------|----------|
+| [`../model/scripts/diag_qwen3_chat.py`](../model/scripts/diag_qwen3_chat.py) | **量化 + 模板**：HF fp32 vs 把 `reconstruct_weight` 注入同一张 HF 图 |
+| [`scripts/diag_qwen3_chat.py`](scripts/diag_qwen3_chat.py) | **引擎图**：本服务 vs model 侧 JSON（`--peer-report`） |
+
+**1. model 教师**（并列的 `model` 仓库；建议 GPU；tokenizer 从 `--hf` 加载，不用 bundle 里的）：
+
+```bash
+# 在 ../model
+pip install torch transformers
+python scripts/diag_qwen3_chat.py \
+  --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
+  --hf Qwen/Qwen3-0.6B \
+  --device cuda \
+  --report ./out/model_diag_qwen3.json
+```
+
+`--device auto` 在有 CUDA 时选用 GPU。Attention 走 eager（关闭 hub CUDA JIT）。若仍编译失败：`sudo apt install python3-dev`。
+
+对照 `chat.fp32` 与 `chat.reconstruct`，以及 `template_string_match` / `prompt_ids_match`。若 reconstruct 已能打出类似 `"Hello! How can I assist you today?"` 且 `exact_prefix_len >= 4`，说明 **bundle 在 HF 上可用**，引擎乱码不是量化问题。
+
+**2. engine**（必须 `serve` **同一份** bundle，且不走云 handoff）：
+
+```bash
+# 在本仓库；用 --hybrid-execution device，避免 hybrid 掩盖本地 decode
+./aria-engine serve qwen3-0.6b_q4 \
+  --bind 127.0.0.1:8080 \
+  --hybrid-execution device
+python scripts/diag_qwen3_chat.py \
+  --url http://127.0.0.1:8080 \
+  --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
+  --peer-report ../model/out/model_diag_qwen3.json \
+  --report ./out/engine_diag_qwen3.json
+```
+
+`--timeout` 默认 300s（CPU decode 可能很慢）。可选 `pip install tokenizers`，以便用 `bundle/tokenizer.json` 编 prompt ids。
+
+**如何读 `hints`**
+
+| 现象 | 更可能的原因 |
+|------|----------------|
+| `template_string_match` / `prompt_ids_match` 为 false | ChatML / tokenizer 编码不一致 |
+| reconstruct greedy 已相对 fp32 发散（`QUANT:…`） | 码本 / Hadamard / 注入 |
+| reconstruct 对话正常，引擎 `content` 仍乱（`ENGINE_GRAPH`） | Rust 前向（HDM、embed 按行取值、RoPE、QK-norm 等） |
+
+引擎的教师信号是 **HF + reconstruct 注入**，不是裸 fp32。更多说明见 [`../model/README_cn.md`](../model/README_cn.md)（质量审计）。
+
 ## 评测（Bench）
 
 ```bash

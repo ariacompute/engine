@@ -92,6 +92,57 @@ curl -s http://127.0.0.1:8080/v1/audio/transcriptions \
   -d '{"file_b64":"AAECAwQFBgc="}' | jq .
 ```
 
+## Qwen3 chat diagnostic
+
+Use this pair when `/v1/chat/completions` looks like garbage (e.g. Hello → `"olum啦…"`) but the Aria bundle is fine under HF. Both sides share the same ChatML (`enable_thinking=False` / empty `<think>`), default user `Hello`, greedy `max_tokens=32`.
+
+| Script | What it isolates |
+|--------|------------------|
+| [`../model/scripts/diag_qwen3_chat.py`](../model/scripts/diag_qwen3_chat.py) | **Quant + template**: HF fp32 vs `reconstruct_weight` inject into the same HF graph |
+| [`scripts/diag_qwen3_chat.py`](scripts/diag_qwen3_chat.py) | **Engine graph**: this server vs the model JSON (`--peer-report`) |
+
+**1. Model teacher** (sibling `model` repo; GPU recommended; tokenizer from `--hf`, not the bundle):
+
+```bash
+# from ../model
+pip install torch transformers
+python scripts/diag_qwen3_chat.py \
+  --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
+  --hf Qwen/Qwen3-0.6B \
+  --device cuda \
+  --report ./out/model_diag_qwen3.json
+```
+
+`--device auto` picks CUDA when available. Attention is eager (no hub CUDA JIT). If compile still fails: `sudo apt install python3-dev`.
+
+Read `chat.fp32` vs `chat.reconstruct`, plus `template_string_match` / `prompt_ids_match`. A reconstruct greeting such as `"Hello! How can I assist you today?"` with `exact_prefix_len >= 4` means the **bundle is usable in HF**; leftover engine garbage is not a quant bug.
+
+**2. Engine** (serve the **same** bundle, no cloud handoff):
+
+```bash
+# from this repo; keep --hybrid-execution device so hybrid cannot mask local decode
+./aria-engine serve qwen3-0.6b_q4 \
+  --bind 127.0.0.1:8080 \
+  --hybrid-execution device
+python scripts/diag_qwen3_chat.py \
+  --url http://127.0.0.1:8080 \
+  --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
+  --peer-report ../model/out/model_diag_qwen3.json \
+  --report ./out/engine_diag_qwen3.json
+```
+
+`--timeout` defaults to 300s (CPU decode can be slow). Optional: `pip install tokenizers` so prompt ids are encoded from `bundle/tokenizer.json`.
+
+**How to read `hints`**
+
+| Observation | Likely cause |
+|-------------|--------------|
+| `template_string_match` / `prompt_ids_match` is false | ChatML / tokenizer encode drift |
+| reconstruct greedy already diverges from fp32 (`QUANT:…`) | codebook / Hadamard / inject |
+| reconstruct chat looks ok, engine `content` does not (`ENGINE_GRAPH`) | Rust forward (HDM, embed row gather, RoPE, QK-norm, …) |
+
+Teacher for the engine is **HF + reconstruct inject**, not raw fp32. More detail: [`../model/README.md`](../model/README.md) (Quality audit).
+
 ## Bench
 
 ```bash
