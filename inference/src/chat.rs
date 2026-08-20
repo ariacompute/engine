@@ -21,7 +21,9 @@ impl ChatTurn {
 /// Render messages with a generation prompt for the next assistant turn.
 pub fn apply_chat_template(family_path: &str, messages: &[ChatTurn]) -> String {
     let path = family_path.to_ascii_lowercase();
-    if path.contains("gemma") {
+    if path.contains("gemma-4") {
+        gemma4_it(messages)
+    } else if path.contains("gemma") {
         gemma_it(messages)
     } else if path.contains("llama") {
         llama3(messages)
@@ -63,7 +65,11 @@ fn qwen_chatml(messages: &[ChatTurn], empty_think: bool) -> String {
 
 /// Drop Qwen3 thinking and ChatML specials from decoded assistant text.
 pub fn strip_assistant_visible(raw: &str) -> String {
-    let mut s = raw.replace("<|im_end|>", "").replace("<|im_start|>", "");
+    let mut s = raw
+        .replace("<|im_end|>", "")
+        .replace("<|im_start|>", "")
+        .replace("<turn|>", "")
+        .replace("<|turn>", "");
     if let Some(idx) = s.rfind("</think>") {
         s = s[idx + "</think>".len()..].to_string();
     } else if let Some(idx) = s.find("<think>") {
@@ -90,6 +96,26 @@ fn gemma_it(messages: &[ChatTurn]) -> String {
         out.push_str("<end_of_turn>\n");
     }
     out.push_str("<start_of_turn>model\n");
+    out
+}
+
+/// Gemma-4-it: `<|turn>` / `<turn|>` (not Gemma-2/3 `<start_of_turn>`).
+/// HuggingFace `apply_chat_template` for google/gemma-4-E2B-it Hello is 10 ids;
+/// encoding the Gemma-3 markers fragments into 28 pieces and serve garbage.
+fn gemma4_it(messages: &[ChatTurn]) -> String {
+    let mut out = String::from("<bos>");
+    for m in messages {
+        let role = match map_role(&m.role) {
+            "assistant" => "model",
+            other => other,
+        };
+        out.push_str("<|turn>");
+        out.push_str(role);
+        out.push('\n');
+        out.push_str(&m.content);
+        out.push_str("<turn|>\n");
+    }
+    out.push_str("<|turn>model\n");
     out
 }
 
@@ -123,9 +149,18 @@ mod tests {
     }
 
     #[test]
-    fn gemma_uses_turn_markers() {
+    fn gemma4_uses_pipe_turn_markers() {
         let s = apply_chat_template(
             "gemma/gemma-4-e2b-it",
+            &[ChatTurn::new("user", "Hello")],
+        );
+        assert_eq!(s, "<bos><|turn>user\nHello<turn|>\n<|turn>model\n");
+    }
+
+    #[test]
+    fn gemma3_keeps_start_of_turn() {
+        let s = apply_chat_template(
+            "gemma/gemma-3-1b-it",
             &[ChatTurn::new("user", "Hi")],
         );
         assert!(s.contains("<start_of_turn>user\nHi<end_of_turn>"), "{s}");

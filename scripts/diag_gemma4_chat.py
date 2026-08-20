@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Diagnose aria-engine /v1/chat/completions for Gemma-4 (engine.log Hello garbage).
 
-Encodes the same gemma_it string the Rust session uses, POSTs the OpenAI chat
+Encodes the same gemma4_it string the Rust session uses, POSTs the OpenAI chat
 payload, and optionally diffs against model/scripts/diag_gemma4_chat.py JSON.
 
 engine.log (H200, gemma-4-e2b-it_q4, temperature 0, Hello): content garbage,
-prompt_tokens=28, completion_tokens=32.
+prompt_tokens=28 from the old <start_of_turn> markers (official template is 10).
 
 H200 example (from engine repo root):
 
@@ -27,9 +27,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-# Must match inference/src/chat.rs gemma_it (literal <bos> prefix).
+# Must match inference/src/chat.rs gemma4_it.
 def engine_gemma_it_template(user: str) -> str:
-    return f"<bos><start_of_turn>user\n{user}<end_of_turn>\n<start_of_turn>model\n"
+    return f"<bos><|turn>user\n{user}<turn|>\n<|turn>model\n"
 
 
 def _post_chat(url: str, user: str, max_tokens: int, timeout_s: float) -> dict:
@@ -188,10 +188,11 @@ def main() -> int:
     if (
         args.user == "Hello"
         and usage.get("prompt_tokens") is not None
-        and usage["prompt_tokens"] != 28
+        and usage["prompt_tokens"] != 10
     ):
         report["hints"].append(
-            f"API prompt_tokens={usage['prompt_tokens']} (engine.log Hello was 28)"
+            f"API prompt_tokens={usage['prompt_tokens']} "
+            "(HF Gemma-4 Hello template is 10 ids; old <start_of_turn> encode was 28)"
         )
 
     if args.peer_report:

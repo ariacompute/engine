@@ -21,7 +21,7 @@ use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use aria_kernel::{
     attention_causal_with_scale, attention_with_scale, gated_delta_step, geglu, gelu_pytorch_tanh,
     hdm_linear, kv_sliding_view, linear_cpu, moe_topk_route, resolve_compute, rms_norm,
-    rms_norm_gemma, rope_half, rope_half_proportional, short_conv_step, silu_vec, softplus, swiglu,
+    rms_norm_gemma, rope_half, rope_half_partial, short_conv_step, silu_vec, softplus, swiglu,
     ComputeBackend, ComputePref, CudaContext, EngineError, GatedDeltaStep,
 };
 use std::cell::RefCell;
@@ -1169,10 +1169,20 @@ impl Session {
 
     fn layer_rope_params(&self, kind: AttnKind) -> (f32, Option<f32>) {
         if self.use_gemma4 {
-            match kind {
-                AttnKind::Sliding => (10_000.0, None),
-                AttnKind::Full => (1_000_000.0, Some(0.25)),
-            }
+            let theta = match kind {
+                AttnKind::Sliding => 10_000.0,
+                AttnKind::Full => 1_000_000.0,
+            };
+            // HF Gemma4TextRotaryEmbedding uses full rotary unless the bundle
+            // sets partial_rotary_factor; hardcoding 0.25 garbled global layers.
+            let partial = match kind {
+                AttnKind::Full => self
+                    .conf
+                    .partial_rotary_factor
+                    .filter(|f| *f > 0.0 && *f < 1.0),
+                AttnKind::Sliding => None,
+            };
+            (theta, partial)
         } else {
             (self.conf.rope_theta, None)
         }
@@ -1186,7 +1196,9 @@ impl Session {
         proportional: Option<f32>,
     ) -> Result<(), EngineError> {
         if let Some(factor) = proportional {
-            rope_half_proportional(x, head_dim, factor, pos, theta)
+            let mut rotary_dim = ((head_dim as f32) * factor).round() as usize;
+            rotary_dim &= !1;
+            rope_half_partial(x, head_dim, rotary_dim, pos, theta)
         } else {
             rope_half(x, head_dim, pos, theta)
         }
@@ -1881,6 +1893,9 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(s.config().sliding_window, Some(512));
+        assert!(s.config().partial_rotary_factor.is_none());
+        assert_eq!(s.layer_rope_params(AttnKind::Full), (1_000_000.0, None));
+        assert_eq!(s.layer_rope_params(AttnKind::Sliding), (10_000.0, None));
         assert_eq!(s.attn_window(AttnKind::Sliding), Some(512));
         assert_eq!(s.attn_window(AttnKind::Full), None);
         let prompt = s.encode_text("hi");

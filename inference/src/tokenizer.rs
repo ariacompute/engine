@@ -14,6 +14,7 @@ const STOP_TOKEN_STRINGS: &[&str] = &[
     "<|eot_id|>",
     "</s>",
     "<end_of_turn>",
+    "<turn|>",
     "<eos>",
     "<|end|>",
 ];
@@ -102,8 +103,10 @@ impl BundleTokenizer {
             } else {
                 Some("chatml")
             }
-        } else if self.has_token("<start_of_turn>") {
+        } else if self.has_token("<|turn>") {
             Some("gemma/gemma-4-e2b-it")
+        } else if self.has_token("<start_of_turn>") {
+            Some("gemma/gemma-3-1b-it")
         } else if self.has_token("<|eot_id|>") {
             Some("llama")
         } else {

@@ -164,7 +164,7 @@ Teacher for the engine is **HF + reconstruct inject**, not raw fp32. More detail
 
 ## Gemma-4 chat diagnostic
 
-Use this pair when `gemma-4-e2b-it_q4` `/v1/chat/completions` is garbage (engine.log Hello → `"uhnyaчь…"` / `prompt_tokens: 28`) while Qwen3 on the same host is fine. Both sides share `gemma_it` (`<bos><start_of_turn>user…<start_of_turn>model\n`), default user `Hello`, greedy `max_tokens=32`.
+Use this pair when `gemma-4-e2b-it_q4` `/v1/chat/completions` is garbage (engine.log Hello → `"uhnyaчь…"`) while Qwen3 on the same host is fine. Both sides share `gemma4_it` (`<bos><|turn>user…<turn|>\n<|turn>model\n`), default user `Hello`, greedy `max_tokens=32`. Official Hello prompt is **10** tokens.
 
 | Script | What it isolates |
 |--------|------------------|
@@ -198,7 +198,7 @@ python scripts/diag_gemma4_chat.py \
   --report ./out/engine_diag_gemma4.json
 ```
 
-Read `hints` like Qwen3 (`TEMPLATE` / `QUANT` / `ENGINE_GRAPH`). Hello `prompt_tokens` should stay **28** if encode matches `engine.log`.
+Read `hints` like Qwen3 (`TEMPLATE` / `QUANT` / `ENGINE_GRAPH`). Hello `prompt_tokens` should be **10** with the Gemma-4 `<|turn>` template.
 
 ## Bench
 

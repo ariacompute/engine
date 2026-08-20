@@ -164,7 +164,7 @@ python scripts/diag_qwen3_chat.py \
 
 ## Gemma-4 对话诊断
 
-当 `gemma-4-e2b-it_q4` 的 `/v1/chat/completions` 乱码（`engine.log` Hello → `"uhnyaчь…"` / `prompt_tokens: 28`），而同机 Qwen3 已正常时，用这一对脚本拆分。两侧共用 `gemma_it`（`<bos><start_of_turn>user…<start_of_turn>model\n`），默认 user `Hello`，greedy `max_tokens=32`。
+当 `gemma-4-e2b-it_q4` 的 `/v1/chat/completions` 乱码（`engine.log` Hello → `"uhnyaчь…"`），而同机 Qwen3 已正常时，用这一对脚本拆分。两侧共用 `gemma4_it`（`<bos><|turn>user…<turn|>\n<|turn>model\n`），默认 user `Hello`，greedy `max_tokens=32`。官方 Hello prompt 为 **10** token。
 
 | 脚本 | 隔离什么 |
 |------|----------|
@@ -198,7 +198,7 @@ python scripts/diag_gemma4_chat.py \
   --report ./out/engine_diag_gemma4.json
 ```
 
-`hints` 读法与 Qwen3 相同（`TEMPLATE` / `QUANT` / `ENGINE_GRAPH`）。Hello 的 `prompt_tokens` 若对齐 `engine.log` 应为 **28**。
+`hints` 读法与 Qwen3 相同（`TEMPLATE` / `QUANT` / `ENGINE_GRAPH`）。Hello 的 `prompt_tokens` 在 Gemma-4 `<|turn>` 模板下应为 **10**。
 
 ## 评测（Bench）
 
