@@ -149,8 +149,8 @@ fn f16_bytes_to_f32(bytes: &[u8]) -> Result<Vec<f32>, EngineError> {
         return Err(EngineError::Format("f16 byte length odd".into()));
     }
     let mut out = Vec::with_capacity(bytes.len() / 2);
-    for c in bytes.chunks_exact(2) {
-        let h = f16::from_le_bytes([c[0], c[1]]);
+    for c in bytes.as_chunks::<2>().0 {
+        let h = f16::from_le_bytes(*c);
         out.push(h.to_f32());
     }
     Ok(out)
@@ -161,8 +161,8 @@ fn f32_bytes_to_f32(bytes: &[u8]) -> Result<Vec<f32>, EngineError> {
         return Err(EngineError::Format("f32 byte length not aligned".into()));
     }
     let mut out = Vec::with_capacity(bytes.len() / 4);
-    for c in bytes.chunks_exact(4) {
-        out.push(f32::from_le_bytes([c[0], c[1], c[2], c[3]]));
+    for c in bytes.as_chunks::<4>().0 {
+        out.push(f32::from_le_bytes(*c));
     }
     Ok(out)
 }
