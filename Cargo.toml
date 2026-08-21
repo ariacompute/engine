@@ -15,6 +15,7 @@ version = "0.1.0"
 edition = "2021"
 license = "MIT"
 authors = ["Aria Compute"]
+repository = "https://github.com/ariacompute/engine"
 
 [workspace.dependencies]
 thiserror = "2"
@@ -34,8 +35,8 @@ tempfile = "3"
 rayon = "1.10"
 libloading = "0.8"
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
-aria-kernel = { path = "kernel" }
-aria-graph = { path = "graph" }
-aria-inference = { path = "inference" }
-aria-hybrid = { path = "hybrid" }
-aria-ffi = { path = "ffi" }
+aria-kernel = { path = "kernel", version = "0.1.0" }
+aria-graph = { path = "graph", version = "0.1.0" }
+aria-inference = { path = "inference", version = "0.1.0" }
+aria-hybrid = { path = "hybrid", version = "0.1.0" }
+aria-ffi = { path = "ffi", version = "0.1.0" }

@@ -4,8 +4,8 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "== cargo test aria-ffi / aria-engine =="
-cargo test -p aria-ffi -p aria-engine
+echo "== cargo test aria-ffi / ariacompute-engine =="
+cargo test -p aria-ffi -p ariacompute-engine
 
 echo "== prepare fixture =="
 FIX="$ROOT/bindings/testdata/tiny-q4"

@@ -3,8 +3,8 @@ name = "aria-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "C ABI for Aria engine (cdylib/staticlib)"
-publish = false
 
 [lib]
 name = "aria_ffi"

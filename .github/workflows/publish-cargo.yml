@@ -1,0 +1,152 @@
+name: Publish crates.io (ariacompute-engine)
+
+# Publish the Rust SDK and its workspace closure to crates.io so consumers
+# can use:
+#   cargo add ariacompute-engine
+#   use aria_engine::{Engine, GenerateOpts};
+#
+# crates.io already has an unrelated crate named `aria-engine` (hyphens and
+# underscores are the same name), so the package is `ariacompute-engine`
+# with [lib] name = "aria_engine".
+#
+# Path+version workspace deps cannot be packaged until each dependency
+# exists on the registry, so crates are published in topological order
+# with retries for index lag and HTTP 429. An already-published version
+# is treated as success (resumable). Publish failures are otherwise hard
+# failures (no continue-on-error); bump the tag to re-release.
+#
+# Secrets required:
+#   CARGO_REGISTRY_TOKEN — crates.io API token with publish permission.
+#     The account that first publishes a crate name becomes its owner.
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (default: tag with v stripped)"
+        required: false
+
+jobs:
+  publish:
+    name: crates.io ariacompute-engine
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Resolve version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          # release event: GITHUB_REF_NAME is the tag (e.g. v0.2.0 -> 0.2.0)
+          if [ -z "$VERSION" ] && [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          # manual dispatch without a version: fall back to the newest tag
+          if [ -z "$VERSION" ]; then
+            VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+          fi
+          [ -n "$VERSION" ] || VERSION="0.0.0"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Publishing version=$VERSION"
+      - name: Inject version into workspace Cargo.toml
+        run: |
+          python3 - <<'PY'
+          import os, re, sys
+          version = os.environ["VERSION"]
+          path = "Cargo.toml"
+          text = open(path).read()
+          text, n = re.subn(
+              r'(\[workspace\.package\]\s*\nversion = )"[^"]+"',
+              rf'\1"{version}"',
+              text,
+              count=1,
+          )
+          if n != 1:
+              sys.exit(f"workspace.package version not found (n={n})")
+          text, n = re.subn(
+              r'(aria-(?:kernel|graph|inference|hybrid|ffi) = \{ path = "[^"]+", version = )"[^"]+"',
+              rf'\1"{version}"',
+              text,
+          )
+          if n != 5:
+              sys.exit(f"expected 5 path+version workspace deps, got {n}")
+          open(path, "w").write(text)
+          print(f"Injected workspace version={version}")
+          PY
+          grep -nE '^(version = |aria-(kernel|graph|inference|hybrid|ffi) = )' Cargo.toml
+      - name: Check crates.io token
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          if [ -z "$CARGO_REGISTRY_TOKEN" ]; then
+            echo "::error::CARGO_REGISTRY_TOKEN is empty. Create a crates.io API token and store it as a repo secret."
+            exit 1
+          fi
+      - name: Build publish closure
+        run: cargo check -p aria-kernel -p aria-graph -p aria-inference -p aria-ffi -p ariacompute-engine
+      - name: Publish to crates.io
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+
+          already_published() {
+            grep -qiE 'already exists|already been published|already uploaded' <<<"$1"
+          }
+
+          is_retryable() {
+            grep -qiE '429|too many requests|try again after|no matching package named|failed to get|timed out|timeout|unavailable' <<<"$1"
+          }
+
+          publish_pkg() {
+            local pkg="$1"
+            local attempt=0
+            local max=12
+            local sleep_s=20
+            while true; do
+              attempt=$((attempt + 1))
+              echo "::group::publish ${pkg} attempt ${attempt}"
+              local tmp
+              tmp="$(mktemp)"
+              extra=()
+              if [ "$attempt" -gt 1 ]; then
+                extra+=(--no-verify)
+              fi
+              set +e
+              cargo publish -p "$pkg" --allow-dirty "${extra[@]}" 2>&1 | tee "$tmp"
+              local status=${PIPESTATUS[0]}
+              set -e
+              local out
+              out="$(cat "$tmp")"
+              rm -f "$tmp"
+              echo "::endgroup::"
+              if [ "$status" -eq 0 ]; then
+                echo "Published $pkg ${VERSION}"
+                return 0
+              fi
+              if already_published "$out"; then
+                echo "$pkg ${VERSION} already on crates.io; skipping"
+                return 0
+              fi
+              if [ "$attempt" -ge "$max" ] || ! is_retryable "$out"; then
+                echo "::error::failed to publish $pkg after ${attempt} attempt(s)"
+                return 1
+              fi
+              echo "$pkg not ready (registry lag or rate limit); retry in ${sleep_s}s"
+              sleep "$sleep_s"
+              if grep -qiE '429|too many requests' <<<"$out"; then
+                sleep 40
+              fi
+            done
+          }
+
+          # Topological order: dependents need the previous crate on crates.io.
+          publish_pkg aria-kernel
+          publish_pkg aria-graph
+          publish_pkg aria-inference
+          publish_pkg aria-ffi
+          publish_pkg ariacompute-engine

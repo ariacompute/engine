@@ -3,6 +3,7 @@ name = "aria-inference"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Aria bundle load + session inference"
 
 [dependencies]

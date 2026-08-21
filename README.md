@@ -229,7 +229,7 @@ Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`.
 
 | Binding | Path | Registry |
 |---------|------|----------|
-| Rust | `bindings/rust` (`aria-engine`) | crates.io |
+| Rust | `bindings/rust` (`ariacompute-engine`) | crates.io |
 | Python | `bindings/python` | PyPI |
 | Go | `bindings/go` | Go module |
 | TypeScript | `bindings/typescript` | npm `@ariacompute/engine-ts` |
@@ -241,7 +241,7 @@ Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`.
 C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_complete` / stream, `aria_embed`, `aria_transcribe`, tools JSON, `aria_model_destroy`, `aria_last_error`.
 
 ```bash
-cargo test -p aria-ffi -p aria-engine
+cargo test -p aria-ffi -p ariacompute-engine
 ./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS)
 ```
 
@@ -342,10 +342,10 @@ func main() {
 }
 ```
 
-**Rust** (`aria-engine` crate — native API; does not require unpacking `libaria_ffi`):
+**Rust** (`ariacompute-engine` crate — native API; does not require unpacking `libaria_ffi`):
 
 ```bash
-cargo add aria-engine
+cargo add ariacompute-engine
 ```
 
 ```rust
@@ -366,7 +366,7 @@ More detail per language: `bindings/*/README.md`.
 
 ### Install from registries
 
-Cut a **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds CLI + `libaria_ffi` archives and attempts package publish (npm / pub.dev / Maven / CocoaPods / crates.io / PyPI). **Publish failures are fail-pass** and do not block CLI/`libaria_ffi` assets. Secrets: `NPM_TOKEN`, pub credentials, Maven + GPG, `COCOAPODS_TRUNK_TOKEN`, `CARGO_REGISTRY_TOKEN`, `PYPI_TOKEN`, plus `ARIACOMPUTE_TOKEN` for Release uploads.
+Cut a **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds CLI + `libaria_ffi` archives and attempts package publish (npm / pub.dev / Maven / CocoaPods / crates.io / PyPI). **Publish failures are fail-pass** and do not block CLI/`libaria_ffi` assets. crates.io (`ariacompute-engine`) is published by [`.github/workflows/publish-cargo.yml`](.github/workflows/publish-cargo.yml). Secrets: `NPM_TOKEN`, pub credentials, Maven + GPG, `COCOAPODS_TRUNK_TOKEN`, `CARGO_REGISTRY_TOKEN`, `PYPI_TOKEN`, plus `ARIACOMPUTE_TOKEN` for Release uploads.
 
 Version = release tag without leading `v`.
 

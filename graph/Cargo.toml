@@ -3,6 +3,7 @@ name = "aria-graph"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Aria zero-copy compute graph"
 
 [dependencies]

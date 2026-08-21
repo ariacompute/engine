@@ -3,7 +3,9 @@ name = "aria-hybrid"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Aria hybrid confidence router + cloud handoff"
+publish = false
 
 [dependencies]
 aria-kernel = { workspace = true }

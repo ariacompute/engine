@@ -3,7 +3,9 @@ name = "aria-openai"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "OpenAI-compatible HTTP API for Aria engine"
+publish = false
 
 [features]
 default = []

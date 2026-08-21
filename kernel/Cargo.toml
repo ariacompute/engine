@@ -3,6 +3,7 @@ name = "aria-kernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Aria engine SIMD / scalar kernels"
 
 [features]

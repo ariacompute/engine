@@ -229,7 +229,7 @@ python -m bench run \
 
 | Binding | 路径 | Registry |
 |---------|------|----------|
-| Rust | `bindings/rust`（`aria-engine`） | crates.io |
+| Rust | `bindings/rust`（`ariacompute-engine`） | crates.io |
 | Python | `bindings/python` | PyPI |
 | Go | `bindings/go` | Go module |
 | TypeScript | `bindings/typescript` | npm `@ariacompute/engine-ts` |
@@ -241,7 +241,7 @@ python -m bench run \
 C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`、`aria_complete` / stream、`aria_embed`、`aria_transcribe`、tools JSON、`aria_model_destroy`、`aria_last_error`。
 
 ```bash
-cargo test -p aria-ffi -p aria-engine
+cargo test -p aria-ffi -p ariacompute-engine
 ./scripts/run-binding-tests.sh   # 主机矩阵（Rust / Python / Go / TS）
 ```
 
@@ -342,10 +342,10 @@ func main() {
 }
 ```
 
-**Rust**（`aria-engine` crate — 原生 API；一般无需解压 `libaria_ffi`）：
+**Rust**（`ariacompute-engine` crate — 原生 API；一般无需解压 `libaria_ffi`）：
 
 ```bash
-cargo add aria-engine
+cargo add ariacompute-engine
 ```
 
 ```rust
@@ -366,7 +366,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### 从各 Registry 安装
 
-创建 **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) 构建 CLI + `libaria_ffi` 包并尝试发布语言包（npm / pub.dev / Maven / CocoaPods / crates.io / PyPI）。**发布失败为 fail-pass**，不阻塞 CLI / `libaria_ffi` 资产。所需 secrets：`NPM_TOKEN`、pub 凭证、Maven + GPG、`COCOAPODS_TRUNK_TOKEN`、`CARGO_REGISTRY_TOKEN`、`PYPI_TOKEN`，以及 Release 上传用的 `ARIACOMPUTE_TOKEN`。
+创建 **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) 构建 CLI + `libaria_ffi` 包并尝试发布语言包（npm / pub.dev / Maven / CocoaPods / crates.io / PyPI）。**发布失败为 fail-pass**，不阻塞 CLI / `libaria_ffi` 资产。crates.io（`ariacompute-engine`）由 [`.github/workflows/publish-cargo.yml`](.github/workflows/publish-cargo.yml) 发布。所需 secrets：`NPM_TOKEN`、pub 凭证、Maven + GPG、`COCOAPODS_TRUNK_TOKEN`、`CARGO_REGISTRY_TOKEN`、`PYPI_TOKEN`，以及 Release 上传用的 `ARIACOMPUTE_TOKEN`。
 
 版本 = release tag 去掉前导 `v`。
 

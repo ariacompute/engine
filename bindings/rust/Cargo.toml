@@ -1,13 +1,16 @@
 [package]
-name = "aria-engine"
+name = "ariacompute-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+repository.workspace = true
 description = "Rust SDK for Aria engine (thin wrapper over aria-inference / aria-ffi)"
-repository = "https://github.com/ariacompute/engine"
 readme = "README.md"
 keywords = ["aria", "llm", "inference"]
 categories = ["api-bindings"]
+
+[lib]
+name = "aria_engine"
 
 [dependencies]
 aria-inference = { workspace = true }
