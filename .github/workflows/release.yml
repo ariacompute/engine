@@ -162,22 +162,11 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION"
-      - name: npm @ariacompute/engine-ts
+      - name: npm @ariacompute/engine-ts + engine-rn
         continue-on-error: true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
-          cd bindings/typescript
-          npm version "${VERSION}" --no-git-tag-version || true
-          npm publish --access public || echo "npm engine-ts publish failed (fail-pass)"
-      - name: npm @ariacompute/engine-rn
-        continue-on-error: true
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
-        run: |
-          cd bindings/react-native
-          npm version "${VERSION}" --no-git-tag-version || true
-          npm publish --access public || echo "npm engine-rn publish failed (fail-pass)"
+          echo "npm publish handled by publish-npm.yml (engine-ts built via tsc, engine-rn plain JS)"
+          echo "npm publish stub (fail-pass)"
       - name: pub.dev Flutter
         continue-on-error: true
         run: |
