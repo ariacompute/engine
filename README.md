@@ -225,7 +225,7 @@ Override model ids with `--model-id family=path=id` or `backend:family=id`. Defa
 
 ## SDK Bindings
 
-Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`.
+Native C ABI (`ariacompute-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`.
 
 | Binding | Path | Registry |
 |---------|------|----------|
@@ -241,7 +241,7 @@ Native C ABI (`aria-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`.
 C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_complete` / stream, `aria_embed`, `aria_transcribe`, tools JSON, `aria_model_destroy`, `aria_last_error`.
 
 ```bash
-cargo test -p aria-ffi -p ariacompute-engine
+cargo test -p ariacompute-ffi -p ariacompute-engine
 ./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS)
 ```
 

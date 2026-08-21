@@ -8,7 +8,7 @@
 
 用 **Rust** 实现端侧推理引擎，消费 `model` 仓导出的 **Aria model bundle**，提供本地推理与 OpenAI 兼容 HTTP，并在置信度不足时路由至云端。
 
-- **五层产品面**：`openai` / `inference` / `graph` / `kernel` / `hybrid`（与仓库目录 1:1，Cargo workspace crate：`aria-openai` / `aria-inference` / `aria-graph` / `aria-kernel` / `aria-hybrid`）。
+- **五层产品面**：`openai` / `inference` / `graph` / `kernel` / `hybrid`（与仓库目录 1:1，Cargo workspace crate：`aria-openai` / `ariacompute-inference` / `ariacompute-graph` / `ariacompute-kernel` / `aria-hybrid`）。
 - **权重格式**：仅 `aria-quant-bundle`（`format_version: 1|2`）— `config.json` + `weight.bin` + tokenizer 侧车；**禁止**解析 / 导出 GGUF 与 Cactus 专有权重格式。
 - **位宽**：消费 `q1`–`q4` / `q8` / `q1.5` / `q2.54` / `q3.26`（与 `model` 产物一致）。
 - **模型覆盖**：§1.1 全部家族（与 `model/requirements.md` §1.1 对齐）。
@@ -82,19 +82,19 @@
 
 ## 3. API 边界
 
-### 3.1 `aria-kernel`
+### 3.1 `ariacompute-kernel`
 
 - `SimdMode::{Scalar, Neon, Avx2}`；测试可强制 Scalar。`ComputePref::{Auto, Cpu, Cuda}` → `ComputeBackend::{Cpu, Cuda}`。
 - 算子（至少）：`matmul`、`linear`（多线程 / AVX2）、`attention`（含 causal prefill）、`rms_norm`、`rope`、`softmax`、`swiglu`、`dequant_lookup` / `dequant_gemm`、`fwht`；可选运行时 cuBLAS `linear`。
 - 正常 + 维度不匹配异常路径单测；无 GPU 的 CI 不开 CUDA、不因缺卡失败。
 
-### 3.2 `aria-graph`
+### 3.2 `ariacompute-graph`
 
 - `Graph` / `Node` / `Op` / `TensorView` / `BufferPool` / `execute`。
 - `TensorView`：dtype、shape、strides、底层字节为 mmap 切片或外部借用（零拷贝）。
 - 支持将权重 blob 以 `external` 引用挂入图，禁止无谓 `memcpy`。
 
-### 3.3 `aria-inference`
+### 3.3 `ariacompute-inference`
 
 - `load_bundle(path) -> Result<Bundle, EngineError>`：校验 `format == "aria-quant-bundle"` 且 `format_version` ∈ `{1, 2}`。
 - `Session` / `SessionBuilder` / `GenerateOpts` / `generate`（prefill + decode）。
@@ -199,7 +199,7 @@
 
 ### 3.7 SDK / Bindings（C ABI）
 
-跨语言唯一契约为 **C ABI**（`aria-ffi`：`cdylib` + `staticlib`，头文件 `ffi/include/aria.h`）。禁止嵌入 Cactus C++（§2.1）；本仓自有 ABI 允许。
+跨语言唯一契约为 **C ABI**（`ariacompute-ffi`：`cdylib` + `staticlib`，头文件 `ffi/include/aria.h`）。禁止嵌入 Cactus C++（§2.1）；本仓自有 ABI 允许。
 
 **入口（OpenAI 面 parity）：**
 
@@ -212,9 +212,9 @@
 | `aria_transcribe(…, pcm, len, options_json, out)` | ASR |
 | `aria_model_destroy` / `aria_last_error` | 生命周期 / 错误 |
 
-**语言包：** Python、Go、Rust（`aria-engine`）、Swift、Kotlin、Flutter、React Native（npm `@ariacompute/engine-rn`）、TypeScript（npm `@ariacompute/engine-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
+**语言包：** Python、Go、Rust（`ariacompute-engine`）、Swift、Kotlin、Flutter、React Native（npm `@ariacompute/engine-rn`）、TypeScript（npm `@ariacompute/engine-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
 
-**测试：** 共享 `cases.json`（lifecycle / chat / stream / tools / embed / ASR）；`cargo test -p aria-ffi`；`./scripts/run-binding-tests.sh`。Flutter/RN：iOS+Android device-farm/emulator CI（`.github/workflows/bindings-mobile.yml`）。
+**测试：** 共享 `cases.json`（lifecycle / chat / stream / tools / embed / ASR）；`cargo test -p ariacompute-ffi`；`./scripts/run-binding-tests.sh`。Flutter/RN：iOS+Android device-farm/emulator CI（`.github/workflows/bindings-mobile.yml`）。
 
 **发布：** GitHub Release 触发 `release.yml`：CLI 资产 + 尝试发布 Maven / CocoaPods / npm / pub.dev / crates.io / PyPI；**publish fail-pass**（不阻断 CLI/资产上传）。版本 = tag 去 `v`。
 
@@ -307,9 +307,9 @@ engine/
   Cargo.toml              # workspace
   openai/                 # aria-openai
   hybrid/                 # aria-hybrid
-  inference/              # aria-inference
-  graph/                  # aria-graph
-  kernel/                 # aria-kernel
+  inference/              # ariacompute-inference
+  graph/                  # ariacompute-graph
+  kernel/                 # ariacompute-kernel
   bench/                  # Python 引擎对标评测（report-only）
 ```
 

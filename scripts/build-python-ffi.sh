@@ -51,7 +51,7 @@ case "$(uname -s)" in
 esac
 
 # --- build the FFI cdylib ------------------------------------------------
-cargo build --release -p aria-ffi
+cargo build --release -p ariacompute-ffi
 
 SRC=""
 for c in "target/release/$LIB" "${CARGO_TARGET_DIR:+$CARGO_TARGET_DIR/release/$LIB}"; do
@@ -65,7 +65,7 @@ if [ -z "$SRC" ]; then
   SRC="$(find . -maxdepth 4 -type f -name "$LIB" -path '*/release/*' 2>/dev/null | head -1 || true)"
 fi
 if [ -z "$SRC" ]; then
-  echo "ERROR: $LIB not found after 'cargo build --release -p aria-ffi'" >&2
+  echo "ERROR: $LIB not found after 'cargo build --release -p ariacompute-ffi'" >&2
   echo "--- target/release ---" >&2
   ls -la target/release 2>/dev/null | head -20 || true
   echo "--- found libs ---" >&2

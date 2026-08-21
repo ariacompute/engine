@@ -6,8 +6,9 @@ name: Publish crates.io (ariacompute-engine)
 #   use aria_engine::{Engine, GenerateOpts};
 #
 # crates.io already has an unrelated crate named `aria-engine` (hyphens and
-# underscores are the same name), so the package is `ariacompute-engine`
-# with [lib] name = "aria_engine".
+# underscores are the same name), so published packages use the
+# `ariacompute-*` prefix (`ariacompute-engine` / `-kernel` / `-graph` /
+# `-inference` / `-ffi`) with [lib] names `aria_*`.
 #
 # Path+version workspace deps cannot be packaged until each dependency
 # exists on the registry, so crates are published in topological order
@@ -68,7 +69,7 @@ jobs:
           if n != 1:
               sys.exit(f"workspace.package version not found (n={n})")
           text, n = re.subn(
-              r'(aria-(?:kernel|graph|inference|hybrid|ffi) = \{ path = "[^"]+", version = )"[^"]+"',
+              r'((?:ariacompute-(?:kernel|graph|inference|ffi)|aria-hybrid) = \{ path = "[^"]+", version = )"[^"]+"',
               rf'\1"{version}"',
               text,
           )
@@ -77,7 +78,7 @@ jobs:
           open(path, "w").write(text)
           print(f"Injected workspace version={version}")
           PY
-          grep -nE '^(version = |aria-(kernel|graph|inference|hybrid|ffi) = )' Cargo.toml
+          grep -nE '^(version = |ariacompute-(kernel|graph|inference|ffi) = |aria-hybrid = )' Cargo.toml
       - name: Check crates.io token
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -87,7 +88,7 @@ jobs:
             exit 1
           fi
       - name: Build publish closure
-        run: cargo check -p aria-kernel -p aria-graph -p aria-inference -p aria-ffi -p ariacompute-engine
+        run: cargo check -p ariacompute-kernel -p ariacompute-graph -p ariacompute-inference -p ariacompute-ffi -p ariacompute-engine
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -145,8 +146,8 @@ jobs:
           }
 
           # Topological order: dependents need the previous crate on crates.io.
-          publish_pkg aria-kernel
-          publish_pkg aria-graph
-          publish_pkg aria-inference
-          publish_pkg aria-ffi
+          publish_pkg ariacompute-kernel
+          publish_pkg ariacompute-graph
+          publish_pkg ariacompute-inference
+          publish_pkg ariacompute-ffi
           publish_pkg ariacompute-engine

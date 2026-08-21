@@ -1,6 +1,6 @@
 # ariacompute-engine (Rust)
 
-Thin SDK over `aria-inference` (and re-exports of `aria-ffi` for embedding tests).
+Thin SDK over `ariacompute-inference` (and re-exports of `ariacompute-ffi` for embedding tests).
 crates.io package name is `ariacompute-engine`; the Rust crate is still `aria_engine`.
 
 ```bash

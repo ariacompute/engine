@@ -225,7 +225,7 @@ python -m bench run \
 
 ## SDK Bindings
 
-原生 C ABI（`aria-ffi` / `libaria_ffi`）与 `bindings/` 下薄封装
+原生 C ABI（`ariacompute-ffi` / `libaria_ffi`）与 `bindings/` 下薄封装
 
 | Binding | 路径 | Registry |
 |---------|------|----------|
@@ -241,7 +241,7 @@ python -m bench run \
 C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`、`aria_complete` / stream、`aria_embed`、`aria_transcribe`、tools JSON、`aria_model_destroy`、`aria_last_error`。
 
 ```bash
-cargo test -p aria-ffi -p ariacompute-engine
+cargo test -p ariacompute-ffi -p ariacompute-engine
 ./scripts/run-binding-tests.sh   # 主机矩阵（Rust / Python / Go / TS）
 ```
 

@@ -41,28 +41,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "aria-ffi"
-version = "0.1.0"
-dependencies = [
- "aria-inference",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "aria-graph"
-version = "0.1.0"
-dependencies = [
- "aria-kernel",
- "tempfile",
-]
-
-[[package]]
 name = "aria-hybrid"
 version = "0.1.0"
 dependencies = [
- "aria-kernel",
+ "ariacompute-kernel",
  "reqwest",
  "serde",
  "serde_json",
@@ -70,37 +52,12 @@ dependencies = [
 ]
 
 [[package]]
-name = "aria-inference"
-version = "0.1.0"
-dependencies = [
- "aria-graph",
- "aria-kernel",
- "half",
- "memmap2",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.19",
- "tokenizers",
-]
-
-[[package]]
-name = "aria-kernel"
-version = "0.1.0"
-dependencies = [
- "libloading",
- "rayon",
- "tempfile",
- "thiserror 2.0.19",
-]
-
-[[package]]
 name = "aria-openai"
 version = "0.1.0"
 dependencies = [
  "aria-hybrid",
- "aria-inference",
- "aria-kernel",
+ "ariacompute-inference",
+ "ariacompute-kernel",
  "axum",
  "bytes",
  "dirs",
@@ -124,10 +81,53 @@ dependencies = [
 name = "ariacompute-engine"
 version = "0.1.0"
 dependencies = [
- "aria-ffi",
- "aria-inference",
+ "ariacompute-ffi",
+ "ariacompute-inference",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "ariacompute-ffi"
+version = "0.1.0"
+dependencies = [
+ "ariacompute-inference",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "ariacompute-graph"
+version = "0.1.0"
+dependencies = [
+ "ariacompute-kernel",
+ "tempfile",
+]
+
+[[package]]
+name = "ariacompute-inference"
+version = "0.1.0"
+dependencies = [
+ "ariacompute-graph",
+ "ariacompute-kernel",
+ "half",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokenizers",
+]
+
+[[package]]
+name = "ariacompute-kernel"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "rayon",
+ "tempfile",
+ "thiserror 2.0.19",
 ]
 
 [[package]]

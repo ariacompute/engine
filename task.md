@@ -5,23 +5,23 @@
 ## 阶段 A（MVP）
 
 ### T0 — Workspace 脚手架
-- [x] 根 `Cargo.toml` workspace；五 crate：`aria-kernel` / `aria-graph` / `aria-inference` / `aria-hybrid` / `aria-openai`
-- [x] 共享 `EngineError`（`aria-kernel`）
+- [x] 根 `Cargo.toml` workspace；五 crate：`ariacompute-kernel` / `ariacompute-graph` / `ariacompute-inference` / `aria-hybrid` / `aria-openai`
+- [x] 共享 `EngineError`（`ariacompute-kernel`）
 - [x] `cargo build` / `cargo test` 可运行
 - [x] 更新 `README.md` 指向 AGENTS / requirements / 常用命令
 
-### T1 — `aria-kernel`（scalar + NEON 入口）
+### T1 — `ariacompute-kernel`（scalar + NEON 入口）
 - [x] `SimdMode::{Scalar, Neon}`
 - [x] `matmul` / `rms_norm` / `softmax` / `rope` / `attention` / `swiglu` / `fwht` / `dequant_lookup`
 - [x] 正常 + `ShapeMismatch` 单测；测试强制 Scalar
 
-### T2 — `aria-graph`
+### T2 — `ariacompute-graph`
 - [x] `TensorView` / `BufferPool` / `Graph` / `Op` / `execute`
 - [x] external / mmap 视图（零拷贝借用）
 - [x] HDM 融合 op 调度（`HdmLinear` → linear）
 - [x] 单测：dispatch + 维度错误
 
-### T3 — `aria-inference`（bundle + session + 家族）
+### T3 — `ariacompute-inference`（bundle + session + 家族）
 - [x] `load_bundle`：`aria-quant-bundle` v1|v2；mmap `weight.bin`；codebook/raw
 - [x] LSB unpack 1–4 / u8 for 8；`dequantize` rotated-space
 - [x] §1.1 `Family` 注册表完整；非阶段 A → `UnsupportedFamily`
@@ -104,9 +104,9 @@
 ### T40 — Spec
 - [x] `requirements.md` §3.7；本文件 T40–T48；`AGENTS.md` 目录 / 命令
 
-### T41 — `aria-ffi`
+### T41 — `ariacompute-ffi`
 - [x] C ABI：init / complete / stream / embed / transcribe / destroy / last_error
-- [x] `ffi/include/aria.h`；`cargo test -p aria-ffi`
+- [x] `ffi/include/aria.h`；`cargo test -p ariacompute-ffi`
 
 ### T42 — Language scaffolds
 - [x] `bindings/{python,go,rust,swift,kotlin,flutter,react-native,typescript}`
@@ -212,11 +212,11 @@
 ### T75 — `aria-engine` PyPI 发布
 - [x] `bindings/python/pyproject.toml`：动态 version 注入点 + `[tool.cibuildwheel]` + `package-data` 含 `lib/*`；`setup.py` `BinaryDistribution` 强制平台 wheel tag
 - [x] `aria_engine/_load_lib()`：`ARIA_FFI_LIB` env → 包内 `aria_engine/lib/`（按平台 .so/.dylib/.dll）→ 报错提示；`__version__` 暴露
-- [x] `scripts/build-python-ffi.sh`：`cargo build --release -p aria-ffi` + 按平台拷贝动态库进 `aria_engine/lib/`
+- [x] `scripts/build-python-ffi.sh`：`cargo build --release -p ariacompute-ffi` + 按平台拷贝动态库进 `aria_engine/lib/`
 - [x] `.github/workflows/publish-pypi.yml`：linux x86_64/aarch64（容器内 rustup + auditwheel）+ macos x86_64/arm64 + windows x86_64；版本 = tag 去 `v` sed 注入；`twine check` + `twine upload`（`PYPI_TOKEN`）
 - [x] 单测 `tests/test_load_lib.py`：env 优先 / 包内回退（三平台文件名）/ 缺失报错
 - [x] 文档：`bindings/python/README.md`（`pip install aria-engine` 即用）、AGENTS 命令、`.gitignore` 忽略 `aria_engine/lib/`
-- [x] 验证：本机 `cargo build -p aria-ffi` + `python -m build --wheel` 冒烟（wheel 含 .so + 平台 tag）、`unittest` 全绿、`cargo test` 不回归
+- [x] 验证：本机 `cargo build -p ariacompute-ffi` + `python -m build --wheel` 冒烟（wheel 含 .so + 平台 tag）、`unittest` 全绿、`cargo test` 不回归
 
 ## Hybrid P2：规则路由层 + 语义路由层（requirements §3.5 P2，2026-08-21 审核通过）
 

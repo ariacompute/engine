@@ -24,8 +24,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build aria-ffi (host)
-        run: cargo build -p aria-ffi
+      - name: Build ariacompute-ffi (host)
+        run: cargo build -p ariacompute-ffi
       - name: Note
         run: |
           echo "Cross-compile android-arm64 libaria_ffi + install Flutter/RN example apps on emulator."
@@ -39,8 +39,8 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build aria-ffi (host)
-        run: cargo build -p aria-ffi
+      - name: Build ariacompute-ffi (host)
+        run: cargo build -p ariacompute-ffi
       - name: Note
         run: |
           echo "Cross-compile ios-arm64/sim libaria_ffi + run Flutter/RN example on Simulator."

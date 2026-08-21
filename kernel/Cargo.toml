@@ -1,10 +1,13 @@
 [package]
-name = "aria-kernel"
+name = "ariacompute-kernel"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Aria engine SIMD / scalar kernels"
+
+[lib]
+name = "aria_kernel"
 
 [features]
 default = []

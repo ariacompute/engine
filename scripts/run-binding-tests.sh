@@ -4,14 +4,14 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "== cargo test aria-ffi / ariacompute-engine =="
-cargo test -p aria-ffi -p ariacompute-engine
+echo "== cargo test ariacompute-ffi / ariacompute-engine =="
+cargo test -p ariacompute-ffi -p ariacompute-engine
 
 echo "== prepare fixture =="
 FIX="$ROOT/bindings/testdata/tiny-q4"
 mkdir -p "$FIX"
-cargo run -q -p aria-ffi --example write_fixture -- "$FIX"
-cargo build -q -p aria-ffi
+cargo run -q -p ariacompute-ffi --example write_fixture -- "$FIX"
+cargo build -q -p ariacompute-ffi
 
 export ARIA_BUNDLE="$FIX"
 export ARIA_INCLUDE="$ROOT/ffi/include"

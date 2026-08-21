@@ -9,15 +9,15 @@ publish = false
 
 [features]
 default = []
-cuda = ["aria-kernel/cuda"]
+cuda = ["ariacompute-kernel/cuda"]
 
 [[bin]]
 name = "aria-engine"
 path = "src/main.rs"
 
 [dependencies]
-aria-kernel = { workspace = true }
-aria-inference = { workspace = true }
+ariacompute-kernel = { workspace = true }
+ariacompute-inference = { workspace = true }
 aria-hybrid = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }

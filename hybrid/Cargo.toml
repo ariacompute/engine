@@ -8,7 +8,7 @@ description = "Aria hybrid confidence router + cloud handoff"
 publish = false
 
 [dependencies]
-aria-kernel = { workspace = true }
+ariacompute-kernel = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 reqwest = { workspace = true }

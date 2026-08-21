@@ -1,13 +1,16 @@
 [package]
-name = "aria-graph"
+name = "ariacompute-graph"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 description = "Aria zero-copy compute graph"
 
+[lib]
+name = "aria_graph"
+
 [dependencies]
-aria-kernel = { workspace = true }
+ariacompute-kernel = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

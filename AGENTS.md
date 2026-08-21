@@ -17,10 +17,10 @@
 ## 目录
 - `openai/`：`aria-openai` — HTTP（chat / audio·embeddings·tools）
 - `hybrid/`：`aria-hybrid` — 信号→投影→决策、Pareto 模式、会话粘性、`cloud_handoff`、Outcome；P2 两层路由（`rules` 快路径 + `semantic` 慢路径 + `health` 回退链）
-- `inference/`：`aria-inference` — Bundle 加载、Prefill/Decode、家族注册表
-- `graph/`：`aria-graph` — Op DAG、BufferPool、mmap / external 零拷贝
-- `kernel/`：`aria-kernel` — matmul / attention / norm / RoPE / dequant / FWHT / CUDA GEMM
-- `ffi/`：`aria-ffi` — C ABI（cdylib/staticlib）；`bindings/` 八语言 SDK
+- `inference/`：`ariacompute-inference` — Bundle 加载、Prefill/Decode、家族注册表
+- `graph/`：`ariacompute-graph` — Op DAG、BufferPool、mmap / external 零拷贝
+- `kernel/`：`ariacompute-kernel` — matmul / attention / norm / RoPE / dequant / FWHT / CUDA GEMM
+- `ffi/`：`ariacompute-ffi` — C ABI（cdylib/staticlib）；`bindings/` 八语言 SDK
 - `bench/`：Python 引擎对标评测（§1.1 全家族；性能+质量；JSON+MD）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
 
