@@ -2065,10 +2065,8 @@ mod tests {
         assert_eq!(s.config().head_dim, Some(16));
         assert_eq!(s.config().global_head_dim, Some(16));
         assert_eq!(
-            s.config().layer_types.as_ref().map(|v| v.as_slice()),
-            Some(
-                ["full_attention".to_string(), "full_attention".to_string()].as_slice()
-            )
+            s.config().layer_types,
+            Some(vec!["full_attention".into(), "full_attention".into()])
         );
         assert_eq!(
             s.layer_rope_params(AttnKind::Full),
