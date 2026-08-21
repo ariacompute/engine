@@ -21,7 +21,7 @@ use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use aria_kernel::{
     attention_causal_with_scale, attention_with_scale, gated_delta_step, geglu, gelu_pytorch_tanh,
     hdm_linear, kv_sliding_view, linear_cpu, moe_topk_route, resolve_compute, rms_norm,
-    rms_norm_gemma, rope_half, rope_half_partial, short_conv_step, silu_vec, softplus, swiglu,
+    rms_norm_gemma, rope_half, rope_half_proportional, short_conv_step, silu_vec, softplus, swiglu,
     ComputeBackend, ComputePref, CudaContext, EngineError, GatedDeltaStep,
 };
 use std::cell::RefCell;
@@ -296,6 +296,13 @@ impl SessionBuilder {
         }
         if use_gemma4 && conf.sliding_window.unwrap_or(0) == 0 {
             conf.sliding_window = Some(512);
+        }
+        if use_gemma4 && conf.partial_rotary_factor.is_none() {
+            // HF Gemma4TextConfig: full_attention rope_type=proportional, factor=0.25.
+            conf.partial_rotary_factor = Some(0.25);
+        }
+        if use_gemma4 && conf.global_head_dim.unwrap_or(0) == 0 {
+            conf.global_head_dim = Some(512);
         }
         let embed_scale = if family.path().contains("gemma") {
             (conf.hidden_size as f32).sqrt()
@@ -1169,23 +1176,41 @@ impl Session {
 
     fn layer_rope_params(&self, kind: AttnKind) -> (f32, Option<f32>) {
         if self.use_gemma4 {
-            let theta = match kind {
-                AttnKind::Sliding => 10_000.0,
-                AttnKind::Full => 1_000_000.0,
-            };
-            // HF Gemma4TextRotaryEmbedding uses full rotary unless the bundle
-            // sets partial_rotary_factor; hardcoding 0.25 garbled global layers.
-            let partial = match kind {
-                AttnKind::Full => self
-                    .conf
-                    .partial_rotary_factor
-                    .filter(|f| *f > 0.0 && *f < 1.0),
-                AttnKind::Sliding => None,
-            };
-            (theta, partial)
+            match kind {
+                AttnKind::Sliding => (10_000.0, None),
+                AttnKind::Full => {
+                    let factor = self.conf.partial_rotary_factor.unwrap_or(0.25);
+                    let partial = if factor > 0.0 && factor < 1.0 {
+                        Some(factor)
+                    } else {
+                        None
+                    };
+                    (1_000_000.0, partial)
+                }
+            }
         } else {
             (self.conf.rope_theta, None)
         }
+    }
+
+    fn layer_head_dim(
+        &self,
+        kind: AttnKind,
+        q_dim: usize,
+        n_heads: usize,
+    ) -> Result<usize, EngineError> {
+        if n_heads == 0 || !q_dim.is_multiple_of(n_heads) {
+            return Err(EngineError::ShapeMismatch(
+                "q_dim not divisible by num_attention_heads".into(),
+            ));
+        }
+        let configured = match kind {
+            AttnKind::Full => self.conf.global_head_dim.or(self.conf.head_dim),
+            AttnKind::Sliding => self.conf.head_dim,
+        };
+        Ok(configured
+            .filter(|d| *d > 0 && q_dim == n_heads * *d)
+            .unwrap_or(q_dim / n_heads))
     }
 
     fn apply_rope(
@@ -1196,9 +1221,9 @@ impl Session {
         proportional: Option<f32>,
     ) -> Result<(), EngineError> {
         if let Some(factor) = proportional {
-            let mut rotary_dim = ((head_dim as f32) * factor).round() as usize;
-            rotary_dim &= !1;
-            rope_half_partial(x, head_dim, rotary_dim, pos, theta)
+            // HF `_compute_proportional_rope_parameters`: rotate leading
+            // factor*head_dim/2 pairs; inv_freq denominator is full head_dim.
+            rope_half_proportional(x, head_dim, factor, pos, theta)
         } else {
             rope_half(x, head_dim, pos, theta)
         }
@@ -1211,6 +1236,12 @@ impl Session {
         head_dim: usize,
     ) -> Result<Vec<f32>, EngineError> {
         if let Some(vn) = v_norm {
+            if vn.len() != head_dim {
+                return Err(EngineError::ShapeMismatch(format!(
+                    "v_norm len {} != head_dim {head_dim}",
+                    vn.len()
+                )));
+            }
             rms_norm(&v, vn, 1e-6)
         } else if self.use_gemma4 {
             let ones = vec![1.0f32; head_dim];
@@ -1492,16 +1523,7 @@ impl Session {
                         ));
                     }
                     let q_dim = attn.wq.data.len() / hidden;
-                    if n_heads == 0 || !q_dim.is_multiple_of(n_heads) {
-                        return Err(EngineError::ShapeMismatch(
-                            "q_dim not divisible by num_attention_heads".into(),
-                        ));
-                    }
-                    let head_dim = self
-                        .conf
-                        .head_dim
-                        .filter(|d| *d > 0 && q_dim == n_heads * *d)
-                        .unwrap_or(q_dim / n_heads);
+                    let head_dim = self.layer_head_dim(attn.kind, q_dim, n_heads)?;
                     if attn.wo.data.len() != hidden * q_dim {
                         return Err(EngineError::ShapeMismatch(
                             "attn output proj weight shape mismatch".into(),
@@ -1509,6 +1531,12 @@ impl Session {
                     }
                     let mut q = self.wmm(&attn.wq, &xn, q_dim, hidden, GemmAcct::Attn)?;
                     if let Some(qn) = &attn.q_norm {
+                        if qn.len() != head_dim {
+                            return Err(EngineError::ShapeMismatch(format!(
+                                "q_norm len {} != head_dim {head_dim}",
+                                qn.len()
+                            )));
+                        }
                         q = rms_norm(&q, qn, 1e-6)?;
                     }
                     let (theta, proportional) = self.layer_rope_params(attn.kind);
@@ -1539,6 +1567,12 @@ impl Session {
                         let mut k = self.wmm(wk, &xn, k_dim, hidden, GemmAcct::Attn)?;
                         let mut v = self.wmm(wv, &xn, v_dim, hidden, GemmAcct::Attn)?;
                         if let Some(kn) = &attn.k_norm {
+                            if kn.len() != head_dim {
+                                return Err(EngineError::ShapeMismatch(format!(
+                                    "k_norm len {} != head_dim {head_dim}",
+                                    kn.len()
+                                )));
+                            }
                             k = rms_norm(&k, kn, 1e-6)?;
                         }
                         Self::apply_rope_seq(
@@ -1658,16 +1692,7 @@ impl Session {
                         ));
                     }
                     let q_dim = attn.wq.data.len() / hidden;
-                    if n_heads == 0 || !q_dim.is_multiple_of(n_heads) {
-                        return Err(EngineError::ShapeMismatch(
-                            "q_dim not divisible by num_attention_heads".into(),
-                        ));
-                    }
-                    let head_dim = self
-                        .conf
-                        .head_dim
-                        .filter(|d| *d > 0 && q_dim == n_heads * *d)
-                        .unwrap_or(q_dim / n_heads);
+                    let head_dim = self.layer_head_dim(attn.kind, q_dim, n_heads)?;
                     if attn.wo.data.len() != hidden * q_dim {
                         return Err(EngineError::ShapeMismatch(
                             "attn output proj weight shape mismatch".into(),
@@ -1675,6 +1700,12 @@ impl Session {
                     }
                     let mut q = self.wmm(&attn.wq, &xn, q_dim, hidden, GemmAcct::Attn)?;
                     if let Some(qn) = &attn.q_norm {
+                        if qn.len() != head_dim {
+                            return Err(EngineError::ShapeMismatch(format!(
+                                "q_norm len {} != head_dim {head_dim}",
+                                qn.len()
+                            )));
+                        }
                         q = rms_norm(&q, qn, 1e-6)?;
                     }
                     let (theta, proportional) = self.layer_rope_params(attn.kind);
@@ -1697,6 +1728,12 @@ impl Session {
                         let mut k = self.wmm(wk, &xn, k_dim, hidden, GemmAcct::Attn)?;
                         let mut v = self.wmm(wv, &xn, v_dim, hidden, GemmAcct::Attn)?;
                         if let Some(kn) = &attn.k_norm {
+                            if kn.len() != head_dim {
+                                return Err(EngineError::ShapeMismatch(format!(
+                                    "k_norm len {} != head_dim {head_dim}",
+                                    kn.len()
+                                )));
+                            }
                             k = rms_norm(&k, kn, 1e-6)?;
                         }
                         Self::apply_rope(&mut k, head_dim, pos, theta, proportional)?;
@@ -1893,8 +1930,12 @@ mod tests {
             .build()
             .unwrap();
         assert_eq!(s.config().sliding_window, Some(512));
-        assert!(s.config().partial_rotary_factor.is_none());
-        assert_eq!(s.layer_rope_params(AttnKind::Full), (1_000_000.0, None));
+        assert_eq!(s.config().partial_rotary_factor, Some(0.25));
+        assert_eq!(s.config().global_head_dim, Some(512));
+        assert_eq!(
+            s.layer_rope_params(AttnKind::Full),
+            (1_000_000.0, Some(0.25))
+        );
         assert_eq!(s.layer_rope_params(AttnKind::Sliding), (10_000.0, None));
         assert_eq!(s.attn_window(AttnKind::Sliding), Some(512));
         assert_eq!(s.attn_window(AttnKind::Full), None);
@@ -2952,8 +2993,8 @@ mod tests {
             &emb,
         );
         let n1 = vec![1.0f32; hidden];
-        let qn = vec![1.0f32; q_dim];
-        let kn = vec![1.0f32; k_dim];
+        let qn = vec![1.0f32; head_dim];
+        let kn = vec![1.0f32; head_dim];
         let wq = vec![0.01f32; q_dim * hidden];
         let wk = vec![0.01f32; k_dim * hidden];
         let wv = vec![0.01f32; k_dim * hidden];
@@ -2990,12 +3031,12 @@ mod tests {
         );
         add_raw(
             &format!("{p}.layers.0.self_attn.q_norm.weight"),
-            vec![q_dim],
+            vec![head_dim],
             &qn,
         );
         add_raw(
             &format!("{p}.layers.0.self_attn.k_norm.weight"),
-            vec![k_dim],
+            vec![head_dim],
             &kn,
         );
         let g = vec![0.01f32; inter * hidden];

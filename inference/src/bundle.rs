@@ -44,9 +44,12 @@ pub struct ModelConfig {
     /// Sliding-window attention length (HF `sliding_window`). Gemma-4 default 512.
     #[serde(default)]
     pub sliding_window: Option<usize>,
-    /// Gemma-4 global p-RoPE fraction (HF `partial_rotary_factor`). None = full rotary.
+    /// Gemma-4 global p-RoPE fraction (HF `partial_rotary_factor`). None → 0.25 on gemma-4.
     #[serde(default)]
     pub partial_rotary_factor: Option<f32>,
+    /// Gemma-4 full-attention head dim (HF `global_head_dim`, default 512).
+    #[serde(default)]
+    pub global_head_dim: Option<usize>,
 }
 
 fn default_rope() -> f32 {
