@@ -16,6 +16,10 @@ name: Publish Maven Central (com.ariacompute:engine)
 #       (View Account -> Generate User Token); the account must own the
 #       verified `com.ariacompute` namespace
 #   GPG_PRIVATE_KEY  — ascii-armored private key (`gpg --export-secret-keys --armor`)
+#                      Keep real newlines. Do NOT feed this through
+#                      ORG_GRADLE_PROJECT_signingInMemoryKey (Gradle truncates
+#                      multiline project properties; signMavenPublication then
+#                      fails with "Could not read PGP secret key").
 #   GPG_PASSPHRASE   — passphrase for the key above (public key must be
 #       uploaded to a keyserver, e.g. keys.openpgp.org)
 
@@ -60,6 +64,13 @@ jobs:
         env:
           ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_USERNAME }}
           ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.SONATYPE_PASSWORD }}
-          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_PRIVATE_KEY }}
-          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSPHRASE }}
-        run: gradle -p bindings/kotlin publishAndReleaseToMavenCentral
+          # Plain env vars (not ORG_GRADLE_PROJECT_*): GitHub preserves armor newlines;
+          # build.gradle reads them via System.getenv and calls useInMemoryPgpKeys.
+          GPG_PRIVATE_KEY: ${{ secrets.GPG_PRIVATE_KEY }}
+          GPG_PASSPHRASE: ${{ secrets.GPG_PASSPHRASE }}
+        run: |
+          if [ -z "$GPG_PRIVATE_KEY" ]; then
+            echo "::error::GPG_PRIVATE_KEY secret is empty. Store the ascii-armored private key from: gpg --export-secret-keys --armor <key-id>"
+            exit 1
+          fi
+          gradle -p bindings/kotlin publishAndReleaseToMavenCentral

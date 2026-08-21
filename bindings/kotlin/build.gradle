@@ -1,4 +1,5 @@
 import com.vanniktech.maven.publish.SonatypeHost
+import org.gradle.plugins.signing.Sign
 
 plugins {
     id 'java-library'
@@ -19,9 +20,11 @@ kotlin {
 }
 
 // Maven Central (Central Portal) publishing via vanniktech plugin.
-// Credentials come from ORG_GRADLE_PROJECT_* env vars (see publish-maven.yml):
-//   mavenCentralUsername / mavenCentralPassword   — Sonatype user token
-//   signingInMemoryKey / signingInMemoryKeyPassword — ascii-armored GPG key
+// Sonatype credentials come from ORG_GRADLE_PROJECT_mavenCentralUsername/Password.
+// The GPG key MUST come from GPG_PRIVATE_KEY / GPG_PASSPHRASE (see publish-maven.yml):
+// Gradle's ORG_GRADLE_PROJECT_* mapping truncates at the first newline, which turns
+// an ascii-armored key into "-----BEGIN PGP PRIVATE KEY BLOCK-----" and fails with
+// "Could not read PGP secret key" on :signMavenPublication.
 // Version is injected via ARIA_VERSION (release tag sans leading v).
 mavenPublishing {
     publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, true)
@@ -51,5 +54,29 @@ mavenPublishing {
             connection = 'scm:git:git://github.com/ariacompute/engine.git'
             developerConnection = 'scm:git:ssh://git@github.com/ariacompute/engine.git'
         }
+    }
+}
+
+def preparePgpKey(String raw) {
+    String key = raw.replace('\\n', '\n').replace('\r\n', '\n').trim()
+    if (key.contains('-----BEGIN PGP')) {
+        return key
+    }
+    // vanniktech 0.30 kdoc format: armor headers/newlines already stripped.
+    String body = key.replace('\n', '').trim()
+    return "-----BEGIN PGP PRIVATE KEY BLOCK-----\n\n${body}\n-----END PGP PRIVATE KEY BLOCK-----\n"
+}
+
+def pgpKeyRaw = System.getenv('GPG_PRIVATE_KEY') ?: findProperty('signingInMemoryKey')
+def pgpPassword = System.getenv('GPG_PASSPHRASE') ?: findProperty('signingInMemoryKeyPassword') ?: ''
+if (pgpKeyRaw != null && pgpKeyRaw.toString().trim()) {
+    signing.useInMemoryPgpKeys(preparePgpKey(pgpKeyRaw.toString()), pgpPassword.toString())
+}
+
+// `gradle build` (CI compile check) must not require a signatory.
+tasks.withType(Sign).configureEach { signTask ->
+    signTask.onlyIf {
+        def key = System.getenv('GPG_PRIVATE_KEY') ?: findProperty('signingInMemoryKey')
+        key != null && !key.toString().trim().isEmpty()
     }
 }
