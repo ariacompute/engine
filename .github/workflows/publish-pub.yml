@@ -15,22 +15,25 @@ name: Publish pub.dev (package:aria_engine)
 # versions are immutable — republishing an existing version fails, bump
 # the tag to re-release.
 #
-# Auth (either is sufficient):
-#   PUB_CREDENTIALS — contents of ~/.config/dart/pub-credentials.json from
-#       `dart pub login` as a member of publisher ariacompute.com
-#       (Dart no longer writes ~/.pub-cache/credentials.json).
-#       Required for `release` / `workflow_dispatch` events (pub.dev OIDC
-#       only accepts tag `push`, optionally `workflow_dispatch` on a tag).
-#   GitHub Actions OIDC — job grants `id-token: write` and
-#       dart-lang/setup-dart wires the token. After the first publish,
-#       enable Automated publishing on
-#       https://pub.dev/packages/aria_engine/admin (repository
-#       ariacompute/engine, tag pattern v{{version}}), then Transfer the
-#       package to publisher ariacompute.com.
+# Auth: GitHub secret PUB_CREDENTIALS must be a pub.dev *user* OAuth
+# blob. Three identities are distinct and must not be mixed:
+#   - WSL/local OS user that owns ~/.config/dart/pub-credentials.json
+#     (file owner is irrelevant)
+#   - GitHub Actions / ariacompute/engine (OIDC cannot create a new
+#     package: "Only users are allowed to upload new packages")
+#   - pub.dev publisher member (the Google account that completed
+#     `dart pub login` in the browser, e.g. jia@ariacompute.com)
 #
-# First publish: the package is created under the uploading account; a
-# publisher admin then transfers it at the package Admin page so it
-# appears under ariacompute.com.
+# Obtain the secret (any machine; OS user does not matter):
+#   dart pub logout
+#   dart pub login          # browser: sign in as the publisher member
+#   cat ~/.config/dart/pub-credentials.json
+# Store that JSON as repo secret PUB_CREDENTIALS.
+# Do not use a login performed as a personal/WSL Google account.
+#
+# First publish creates the package under that pub.dev user. Transfer it
+# at https://pub.dev/packages/aria_engine/admin to publisher
+# ariacompute.com.
 
 on:
   release:
@@ -46,14 +49,9 @@ jobs:
     name: pub.dev package:aria_engine
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: read
     steps:
       - uses: actions/checkout@v4
-      # dart-lang/setup-dart provisions the GitHub OIDC token that pub.dev
-      # trusted publishing consumes. Flutter's bundled dart (installed next)
-      # may shadow this `dart` on PATH, but the pub auth state remains.
-      - uses: dart-lang/setup-dart@v1
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -99,17 +97,20 @@ jobs:
         env:
           PUB_CREDENTIALS: ${{ secrets.PUB_CREDENTIALS }}
         run: |
-          if [ -n "$PUB_CREDENTIALS" ]; then
-            # Current Dart/Flutter reads ~/.config/dart/pub-credentials.json
-            # (dart pub login). Also write the legacy pub-cache path.
-            mkdir -p "$HOME/.config/dart" "$HOME/.pub-cache"
-            printf '%s' "$PUB_CREDENTIALS" > "$HOME/.config/dart/pub-credentials.json"
-            printf '%s' "$PUB_CREDENTIALS" > "$HOME/.pub-cache/credentials.json"
-            chmod 600 "$HOME/.config/dart/pub-credentials.json" "$HOME/.pub-cache/credentials.json"
-            echo "Wrote PUB_CREDENTIALS to ~/.config/dart/pub-credentials.json"
-          else
-            echo "::warning::PUB_CREDENTIALS secret is empty; flutter pub publish will try GitHub Actions OIDC (configure Automated publishing on pub.dev)."
+          if [ -z "$PUB_CREDENTIALS" ]; then
+            echo "::error::PUB_CREDENTIALS must be ~/.config/dart/pub-credentials.json from \`dart pub login\` as the pub.dev publisher member (not the WSL OS user, not GitHub Actions). GitHub OIDC cannot create a new package."
+            exit 1
           fi
+          # Current Dart/Flutter reads ~/.config/dart/pub-credentials.json
+          # (dart pub login). Also write the legacy pub-cache path.
+          mkdir -p "$HOME/.config/dart" "$HOME/.pub-cache"
+          printf '%s' "$PUB_CREDENTIALS" > "$HOME/.config/dart/pub-credentials.json"
+          printf '%s' "$PUB_CREDENTIALS" > "$HOME/.pub-cache/credentials.json"
+          chmod 600 "$HOME/.config/dart/pub-credentials.json" "$HOME/.pub-cache/credentials.json"
+          # Drop any leftover hosted tokens so publish cannot silently
+          # authenticate as GitHub Actions instead of the user.
+          rm -f "$HOME/.config/dart/pub-tokens.json"
+          echo "Wrote PUB_CREDENTIALS to ~/.config/dart/pub-credentials.json"
       - name: Publish to pub.dev
         run: |
           # Copy out of the git worktree: `pub publish --dry-run` fails if a
@@ -120,6 +121,9 @@ jobs:
           cp -a bindings/flutter/. "$STAGE/"
           rm -rf "$STAGE/.dart_tool" "$STAGE/build"
           cd "$STAGE"
+          # Belt-and-suspenders: even without id-token: write, some Dart
+          # versions probe ACTIONS_ID_TOKEN_* and try OIDC first.
+          unset ACTIONS_ID_TOKEN_REQUEST_URL ACTIONS_ID_TOKEN_REQUEST_TOKEN || true
           flutter pub get
           flutter pub publish --dry-run
           flutter pub publish --force
