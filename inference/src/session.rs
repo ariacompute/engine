@@ -272,6 +272,9 @@ impl SessionBuilder {
         load_profile_set_mmap(elapsed_ms(t_mmap));
         let mut conf = bundle.model.clone();
         conf.rope_theta = effective_rope_theta(family.path(), conf.rope_theta);
+        // Hub/q4 artifacts may still omit Gemma-4 geometry; fill from HF architecture
+        // then validate. Bundle values always win when present.
+        fill_gemma4_architecture_defaults(&mut conf, family.path());
         require_gemma4_config(&conf, family.path())?;
         reject_unsupported_geometry(&conf, family)?;
         let tokenizer = BundleTokenizer::try_load(&path)?;
@@ -402,9 +405,56 @@ fn is_kv_consumer(conf: &crate::bundle::ModelConfig, layer: usize) -> bool {
     n > 0 && layer >= conf.num_layers.saturating_sub(n)
 }
 
-/// Gemma-4 requires fields written by current `model` `config_from_hf`.
-/// Older Aria bundles with null `sliding_window` / `global_head_dim` /
-/// `partial_rotary_factor` / `layer_types` / `head_dim` are rejected — re-quantize.
+/// HF Gemma-4 E2B/E4B: repeating 4×sliding + 1×full (full at indices 4,9,...,n-1).
+fn default_gemma4_layer_types(n: usize) -> Vec<String> {
+    (0..n)
+        .map(|i| {
+            if (i + 1) % 5 == 0 {
+                "full_attention".into()
+            } else {
+                "sliding_attention".into()
+            }
+        })
+        .collect()
+}
+
+/// Fill Gemma-4 geometry omitted by published hub q4 (base fields only) or
+/// half-updated bundles. Prefer explicit `config_from_hf` values when present.
+fn fill_gemma4_architecture_defaults(conf: &mut crate::bundle::ModelConfig, family_path: &str) {
+    if !family_path.contains("gemma-4") {
+        return;
+    }
+    if conf.layer_types.as_ref().map(|t| t.len()) != Some(conf.num_layers) {
+        conf.layer_types = Some(default_gemma4_layer_types(conf.num_layers));
+    }
+    if conf.sliding_window.unwrap_or(0) == 0 {
+        conf.sliding_window = Some(512);
+    }
+    if conf.partial_rotary_factor.is_none() {
+        conf.partial_rotary_factor = Some(0.25);
+    }
+    // Full E2B/E4B use head_dim=256 / global_head_dim=512; tiny fixtures derive.
+    if conf.hidden_size >= 1024 {
+        if conf.head_dim.unwrap_or(0) == 0 {
+            conf.head_dim = Some(256);
+        }
+        if conf.global_head_dim.unwrap_or(0) == 0 {
+            conf.global_head_dim = Some(512);
+        }
+        if conf.num_kv_shared_layers.is_none() {
+            conf.num_kv_shared_layers = Some(20);
+        }
+    } else {
+        if conf.head_dim.unwrap_or(0) == 0 && conf.num_attention_heads > 0 {
+            conf.head_dim = Some(conf.hidden_size / conf.num_attention_heads);
+        }
+        if conf.global_head_dim.unwrap_or(0) == 0 {
+            conf.global_head_dim = conf.head_dim;
+        }
+    }
+}
+
+/// After defaults, Gemma-4 must have a complete geometry (bundle or filled).
 fn require_gemma4_config(
     conf: &crate::bundle::ModelConfig,
     family_path: &str,
@@ -414,8 +464,8 @@ fn require_gemma4_config(
     }
     let missing = |field: &str| {
         EngineError::Unsupported(format!(
-            "{family_path}: model.{field} required (re-quantize with current model \
-             config_from_hf; legacy gemma-4 Aria bundles are unsupported)"
+            "{family_path}: model.{field} required after Gemma-4 architecture fill \
+             (re-quantize with current model config_from_hf)"
         ))
     };
     match &conf.layer_types {
@@ -2017,13 +2067,13 @@ mod tests {
     use serde_json::{json, Value};
 
     #[test]
-    fn gemma4_rejects_legacy_bundle_missing_required_fields() {
+    fn gemma4_fills_hub_bundle_missing_geometry_fields() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
         let cfg_path = dir.path().join("config.json");
         let raw = std::fs::read_to_string(&cfg_path).unwrap();
         let mut cfg: Value = serde_json::from_str(&raw).unwrap();
-        // Simulate pre-config_from_hf Aria export (null / omitted gemma-4 fields).
+        // Hub q4 still ships base geometry only (no Gemma-4 RoPE / window fields).
         let model = cfg["model"].as_object_mut().unwrap();
         for key in [
             "layer_types",
@@ -2035,20 +2085,19 @@ mod tests {
             model.remove(key);
         }
         std::fs::write(&cfg_path, cfg.to_string()).unwrap();
-        let err = SessionBuilder::new()
+        let s = SessionBuilder::new()
             .model(dir.path())
             .family("gemma/gemma-4-e2b-it")
             .build()
-            .unwrap_err();
-        match err {
-            EngineError::Unsupported(msg) => {
-                assert!(
-                    msg.contains("required") || msg.contains("legacy"),
-                    "unexpected message: {msg}"
-                );
-            }
-            other => panic!("expected Unsupported, got {other:?}"),
-        }
+            .unwrap();
+        assert_eq!(s.config().sliding_window, Some(512));
+        assert_eq!(s.config().partial_rotary_factor, Some(0.25));
+        assert!(s.config().head_dim.unwrap_or(0) > 0);
+        assert!(s.config().global_head_dim.unwrap_or(0) > 0);
+        assert_eq!(
+            s.config().layer_types.as_ref().map(|t| t.len()),
+            Some(s.config().num_layers)
+        );
     }
 
     #[test]
