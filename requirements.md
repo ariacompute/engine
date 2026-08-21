@@ -68,7 +68,7 @@
 | 2 | **graph** | Layer → Op → Tensor IR；`BufferPool`；mmap / `external` 零拷贝输入；融合节点 **HDM**（Hadamard + Dequant + MatMul）；阶段 A：LLM decode 所需 ops 可调度；图序列化可选（阶段 B+） |
 | 3 | **inference** | `load_bundle`（mmap `weight.bin`）；KV cache；greedy / 基础 sampling；tokenizer；§1.1 家族注册与图构建钩子；阶段 A：`gemma-4-e2b-it` **tiny q4** 黄金路径；阶段 B/C：见上表 |
 | 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排；CLI：`auth` / `download` / `list` / `clean` / `upgrade` / `serve` |
-| 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；凭证与模式来自 `~/.ariacompute/config.yml`（`CloudClient::new`）；`execution`=`hybrid`\|`device`\|`cloud`；阶段 A：mock + 单测；`device` / privacy 强制 Local，`cloud` 强制 Handoff |
+| 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；凭证与模式来自 `~/.ariacompute/config.yml`（`CloudClient::new`）；`execution`=`hybrid`\|`device`\|`cloud`；阶段 A：mock + 单测；`device` / privacy 强制 Local，`cloud` 强制 Handoff；**P2**：规则路由层（快路径）+ 语义路由层（慢路径）两层混合路由 `route_hybrid`，语义失败静默回退规则层 |
 | 6 | **反量化语义** | 与 Python `dequantize` 一致的 **rotated-space** 码本重建。embedding **必须**原域行 gather（加载期整表 unrotate 或等价）；线性层可用融合 HDM **或** 原域 `linear`。禁止对旋转域 `W[token]` 做 lookup |
 | 7 | **HTTP** | **axum** 实现本地 serve |
 
@@ -124,12 +124,13 @@
 - `POST /v1/chat/completions`：非流式 JSON + `stream: true` 时 SSE。
 - `GET /v1/models`：按 `hybrid_execution` 列出模型 id——`cloud` 仅 `ariacompute/ariamodel`；`device` 为本地 bundle 目录名；`hybrid` 为本地目录名，若已配置 cloud 凭证则另附 `ariacompute/ariamodel`（不再用内部家族 path 如 `gemma/gemma-4-e2b-it` 冒充云端 id）。
 - 请求/响应字段对齐 OpenAI Chat Completions 常用子集（`messages`、`temperature`、`max_tokens`、`stream`）。
+- `GET /v1/engine/routes`（P2 观测端点，只读）：返回最近 N 条路由 `RouteOutcome`（含 `layer` / `confidence` / `semantic_consulted`）+ Local/Cloud 健康分快照 + `policy_version`；`?n=` 可选（默认 20，上限 100）。
 - **CLI（`aria-engine`）**
   - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。
-  - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`upgrade [version]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution] [--compute] [--profile]`；`-h` / `-v`。
+  - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`upgrade [version]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution] [--hybrid-semantic on|off] [--compute] [--profile]`；`-h` / `-v`。
   - `list`：`GET {site_url}/api/dashboard/models`（Bearer `cloud_api_key`）展开为可下载 bundle（`_q4`/`_q8`/`_q326`），对照本地缓存标记 `downloaded` / `not downloaded` / `incomplete`；另附 catalog 外本地项。
   - `upgrade [version]`：按 `upgrade_url`（组织根）拼 `{upgrade_url}/engine`，调 GitHub/Gitee Releases API；默认最新**正式** Release（忽略 prerelease/draft），可选 `0.7.2` / `v0.7.2`；下载本机平台 `engine_*` + `libaria_ffi_*`，原地原子替换当前 CLI，并将 FFI 装入 `~/.ariacompute/lib/`（提示 `ARIA_FFI_LIB`）。未配置 `upgrade_url` 时报错并提示先 `auth`；下载/解压失败不得损坏现有 CLI。
-  - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。`--compute auto|cpu|cuda` 覆盖本机算力（默认 config / `auto`）。`--profile` 启用加载/生成分段计时，经 `GET /v1/engine/profile` 读出。
+  - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。`--compute auto|cpu|cuda` 覆盖本机算力（默认 config / `auto`）。`--profile` 启用加载/生成分段计时，经 `GET /v1/engine/profile` 读出。`--hybrid-semantic on|off` 覆盖语义路由层开关（默认 config / `on`）。
   - **禁止** `ARIA_HYBRID_*` 环境变量；仅保留编译期 `ARIA_ENGINE_VERSION`。
   - **下载源**（恰三）：Dashboard 认证 API、Hugging Face、ModelScope；**禁止**引擎直连公开 S3/COS registry URL。模型 `download` 与 CLI `upgrade` 宿主（GitHub/Gitee）分离。
   - 每次 `download` 探测连通性 + 短速率采样，选最优可达源；中途失败回退次优已探测源；不持久化强制源。
@@ -146,6 +147,9 @@
 | `upgrade_url` | 组织根（`.com`→`https://github.com/ariacompute`；`.cn`→`https://gitee.com/ariacompute`）；`upgrade` 拼 `/engine` |
 | `hybrid_mode` | `cost` \| `balance` \| `intelligence` |
 | `hybrid_execution` | `hybrid` \| `device` \| `cloud` |
+| `hybrid_semantic` | `true` \| `false`（默认 `true`；语义路由层总开关，无云凭证时自动短路等价纯规则） |
+| `hybrid_semantic_timeout_ms` | 语义路由单次调用超时（默认 `800`） |
+| `hybrid_semantic_cache_size` | 语义决策缓存容量上限（默认 `512`；TTL 60s） |
 | `compute` | `auto` \| `cpu` \| `cuda`（默认 `auto`；与 `hybrid_execution` 正交） |
 
 - `auth`：提示 API key → **用 key 探测** Dashboard（`GET /api/dashboard/models`）判定 `.com` / `.cn`，写入匹配的 `cloud_url`/`site_url`/`upgrade_url`（同 TLD）；两端均失败时回退 locale + 连通性。`list`/`download` 启动时若 URL 不一致或 key 被当前 site 拒绝会自动纠偏并回写 config（含刷新 `upgrade_url`）。
@@ -163,6 +167,15 @@
   - `RouteSignal`：`confidence`（兼容保留）、`complexity`、`context_tokens`/`context_limit`、`modality_unsupported_locally`、`consecutive_local_failures`、`privacy_sensitive`、`cloud_available`、`session_id`、`force_cloud`。
   - `ProjectionBand::{MustLocal, LocalOk, PreferCloud}`；决策由投影 + 模式复杂度阈值合成。
   - chat 路径用 `estimate_route_signals(prompt, context_limit)` 填充 `complexity` / `context_tokens`。
+- **P2（规则路由层 + 语义路由层，`route_hybrid`）**
+  - **规则路由层（快路径，`rules.rs`）**：`RuleEngine` 确定性规则链，零 LLM 调用；输入 `RequestKind`（由 prompt 分类：`Inline` / `Chat` / `Agent` / `LongContext` / `Media`）+ `RouteSignal` + Pareto 阈值；输出 `RuleDecision{action: Option<RouteAction>, confidence, reason, need_semantic}`。硬约束（`execution` / privacy / `force_cloud` / modality / context_overflow / failures ≥ upgrade）→ 高置信直接决策；复杂度落在 `cutoff × [0.9, 1.1]` 邻域或 `Agent` 跨域任务 → `action=None` 且 `need_semantic=true`；其余按模式阈值直接定 Local/Cloud。
+  - **语义路由层（慢路径，`semantic.rs`）**：`SemanticClient` 抽象（生产 `CloudSemanticClient` 复用 `CloudClient::chat`，system prompt 强约束输出严格 JSON `{"action":"local"|"cloud","confidence":0..1,"intent":"…","reason":"…"}`；测试注入 fake）；`SemanticRouter` 负责决策缓存（归一化 prompt 哈希 key + TTL 60s + 容量上限淘汰）、同 key 单飞去重、`tokio::time::timeout` 包裹。未启用 / 无云凭证 / 超时 / 非 2xx / JSON 非法或字段越界 → 返回 `None` **静默回退规则层**（禁止报错、禁止 panic、禁止吞错后产生误导性决策）。
+  - **健康度回退链（`health.rs`）**：`HealthTracker` 维护 Local/Cloud 双后端分数（初值 1.0；成功 +0.05 封顶 1.0；失败 −0.20；超时 −0.10；底线 0.0；`healthy` = 分数 ≥ 0.5）；`snapshot()` 供观测端点。仅软决策可翻转：选定后端不健康且备选健康时翻转，Cloud 翻转另须 `cloud_available`；硬约束（`ProjectionBand::MustLocal`）永不翻转。
+  - `Router::route_hybrid(&self, signal, prompt, semantic, health).await -> RouteDecision`：规则快路径 →（`need_semantic`）语义慢路径（采纳阈值 `confidence ≥ 0.6` 且不与硬约束冲突）→ 健康翻转 → 复用既有 `apply_stickiness` 粘性。**`route()` / `route_confidence()` 及全部 P0/P1 行为零变化**（既有单测原样通过）。
+  - `RouteDecision` 增 `layer`（`rules` \| `semantic`）/ `confidence` / `semantic_consulted`；`RouteOutcome` 增同三字段 + `semantic_latency_ms`；一律 `#[serde(default)]`，既有 serde roundtrip 与对外 JSON 兼容。语义层采纳的决策 `policy_version` 追加 `+semantic`。
+  - 观测：复用 `OutcomeStore.recent(n)` + `HealthTracker::snapshot()`，经 `GET /v1/engine/routes` 暴露（§3.4）。
+  - 配置：§3.4.1 三字段 + CLI `--hybrid-semantic on|off`（仅覆盖本进程）；**禁止**新增任何环境变量。
+  - 单测：规则链各规则命中 / 邻域触发语义 / 默认回退；语义 JSON 合法·非法·缺字段·越界 / 缓存命中·TTL 过期·容量淘汰·单飞 / 超时与未启用降级；健康分增减·阈值·翻转·MustLocal 不翻转；`route_hybrid` 快路径命中 / 语义采纳 / 语义失败回退 / 健康翻转；`route()` 回归零变化。
 - `Router::new() -> Result<Self, EngineError>`；`route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。
 - `CloudClient::new(base_url, api_key)`：OpenAI 兼容 HTTP；超时与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。**无** `from_env` / `ARIA_HYBRID_*`。
 - 单测：模式复杂度阈值、硬约束、粘性升级、投影、Outcome、Cloud mock 成功/失败。
@@ -275,6 +288,7 @@
 5. `POST /v1/chat/completions` 非流式与 SSE 均可测通。
 6. Hybrid：低置信 / PreferCloud 时 `CloudHandoff`（带 `reason`）；Pareto 模式与粘性单测；mock 云端成功与失败路径覆盖。
 7. §1.1 注册表在代码中完整列出；非阶段 A 家族返回明确 `UnsupportedFamily` / 门控，不得 panic。
+8. Hybrid P2：`route_hybrid` 两层路由单测全绿（规则快路径命中、语义 mock 采纳 / 失败静默回退、健康翻转、硬约束不翻转）；`GET /v1/engine/routes` 返回最近决策（含 `layer`）与健康分快照；无云凭证时行为与纯规则路径完全一致。
 
 ### 6.3 阶段 B / C（后续验收，写入 Spec 以免范围漂移）
 
@@ -399,8 +413,9 @@ Report-only JSON（`GET /v1/engine/profile` 或 `scripts/profile_qwen3_serve.py`
 - [x] §8.7 本机热点 profile（load/generate 分段；`--compute`；无 GPU skip）可接受
 - [x] §3.7 SDK bindings（C ABI + 八语言；OpenAI FFI 面；host/device-farm 测；release.yml 多 registry 发布 fail-pass）可接受
 - [x] §3.7 PyPI 发布方案 B（cibuildwheel 多平台 wheel + 内嵌动态库 + `_load_lib` 回退 + `publish-pypi.yml`）可接受
+- [x] §3.5 P2 规则+语义两层混合路由（`route_hybrid`；语义层失败静默回退；健康回退链；`/v1/engine/routes` 观测；无新增环境变量）可接受
 
-> **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。§3.7 SDK bindings 按 2026-08-15 计划实施。§3.7 PyPI 发布方案 B 经 2026-08-19 用户确认 **已通过（approved）**。可据本 Spec 生成 / 执行 `task.md`。
+> **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。§3.7 SDK bindings 按 2026-08-15 计划实施。§3.7 PyPI 发布方案 B 经 2026-08-19 用户确认 **已通过（approved）**。§3.5 P2 两层混合路由经 2026-08-21 用户确认 **已通过（approved）**。可据本 Spec 生成 / 执行 `task.md`。
 
 ## 10. 参考
 

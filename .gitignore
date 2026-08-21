@@ -30,3 +30,4 @@ bindings/python/dist/
 bindings/python/*.egg-info/
 wheelhouse/
 
+.codebuddy/

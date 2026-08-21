@@ -6,15 +6,16 @@ pub mod gateway_detect;
 pub mod upgrade;
 
 use aria_hybrid::{
-    estimate_route_signals, CloudChatRequest, CloudClient, CloudMessage, ExecutionMode, RouteAction,
-    RouteOutcome, RouteSignal, Router, CLOUD_GATEWAY_MODEL,
+    estimate_route_signals, BackendKind, CloudChatRequest, CloudClient, CloudMessage,
+    CloudSemanticClient, ExecutionMode, HealthEvent, HealthTracker, RouteAction, RouteOutcome,
+    RouteSignal, Router, SemanticClient, SemanticRouter, CLOUD_GATEWAY_MODEL,
 };
 use aria_inference::{
     infer_family_path, rag_pack_context, ChatTurn, ComputePref, GenerateOpts, Session,
     SessionBuilder,
 };
 use aria_kernel::EngineError;
-use axum::extract::State;
+use axum::extract::{Query, State};
 use axum::http::StatusCode;
 use axum::response::sse::{Event, KeepAlive, Sse};
 use axum::response::{IntoResponse, Response};
@@ -33,6 +34,28 @@ pub struct AppState {
     pub router: Router,
     pub cloud: CloudClient,
     pub model_id: String,
+    /// P2 semantic routing layer (slow path).
+    pub semantic: SemanticRouter,
+    /// P2 backend health scores (fallback chain).
+    pub health: HealthTracker,
+}
+
+/// P2 two-layer hybrid routing options (config file + CLI override).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HybridRoutingOpts {
+    pub semantic_enabled: bool,
+    pub semantic_timeout_ms: u64,
+    pub semantic_cache_size: usize,
+}
+
+impl Default for HybridRoutingOpts {
+    fn default() -> Self {
+        Self {
+            semantic_enabled: true,
+            semantic_timeout_ms: 800,
+            semantic_cache_size: 512,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -118,7 +141,28 @@ pub fn app(state: AppState) -> AxumRouter {
         .route("/v1/audio/transcriptions", post(audio_transcriptions))
         .route("/v1/embeddings", post(embeddings))
         .route("/v1/engine/profile", get(engine_profile))
+        .route("/v1/engine/routes", get(engine_routes))
         .with_state(state)
+}
+
+/// P2 observability: recent routing decisions + health snapshot (read-only).
+#[derive(Debug, Deserialize)]
+struct RoutesQuery {
+    n: Option<usize>,
+}
+
+async fn engine_routes(State(st): State<AppState>, Query(q): Query<RoutesQuery>) -> Response {
+    let n = q.n.unwrap_or(20).min(100);
+    Json(json!({
+        "policy_version": st.router.policy_version,
+        "health": st.health.snapshot(),
+        "semantic": {
+            "enabled": st.semantic.is_enabled(),
+            "cache_len": st.semantic.cache_len(),
+        },
+        "recent": st.router.outcomes.recent(n),
+    }))
+    .into_response()
 }
 
 async fn list_models(State(st): State<AppState>) -> Json<Value> {
@@ -369,7 +413,10 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
         session_id: req.session_id.clone(),
         force_cloud,
     };
-    let decision = st.router.route(&signal);
+    let decision = st
+        .router
+        .route_hybrid(&signal, &prompt_text, &st.semantic, &st.health)
+        .await;
     let started = std::time::Instant::now();
 
     match decision.action {
@@ -386,7 +433,17 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                     .collect(),
                 max_tokens: Some(max_tokens as u32),
             };
-            let v = st.cloud.chat(&cloud_req).await?;
+            let v = match st.cloud.chat(&cloud_req).await {
+                Ok(v) => {
+                    st.health.record(BackendKind::Cloud, HealthEvent::Success);
+                    v
+                }
+                Err(e) => {
+                    st.health
+                        .record(BackendKind::Cloud, classify_cloud_error(&e));
+                    return Err(e);
+                }
+            };
             st.router.record_outcome(RouteOutcome {
                 task_id: format!("chat-{}", now_secs()),
                 session_id: signal.session_id.clone(),
@@ -400,6 +457,10 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                 cloud_handoff: true,
                 user_corrected: None,
                 validation_ok: None,
+                layer: decision.layer,
+                confidence: decision.confidence,
+                semantic_consulted: decision.semantic_consulted,
+                semantic_latency_ms: decision.semantic_latency_ms,
             });
             Ok(Json(v).into_response())
         }
@@ -422,13 +483,22 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                 last.content = prompt_text.clone();
             }
             let prompt = sess.encode_chat(&turns);
-            let gen = sess.generate(
+            let gen = match sess.generate(
                 &prompt,
                 &GenerateOpts {
                     max_tokens,
                     temperature: req.temperature.unwrap_or(0.0),
                 },
-            )?;
+            ) {
+                Ok(g) => {
+                    st.health.record(BackendKind::Local, HealthEvent::Success);
+                    g
+                }
+                Err(e) => {
+                    st.health.record(BackendKind::Local, HealthEvent::Failure);
+                    return Err(e);
+                }
+            };
             st.router.record_outcome(RouteOutcome {
                 task_id: format!("chat-{}", now_secs()),
                 session_id: signal.session_id.clone(),
@@ -442,6 +512,10 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                 cloud_handoff: false,
                 user_corrected: None,
                 validation_ok: None,
+                layer: decision.layer,
+                confidence: decision.confidence,
+                semantic_consulted: decision.semantic_consulted,
+                semantic_latency_ms: decision.semantic_latency_ms,
             });
             let created = now_secs();
             if req.stream.unwrap_or(false) {
@@ -507,6 +581,16 @@ fn now_secs() -> u64 {
         .unwrap_or(0)
 }
 
+/// Classify a cloud error for the health tracker (timeout weighs less).
+fn classify_cloud_error(e: &EngineError) -> HealthEvent {
+    let msg = e.to_string().to_lowercase();
+    if msg.contains("timeout") || msg.contains("timed out") {
+        HealthEvent::Timeout
+    } else {
+        HealthEvent::Failure
+    }
+}
+
 fn engine_err(e: EngineError) -> Response {
     let (code, ty) = match &e {
         EngineError::InvalidParam(_) => (StatusCode::BAD_REQUEST, "invalid_request_error"),
@@ -540,13 +624,32 @@ pub fn build_state_with_opts(
     compute: ComputePref,
     profile: bool,
 ) -> Result<AppState, EngineError> {
+    build_state_with_hybrid_opts(
+        model_dir,
+        router,
+        cloud,
+        compute,
+        profile,
+        HybridRoutingOpts::default(),
+    )
+}
+
+/// Full constructor including P2 two-layer hybrid routing options.
+pub fn build_state_with_hybrid_opts(
+    model_dir: impl AsRef<std::path::Path>,
+    router: Router,
+    cloud: CloudClient,
+    compute: ComputePref,
+    profile: bool,
+    hybrid: HybridRoutingOpts,
+) -> Result<AppState, EngineError> {
     let model_dir = model_dir.as_ref();
     let family = model_dir
         .file_name()
         .and_then(|s| s.to_str())
         .and_then(infer_family_path)
         .unwrap_or("gemma/gemma-4-e2b-it");
-    build_state_with_family_opts(model_dir, family, router, cloud, compute, profile)
+    build_state_with_family_opts(model_dir, family, router, cloud, compute, profile, hybrid)
 }
 
 pub fn build_state_with_family(
@@ -555,7 +658,15 @@ pub fn build_state_with_family(
     router: Router,
     cloud: CloudClient,
 ) -> Result<AppState, EngineError> {
-    build_state_with_family_opts(model_dir, family, router, cloud, ComputePref::Auto, false)
+    build_state_with_family_opts(
+        model_dir,
+        family,
+        router,
+        cloud,
+        ComputePref::Auto,
+        false,
+        HybridRoutingOpts::default(),
+    )
 }
 
 fn build_state_with_family_opts(
@@ -565,6 +676,7 @@ fn build_state_with_family_opts(
     cloud: CloudClient,
     compute: ComputePref,
     profile: bool,
+    hybrid: HybridRoutingOpts,
 ) -> Result<AppState, EngineError> {
     let model_dir = model_dir.as_ref();
     let session = SessionBuilder::new()
@@ -587,11 +699,22 @@ fn build_state_with_family_opts(
     } else {
         local_id
     };
+    // P2: semantic layer reuses the cloud gateway client; without credentials
+    // (or when disabled) it short-circuits and routing is pure rule-based.
+    let semantic = SemanticRouter::new(
+        hybrid
+            .semantic_enabled
+            .then(|| SemanticClient::Cloud(CloudSemanticClient::from_client(&cloud))),
+        hybrid.semantic_timeout_ms,
+        hybrid.semantic_cache_size,
+    );
     Ok(AppState {
         session: Arc::new(Mutex::new(session)),
         router,
         cloud,
         model_id,
+        semantic,
+        health: HealthTracker::new(),
     })
 }
 
@@ -1380,5 +1503,138 @@ mod tests {
         // Local path succeeds rather than Cloud error.
         let v = body_json(res).await;
         assert!(v["choices"][0]["message"]["content"].is_string());
+    }
+
+    /// P2: GET /v1/engine/routes exposes recent decisions + health snapshot.
+    #[tokio::test]
+    async fn engine_routes_endpoint_reports_decisions_and_health() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let state = build_state(
+            dir.path(),
+            Router::new().unwrap(),
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"from-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        let svc = app(state);
+
+        // One local chat to seed the outcome store.
+        let res = svc
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"hi"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+
+        let res = svc
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/engine/routes?n=5")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["policy_version"], POLICY_VERSION);
+        assert!(v["health"]["local"].as_f64().unwrap() >= 0.5);
+        assert!(v["health"]["cloud"].as_f64().unwrap() >= 0.0);
+        assert!(v["semantic"]["enabled"].is_boolean());
+        let recent = v["recent"].as_array().unwrap();
+        assert_eq!(recent.len(), 1);
+        assert_eq!(recent[0]["layer"], "rules");
+        assert_eq!(recent[0]["semantic_consulted"], false);
+        assert_eq!(recent[0]["cloud_handoff"], false);
+    }
+
+    /// P2: semantic layer adopted via injected fake (rules undecided band).
+    #[tokio::test]
+    async fn semantic_layer_adopts_cloud_via_fake() {
+        use std::future::Future;
+        use std::pin::Pin;
+
+        #[derive(Debug)]
+        struct FakeSemantic;
+        impl aria_hybrid::FakeSemanticClient for FakeSemantic {
+            fn consult<'a>(
+                &'a self,
+                _signal: &'a RouteSignal,
+                _prompt: &'a str,
+            ) -> Pin<Box<dyn Future<Output = Result<aria_hybrid::SemanticDecision, EngineError>> + Send + 'a>>
+            {
+                Box::pin(async move {
+                    Ok(aria_hybrid::SemanticDecision {
+                        action: RouteAction::CloudHandoff,
+                        confidence: 0.9,
+                        intent: "analysis".into(),
+                        reason: "deep task".into(),
+                    })
+                })
+            }
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let mut state = build_state(
+            dir.path(),
+            Router::new().unwrap(),
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"semantic-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        state.semantic = SemanticRouter::new(
+            Some(SemanticClient::Fake(Arc::new(FakeSemantic))),
+            100,
+            8,
+        );
+        let router = state.router.clone();
+        let svc = app(state);
+
+        // 83 chars + analyze/reason keywords → complexity ≈ 0.71, inside the
+        // Balance neighborhood [0.675, 0.825) → rules undecided → semantic.
+        let res = svc
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"Please analyze and reason about this topic carefully xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}],
+                            "max_tokens": 2
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["choices"][0]["message"]["content"], "semantic-cloud");
+
+        let outcome = &router.outcomes.recent(1)[0];
+        assert_eq!(outcome.layer, aria_hybrid::RouteLayer::Semantic);
+        assert!(outcome.semantic_consulted);
+        assert!(outcome.semantic_latency_ms.is_some());
+        assert!(outcome.policy_version.ends_with("+semantic"));
+        assert!(outcome.cloud_handoff);
     }
 }

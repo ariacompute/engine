@@ -23,6 +23,9 @@ Credentials and hybrid prefs live in `~/.ariacompute/config.yml` (via `aria-engi
 | `upgrade_url` | Org root for CLI/FFI upgrades (`.com`→GitHub, `.cn`→Gitee) | — |
 | `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
 | `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
+| `hybrid_semantic` | Semantic routing layer switch (auto-off without cloud credentials) | `true` |
+| `hybrid_semantic_timeout_ms` | Semantic routing per-consult timeout | `800` |
+| `hybrid_semantic_cache_size` | Semantic decision cache capacity (TTL 60s) | `512` |
 | `compute` | `auto` / `cpu` / `cuda` (local GEMM; **not** a hybrid switch) | `auto` |
 
 ```bash
@@ -69,6 +72,8 @@ python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engin
 ```
 
 In `--hybrid-execution hybrid`, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `--hybrid-execution device` never handoffs; `--hybrid-execution cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.
+
+Routing is two-layer (rule layer fast path + semantic layer slow path). Deterministic rules decide most requests in <5ms; only uncertain ones (complexity near the mode cutoff, agentic/long-context prompts) consult the **semantic layer**, which asks the cloud gateway for a structured JSON intent decision (cached 60s, ≤800ms). Semantic disabled / timeout / failure silently falls back to the rule layer — never errors. Backend health scores (success/failure/timeout) feed a fallback flip; hard constraints (device/privacy) are never flipped. Inspect recent decisions and health via `GET /v1/engine/routes?n=20`; disable the semantic layer per process with `--hybrid-semantic off`.
 
 ## OpenAI API
 

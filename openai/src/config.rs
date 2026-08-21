@@ -20,6 +20,16 @@ pub struct AriaConfig {
     pub hybrid_mode: String,
     #[serde(default = "default_hybrid_execution")]
     pub hybrid_execution: String,
+    /// P2 semantic routing layer master switch (auto-short-circuits without
+    /// cloud credentials).
+    #[serde(default = "default_hybrid_semantic")]
+    pub hybrid_semantic: bool,
+    /// P2 semantic routing per-consult timeout.
+    #[serde(default = "default_hybrid_semantic_timeout_ms")]
+    pub hybrid_semantic_timeout_ms: u64,
+    /// P2 semantic decision cache capacity.
+    #[serde(default = "default_hybrid_semantic_cache_size")]
+    pub hybrid_semantic_cache_size: usize,
     #[serde(default = "default_compute")]
     pub compute: String,
 }
@@ -30,6 +40,18 @@ fn default_hybrid_mode() -> String {
 
 fn default_hybrid_execution() -> String {
     "hybrid".into()
+}
+
+fn default_hybrid_semantic() -> bool {
+    true
+}
+
+fn default_hybrid_semantic_timeout_ms() -> u64 {
+    800
+}
+
+fn default_hybrid_semantic_cache_size() -> usize {
+    512
 }
 
 fn default_compute() -> String {
@@ -45,6 +67,9 @@ impl Default for AriaConfig {
             upgrade_url: String::new(),
             hybrid_mode: default_hybrid_mode(),
             hybrid_execution: default_hybrid_execution(),
+            hybrid_semantic: default_hybrid_semantic(),
+            hybrid_semantic_timeout_ms: default_hybrid_semantic_timeout_ms(),
+            hybrid_semantic_cache_size: default_hybrid_semantic_cache_size(),
             compute: default_compute(),
         }
     }
@@ -154,6 +179,9 @@ mod tests {
             upgrade_url: "https://github.com/ariacompute".into(),
             hybrid_mode: "cost".into(),
             hybrid_execution: "device".into(),
+            hybrid_semantic: false,
+            hybrid_semantic_timeout_ms: 500,
+            hybrid_semantic_cache_size: 64,
             compute: "cpu".into(),
         };
         save_config(&cfg).unwrap();
@@ -171,5 +199,18 @@ mod tests {
         assert!(cfg.upgrade_url.is_empty());
         assert_eq!(cfg.hybrid_mode, "balance");
         assert_eq!(cfg.compute, "auto");
+        // P2 semantic routing fields default on legacy configs.
+        assert!(cfg.hybrid_semantic);
+        assert_eq!(cfg.hybrid_semantic_timeout_ms, 800);
+        assert_eq!(cfg.hybrid_semantic_cache_size, 512);
+    }
+
+    #[test]
+    fn semantic_fields_parse_when_present() {
+        let raw = "hybrid_semantic: false\nhybrid_semantic_timeout_ms: 250\nhybrid_semantic_cache_size: 16\n";
+        let cfg: AriaConfig = serde_yaml::from_str(raw).unwrap();
+        assert!(!cfg.hybrid_semantic);
+        assert_eq!(cfg.hybrid_semantic_timeout_ms, 250);
+        assert_eq!(cfg.hybrid_semantic_cache_size, 16);
     }
 }

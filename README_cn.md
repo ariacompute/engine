@@ -23,6 +23,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `upgrade_url` | CLI/FFI 升级组织根（`.com`→GitHub，`.cn`→Gitee） | — |
 | `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
 | `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
+| `hybrid_semantic` | 语义路由层开关（无云凭证时自动短路） | `true` |
+| `hybrid_semantic_timeout_ms` | 语义路由单次调用超时 | `800` |
+| `hybrid_semantic_cache_size` | 语义决策缓存容量（TTL 60s） | `512` |
 | `compute` | `auto` / `cpu` / `cuda`（本机 GEMM；**不是** hybrid 开关） | `auto` |
 
 ```bash
@@ -69,6 +72,8 @@ python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engin
 ```
 
 在 `--hybrid-execution hybrid` 下，路由依据提示复杂度 / 上下文溢出 / modality / 本地失败 / `FORCE_CLOUD`。`cost` 更偏端侧；`intelligence` 更偏云端；`balance` 为中性自动。用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`--hybrid-execution device` 永不切换云端；`--hybrid-execution cloud` 始终云端推理（隐私敏感请求仍留本地）。云端 handoff 请求的 `model` 固定为 `ariacompute/ariamodel`。
+
+路由为两层结构（规则路由层快路径 + 语义路由层慢路径）：确定性规则在 <5ms 内决定绝大多数请求；仅「不确定」请求（复杂度落在模式阈值邻域、agent 类 / 长上下文提示）才咨询**语义层**——经云网关获取结构化 JSON 意图决策（缓存 60s、单次 ≤800ms）。语义层关闭 / 超时 / 失败时静默回退规则层，不报错。后端健康分（成功 / 失败 / 超时）驱动回退翻转；硬约束（device / 隐私）永不翻转。经 `GET /v1/engine/routes?n=20` 查看最近决策与健康分；`--hybrid-semantic off` 可按进程关闭语义层。
 
 ## OpenAI API
 

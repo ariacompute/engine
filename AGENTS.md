@@ -16,7 +16,7 @@
 
 ## 目录
 - `openai/`：`aria-openai` — HTTP（chat / audio·embeddings·tools）
-- `hybrid/`：`aria-hybrid` — 信号→投影→决策、Pareto 模式、会话粘性、`cloud_handoff`、Outcome
+- `hybrid/`：`aria-hybrid` — 信号→投影→决策、Pareto 模式、会话粘性、`cloud_handoff`、Outcome；P2 两层路由（`rules` 快路径 + `semantic` 慢路径 + `health` 回退链）
 - `inference/`：`aria-inference` — Bundle 加载、Prefill/Decode、家族注册表
 - `graph/`：`aria-graph` — Op DAG、BufferPool、mmap / external 零拷贝
 - `kernel/`：`aria-kernel` — matmul / attention / norm / RoPE / dequant / FWHT / CUDA GEMM
@@ -41,7 +41,7 @@
 - `bash scripts/build-python-ffi.sh` + `cibuildwheel`（PyPI 平台 wheel 构建）
 
 ## 进行中需求
-Spec 见 `requirements.md`（含 §8.7 profile、**§3.4 `compute=auto`**、§3.3.1、§3.7 PyPI 发布）。`task.md` T50–T54 / T60–T69 主路径已落地；T70–T74 本机算力；**T75** PyPI `aria-engine` 发布（cibuildwheel + `publish-pypi.yml`）。DeltaNet GQA、完整 ViT 仍待。
+Spec 见 `requirements.md`（含 §8.7 profile、**§3.4 `compute=auto`**、§3.3.1、§3.7 PyPI 发布、**§3.5 P2 两层混合路由**）。`task.md` T50–T54 / T60–T69 主路径已落地；T70–T74 本机算力；**T75** PyPI 发布；**T76–T80** 规则+语义两层路由（`route_hybrid` / `/v1/engine/routes` / `hybrid_semantic*` 配置）已落地。DeltaNet GQA、完整 ViT 仍待。
 
 ## 注意事项
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。

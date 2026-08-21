@@ -217,3 +217,32 @@
 - [x] 单测 `tests/test_load_lib.py`：env 优先 / 包内回退（三平台文件名）/ 缺失报错
 - [x] 文档：`bindings/python/README.md`（`pip install aria-engine` 即用）、AGENTS 命令、`.gitignore` 忽略 `aria_engine/lib/`
 - [x] 验证：本机 `cargo build -p aria-ffi` + `python -m build --wheel` 冒烟（wheel 含 .so + 平台 tag）、`unittest` 全绿、`cargo test` 不回归
+
+## Hybrid P2：规则路由层 + 语义路由层（requirements §3.5 P2，2026-08-21 审核通过）
+
+### T76 — 规则路由层 `hybrid/src/rules.rs`
+- [x] `RequestKind`（Inline/Chat/Agent/LongContext/Media）分类（`classify`，含 Agent 中英关键词、上下文 ≥0.8 阈值）
+- [x] `RuleEngine` 有序规则链：硬约束（execution/privacy/force/modality/overflow/failures）高置信直决；Agent/长上下文/复杂度邻域（cutoff×[0.9,1.1)）→ `need_semantic`；其余按模式阈值定 Local/Cloud；与 `project()` 硬约束语义一致
+- [x] 单测：分类矩阵、硬约束/不可用回退、邻域触发、模式 cutoff、默认回退
+
+### T77 — 语义路由层 `hybrid/src/semantic.rs`
+- [x] `SemanticDecision{action,confidence,intent,reason}`；`SemanticClient` 枚举（`CloudSemanticClient` 复用 `CloudClient` + 严格 JSON system prompt；`FakeSemanticClient` 测试注入，box future 无新依赖）
+- [x] `SemanticRouter`：归一化 prompt FNV-1a 缓存（TTL 60s/容量 512 LRU-oldest）、同 key 单飞、`tokio::time::timeout`（默认 800ms）；未启用/无凭证/超时/解析失败 → `None` 静默降级
+- [x] 单测：JSON 合法/fenced/非法/越界、缓存命中/TTL/容量淘汰、单飞、超时与错误降级、mock 网关解析
+
+### T78 — 健康度回退链 `hybrid/src/health.rs`
+- [x] `HealthTracker`：Local/Cloud 双后端评分（成功 +0.05 / 失败 −0.20 / 超时 −0.10，[0,1] 截断，healthy ≥ 0.5）；`snapshot()`
+- [x] 单测：封顶/底线/阈值/恢复/快照 serde
+
+### T79 — 决策合成 `Router::route_hybrid`（route.rs）
+- [x] 规则快路径 → 语义慢路径（采纳阈值 0.6；MustLocal/execution=cloud 冲突不采纳）→ 健康翻转（软决策；Cloud 翻转须 `cloud_available`；MustLocal 永不翻转）→ 复用粘性
+- [x] `RouteLayer::{Rules, Semantic}`；`RouteDecision`/`RouteOutcome` 增 `layer`/`confidence`/`semantic_consulted`/`semantic_latency_ms`（均 `#[serde(default)]`）；语义采纳 `policy_version` 追加 `+semantic`
+- [x] 粘性守卫泛化（Local→Cloud 一律需硬升级，覆盖语义软升级；P0/P1 行为不变）
+- [x] 单测：快路径跳过语义/采纳/低置信拒绝/失败降级/硬约束冲突/双向健康翻转/MustLocal 不翻转/禁用语义≡`route()`/粘性保持
+
+### T80 — openai 接线与观测
+- [x] `AriaConfig` 增 `hybrid_semantic`(true)/`hybrid_semantic_timeout_ms`(800)/`hybrid_semantic_cache_size`(512)（全带 default）；serve `--hybrid-semantic on|off`；auth 默认写回；status 打印
+- [x] `AppState` 增 `semantic`/`health`；`build_state_with_hybrid_opts`；chat 改调 `route_hybrid`；执行结果回写 `HealthTracker`（超时/失败分类）
+- [x] `GET /v1/engine/routes`：`?n=`（默认 20，上限 100）返回 recent outcomes + health snapshot + semantic 状态
+- [x] 单测：routes 端点字段、fake 语义层采纳 E2E（`semantic-cloud` + outcome layer=semantic）
+- [x] 验证：`cargo build/test/clippy --workspace` 全绿；既有 openai/hybrid 测试零改动通过

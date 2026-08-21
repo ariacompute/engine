@@ -4,7 +4,7 @@ use aria_openai::config::{self, AriaConfig};
 use aria_openai::download;
 use aria_openai::gateway_detect;
 use aria_openai::upgrade;
-use aria_openai::{app, build_state_with_opts};
+use aria_openai::{app, build_state_with_hybrid_opts, HybridRoutingOpts};
 use std::env;
 use std::io::{self, BufRead, Write};
 use std::net::SocketAddr;
@@ -36,7 +36,7 @@ Usage:
   aria-engine clean [model]
   aria-engine upgrade [version]
   aria-engine serve <model> [--bind host:port] [--hybrid-mode MODE] [--hybrid-execution MODE]
-                         [--compute auto|cpu|cuda] [--profile]
+                         [--hybrid-semantic on|off] [--compute auto|cpu|cuda] [--profile]
   aria-engine -h | --help | help
   aria-engine -v | --version | version
 
@@ -56,6 +56,7 @@ serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
   --hybrid-mode      cost | balance | intelligence (overrides config for this process)
   --hybrid-execution hybrid | device | cloud (overrides config for this process)
+  --hybrid-semantic  on | off (semantic routing layer; overrides config for this process)
   --compute          auto | cpu | cuda (local GEMM; orthogonal to hybrid_execution)
   --profile          record load/generate timings; GET /v1/engine/profile
 "
@@ -130,6 +131,10 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         );
         println!("hybrid_mode: {}", cfg.hybrid_mode);
         println!("hybrid_execution: {}", cfg.hybrid_execution);
+        println!(
+            "hybrid_semantic: {} (timeout={}ms cache={})",
+            cfg.hybrid_semantic, cfg.hybrid_semantic_timeout_ms, cfg.hybrid_semantic_cache_size
+        );
         println!("compute: {}", cfg.compute);
         println!("config: {}", config::config_path()?.display());
         println!("lib: {}", config::lib_dir()?.display());
@@ -170,6 +175,7 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         hybrid_mode,
         hybrid_execution,
         compute,
+        ..AriaConfig::default()
     };
     config::save_config(&cfg)?;
     println!("wrote {}", config::config_path()?.display());
@@ -223,6 +229,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut bind = "127.0.0.1:8080".to_string();
     let mut mode_override = None;
     let mut exec_override = None;
+    let mut semantic_override = None;
     let mut compute_override = None;
     let mut profile = false;
     let mut i = 0;
@@ -249,6 +256,14 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                     args.get(i)
                         .cloned()
                         .ok_or("--hybrid-execution requires a value")?,
+                );
+            }
+            "--hybrid-semantic" => {
+                i += 1;
+                semantic_override = Some(
+                    args.get(i)
+                        .cloned()
+                        .ok_or("--hybrid-semantic requires on|off")?,
                 );
             }
             "--compute" => {
@@ -293,6 +308,14 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .as_deref()
             .unwrap_or(cfg.compute.as_str()),
     )?;
+    let semantic_enabled = match semantic_override.as_deref() {
+        Some("on") => true,
+        Some("off") => false,
+        Some(other) => {
+            return Err(format!("--hybrid-semantic must be on|off, got {other:?}").into());
+        }
+        None => cfg.hybrid_semantic,
+    };
     let cloud_url = if cfg.cloud_url.is_empty() {
         "https://gateway.ariacompute.com".to_string()
     } else {
@@ -301,12 +324,17 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let router = Router::new()?
         .with_mode(mode)
         .with_execution(execution);
-    let state = build_state_with_opts(
+    let state = build_state_with_hybrid_opts(
         model_path.to_str().ok_or("invalid model path")?,
         router,
         CloudClient::new(cloud_url, cfg.cloud_api_key.clone()),
         compute,
         profile,
+        HybridRoutingOpts {
+            semantic_enabled,
+            semantic_timeout_ms: cfg.hybrid_semantic_timeout_ms,
+            semantic_cache_size: cfg.hybrid_semantic_cache_size,
+        },
     )?;
     let compute_label = state
         .session
@@ -317,10 +345,11 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let addr: SocketAddr = bind.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     eprintln!(
-        "aria-openai listening on http://{addr} (model={} execution={:?} mode={:?} compute={})",
+        "aria-openai listening on http://{addr} (model={} execution={:?} mode={:?} semantic={} compute={})",
         model_path.display(),
         execution,
         mode,
+        semantic_enabled,
         compute_label
     );
     axum::serve(listener, app).await?;

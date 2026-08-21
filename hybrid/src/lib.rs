@@ -1,10 +1,23 @@
 //! Hybrid router: local inference vs cloud handoff (signal → projection → decision).
+//!
+//! P2 adds the two-layer hybrid routing entry `Router::route_hybrid`:
+//! rule layer (fast path) + semantic layer (slow path) + health fallback.
 
+mod health;
 mod route;
+mod rules;
+mod semantic;
 
+pub use health::{BackendKind, HealthEvent, HealthSnapshot, HealthTracker, HEALTHY_THRESHOLD};
 pub use route::{
     ExecutionMode, OutcomeStore, ParetoMode, ProjectionBand, RouteAction, RouteDecision,
-    RouteOutcome, RouteSignal, Router, POLICY_VERSION,
+    RouteLayer, RouteOutcome, RouteSignal, Router, POLICY_VERSION,
+};
+pub use rules::{classify, RequestKind, RuleDecision, RuleEngine};
+pub use semantic::{
+    CloudSemanticClient, FakeSemanticClient, SemanticClient, SemanticDecision, SemanticRouter,
+    DEFAULT_SEMANTIC_CACHE_SIZE, DEFAULT_SEMANTIC_TIMEOUT_MS, SEMANTIC_ACCEPT_THRESHOLD,
+    SEMANTIC_CACHE_TTL,
 };
 
 use aria_kernel::EngineError;
@@ -388,6 +401,10 @@ mod tests {
             cloud_handoff: true,
             user_corrected: Some(false),
             validation_ok: Some(true),
+            layer: RouteLayer::Rules,
+            confidence: 0.95,
+            semantic_consulted: false,
+            semantic_latency_ms: None,
         });
         assert_eq!(r.outcomes.len(), 1);
         let recent = r.outcomes.recent(1);
@@ -569,6 +586,10 @@ mod tests {
                 cloud_handoff: false,
                 user_corrected: None,
                 validation_ok: None,
+                layer: RouteLayer::Rules,
+                confidence: 0.0,
+                semantic_consulted: false,
+                semantic_latency_ms: None,
             });
         }
         assert_eq!(store.len(), 5);
@@ -608,6 +629,10 @@ mod tests {
             cloud_handoff: true,
             user_corrected: Some(true),
             validation_ok: Some(false),
+            layer: RouteLayer::Semantic,
+            confidence: 0.8,
+            semantic_consulted: true,
+            semantic_latency_ms: Some(42),
         };
         let v = serde_json::to_value(&outcome).unwrap();
         let back: RouteOutcome = serde_json::from_value(v).unwrap();
