@@ -27,9 +27,10 @@ fn with_layer_suffix(layer: usize, suffix: &str) -> Vec<String> {
 pub fn emb_names() -> Vec<&'static str> {
     vec![
         "token_embd.weight",
-        "model.embed_tokens.weight",
+        // Gemma-4 / VL nested path before plain `model.embed_tokens` (Qwen).
         "model.language_model.embed_tokens.weight",
         "language_model.model.embed_tokens.weight",
+        "model.embed_tokens.weight",
         "model.model.embed_tokens.weight",
     ]
 }
@@ -49,9 +50,9 @@ pub fn output_names() -> Vec<&'static str> {
     vec![
         "output.weight",
         "lm_head.weight",
-        "model.embed_tokens.weight",
         "model.language_model.embed_tokens.weight",
         "language_model.model.embed_tokens.weight",
+        "model.embed_tokens.weight",
         "model.model.embed_tokens.weight",
     ]
 }
@@ -96,9 +97,9 @@ pub fn ffn_post_norm_names(layer: usize) -> Vec<String> {
 
 pub fn embed_per_layer_names() -> Vec<&'static str> {
     vec![
-        "model.embed_tokens_per_layer.weight",
         "model.language_model.embed_tokens_per_layer.weight",
         "language_model.model.embed_tokens_per_layer.weight",
+        "model.embed_tokens_per_layer.weight",
     ]
 }
 
@@ -400,6 +401,11 @@ mod tests {
         assert!(f.iter().any(|s| s.contains("language_model")
             && s.contains("pre_feedforward_layernorm")));
 
+        assert_eq!(
+            emb_names()[1],
+            "model.language_model.embed_tokens.weight",
+            "Gemma-4 nested embed must be tried before Qwen model.embed_tokens"
+        );
         assert!(emb_names().contains(&"model.embed_tokens.weight"));
         assert!(emb_names().contains(&"model.language_model.embed_tokens.weight"));
         assert!(output_names().contains(&"lm_head.weight"));

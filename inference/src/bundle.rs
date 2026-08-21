@@ -1,5 +1,7 @@
 use crate::pack::unpack_indices;
-use aria_kernel::{dequant_lookup_group, hadamard_blocked_rows, EngineError};
+use aria_kernel::{
+    dequant_lookup_group, hadamard_blocked_rows_tiles, pow2_tile_sizes, EngineError,
+};
 use half::f16;
 use memmap2::Mmap;
 use serde::Deserialize;
@@ -398,7 +400,8 @@ impl Bundle {
                         .or_else(|| q.hadamard.get("seed").and_then(|v| v.as_i64()));
                     if k0 > 1 {
                         let t1 = std::time::Instant::now();
-                        hadamard_blocked_rows(&mut data, k0, n, seed, true)?;
+                        let tiles = hadamard_tile_sizes_from_meta(&q.hadamard, k0)?;
+                        hadamard_blocked_rows_tiles(&mut data, k0, n, seed, true, &tiles)?;
                         crate::profile::load_profile_add_unrotate(crate::profile::elapsed_ms(t1));
                     }
                 }
@@ -434,6 +437,38 @@ impl Bundle {
             tried.join(", ")
         )))
     }
+}
+
+/// Tile sizes from Python `hadamard.blocks` (`[{start,size},…]`); greedy pow2 if absent/invalid.
+fn hadamard_tile_sizes_from_meta(
+    hadamard: &Value,
+    rows: usize,
+) -> Result<Vec<usize>, EngineError> {
+    if let Some(blocks) = hadamard.get("blocks").and_then(|v| v.as_array()) {
+        if !blocks.is_empty() {
+            let mut sizes = Vec::with_capacity(blocks.len());
+            let mut pos = 0usize;
+            let mut ok = true;
+            for b in blocks {
+                let start = b.get("start").and_then(|x| x.as_u64()).map(|x| x as usize);
+                let size = b.get("size").and_then(|x| x.as_u64()).map(|x| x as usize);
+                match (start, size) {
+                    (Some(s), Some(sz)) if s == pos && sz > 0 => {
+                        sizes.push(sz);
+                        pos = pos.saturating_add(sz);
+                    }
+                    _ => {
+                        ok = false;
+                        break;
+                    }
+                }
+            }
+            if ok && pos == rows {
+                return Ok(sizes);
+            }
+        }
+    }
+    pow2_tile_sizes(rows)
 }
 
 /// Dequantized original-space weight (codebook tensors already unrotated).
@@ -692,5 +727,179 @@ mod tests {
         let recon = dequantize(q).unwrap();
         assert_eq!(recon.len(), q.shape.0 * q.shape.1, "{name}");
         assert_eq!(q.hadamard.get("applied"), Some(&json!(true)), "{name}");
+    }
+
+    #[test]
+    fn hadamard_tiles_prefer_bundle_blocks() {
+        let greedy = pow2_tile_sizes(10).unwrap();
+        assert_eq!(greedy, vec![8, 2]);
+        let meta = json!({
+            "applied": true,
+            "mode": "blocked",
+            "blocks": [{"start": 0, "size": 8}, {"start": 8, "size": 2}]
+        });
+        assert_eq!(hadamard_tile_sizes_from_meta(&meta, 10).unwrap(), greedy);
+        let bad = json!({"blocks": [{"start": 0, "size": 4}]});
+        assert_eq!(hadamard_tile_sizes_from_meta(&bad, 10).unwrap(), greedy);
+        let empty = json!({});
+        assert_eq!(hadamard_tile_sizes_from_meta(&empty, 10).unwrap(), greedy);
+    }
+
+    #[test]
+    fn gemma4_embed_and_ple_codebook_row_gather() {
+        // Mirrors model quantize_weight: axis-0 rotate, group codebook, LSB pack,
+        // shape [vocab, cols] — engine must unrotate then gather token rows.
+        use half::f16;
+        let vocab = 10usize;
+        let hidden = 8usize;
+        let packed_ple = 12usize; // 3 layers * 4
+        let gs = 8usize;
+        let seed = Some(0i64);
+
+        let mut emb: Vec<f32> = (0..vocab * hidden)
+            .map(|i| (i as f32) * 0.01 - 0.05)
+            .collect();
+        let mut ple: Vec<f32> = (0..vocab * packed_ple)
+            .map(|i| (i as f32) * 0.003 - 0.02)
+            .collect();
+        let emb_orig = emb.clone();
+        let ple_orig = ple.clone();
+        hadamard_blocked_rows(&mut emb, vocab, hidden, seed, false).unwrap();
+        hadamard_blocked_rows(&mut ple, vocab, packed_ple, seed, false).unwrap();
+
+        let write_cb = |name: &str,
+                        w_rot: &[f32],
+                        k: usize,
+                        n: usize,
+                        bin: &mut Vec<u8>,
+                        tensors: &mut serde_json::Map<String, Value>| {
+            let t = make_group_quant_tensor(w_rot, k, n, gs, 4);
+            let pi_s = bin.len();
+            bin.extend_from_slice(&t.packed_indices);
+            let pi_l = bin.len() - pi_s;
+            let cb_s = bin.len();
+            for &v in &t.codebook {
+                bin.extend_from_slice(&f16::from_f32(v).to_le_bytes());
+            }
+            let cb_l = bin.len() - cb_s;
+            let mut blocks = Vec::new();
+            let mut start = 0usize;
+            for sz in pow2_tile_sizes(k).unwrap() {
+                blocks.push(json!({"start": start, "size": sz}));
+                start += sz;
+            }
+            tensors.insert(
+                name.to_string(),
+                json!({
+                    "kind": "codebook",
+                    "bits": 4,
+                    "group_size": gs,
+                    "shape": [k, n],
+                    "row_pad": 0,
+                    "codebook_share": "group",
+                    "hadamard": {
+                        "applied": true,
+                        "axis": 0,
+                        "seed": 0,
+                        "mode": "blocked",
+                        "blocks": blocks
+                    },
+                    "offsets": {
+                        "packed_indices": [pi_s, pi_l],
+                        "codebook": [cb_s, cb_l]
+                    }
+                }),
+            );
+        };
+
+        let dir = tempfile::tempdir().unwrap();
+        let mut bin = Vec::new();
+        let mut tensors = serde_json::Map::new();
+        write_cb(
+            "model.language_model.embed_tokens.weight",
+            &emb,
+            vocab,
+            hidden,
+            &mut bin,
+            &mut tensors,
+        );
+        write_cb(
+            "model.language_model.embed_tokens_per_layer.weight",
+            &ple,
+            vocab,
+            packed_ple,
+            &mut bin,
+            &mut tensors,
+        );
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "q4",
+            "group_size_default": gs,
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": 3,
+                "num_attention_heads": 2,
+                "num_kv_heads": 1,
+                "intermediate_size": 16,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 10000.0
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+
+        let b = load_bundle(dir.path()).unwrap();
+        let loaded_emb = b
+            .weight_loaded("model.language_model.embed_tokens.weight")
+            .unwrap();
+        let loaded_ple = b
+            .weight_loaded("model.language_model.embed_tokens_per_layer.weight")
+            .unwrap();
+        assert_eq!(loaded_emb.data.len(), vocab * hidden);
+        assert_eq!(loaded_ple.data.len(), vocab * packed_ple);
+        // Quant is lossy; unrotate+gather must match reconstruct (dequant+unrotate).
+        for (name, cols, orig, loaded) in [
+            (
+                "embed",
+                hidden,
+                emb_orig.as_slice(),
+                loaded_emb.data.as_slice(),
+            ),
+            (
+                "ple",
+                packed_ple,
+                ple_orig.as_slice(),
+                loaded_ple.data.as_slice(),
+            ),
+        ] {
+            let q = match b.tensors.get(match name {
+                "embed" => "model.language_model.embed_tokens.weight",
+                _ => "model.language_model.embed_tokens_per_layer.weight",
+            }) {
+                Some(TensorData::Codebook(q)) => q,
+                _ => panic!("{name}"),
+            };
+            let mut recon = dequantize(q).unwrap();
+            hadamard_blocked_rows(&mut recon, vocab, cols, seed, true).unwrap();
+            for (a, e) in loaded.iter().zip(recon.iter()) {
+                assert!((a - e).abs() < 1e-5, "{name} {a} vs {e}");
+            }
+            for tid in [0usize, 2, 9] {
+                let row_l = &loaded[tid * cols..(tid + 1) * cols];
+                let row_r = &recon[tid * cols..(tid + 1) * cols];
+                for (a, e) in row_l.iter().zip(row_r.iter()) {
+                    assert!((a - e).abs() < 1e-5, "{name} tid={tid}");
+                }
+                let orig_row = &orig[tid * cols..(tid + 1) * cols];
+                assert!(
+                    orig_row.iter().any(|v| v.abs() > 1e-6),
+                    "{name} orig row {tid} unexpectedly zero"
+                );
+            }
+        }
     }
 }

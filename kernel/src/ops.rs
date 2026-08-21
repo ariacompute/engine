@@ -889,6 +889,8 @@ pub fn portable_block_signs(seed: i64, start: usize, size: usize) -> Vec<f32> {
 
 /// Apply blocked Hadamard on rows of a row-major `[rows, cols]` matrix.
 /// `inverse=false` → per-block `H@S`; `inverse=true` → `S@H`.
+///
+/// Tile sizes default to greedy [`pow2_tile_sizes`] (Python `pow2_tile_blocks`).
 pub fn hadamard_blocked_rows(
     data: &mut [f32],
     rows: usize,
@@ -896,14 +898,33 @@ pub fn hadamard_blocked_rows(
     seed: Option<i64>,
     inverse: bool,
 ) -> Result<(), EngineError> {
+    let sizes = pow2_tile_sizes(rows)?;
+    hadamard_blocked_rows_tiles(data, rows, cols, seed, inverse, &sizes)
+}
+
+/// Same as [`hadamard_blocked_rows`] but uses caller tile sizes (bundle `hadamard.blocks`).
+pub fn hadamard_blocked_rows_tiles(
+    data: &mut [f32],
+    rows: usize,
+    cols: usize,
+    seed: Option<i64>,
+    inverse: bool,
+    sizes: &[usize],
+) -> Result<(), EngineError> {
     if rows == 0 || cols == 0 || data.len() != rows * cols {
         return Err(EngineError::ShapeMismatch(
             "hadamard_blocked_rows shape mismatch".into(),
         ));
     }
-    let sizes = pow2_tile_sizes(rows)?;
+    let covered: usize = sizes.iter().copied().sum();
+    if covered != rows || sizes.iter().any(|&s| s == 0) {
+        return Err(EngineError::ShapeMismatch(format!(
+            "hadamard tiles {:?} cover {covered} != rows {rows}",
+            sizes
+        )));
+    }
     let mut start = 0usize;
-    for &sz in &sizes {
+    for &sz in sizes {
         let signs = seed.map(|s| portable_block_signs(s, start, sz));
         // Process column-chunks to bound stack/temp if needed; here full width.
         let mut work = vec![0.0f32; sz * cols];
@@ -1537,6 +1558,45 @@ mod tests {
         for (a, b) in orig.iter().zip(w[tid * hidden..(tid + 1) * hidden].iter()) {
             assert!((a - b).abs() < 1e-4, "{a} vs {b}");
         }
+    }
+
+    #[test]
+    fn vocab_table_non_pow2_row_gather_after_unrotate() {
+        // Gemma-4 embed is [vocab, hidden]; PLE is [vocab, layers*256]. Vocab need
+        // not be the only pow2 (e.g. Qwen); tiles must still unrotate then gather.
+        let vocab = 10usize;
+        let hidden = 6usize;
+        let seed = Some(0i64);
+        let mut w: Vec<f32> = (0..vocab * hidden)
+            .map(|i| (i as f32) * 0.02 - 0.1)
+            .collect();
+        let orig = w.clone();
+        hadamard_blocked_rows(&mut w, vocab, hidden, seed, false).unwrap();
+        hadamard_blocked_rows(&mut w, vocab, hidden, seed, true).unwrap();
+        for tid in [0usize, 2, 9] {
+            let a = &orig[tid * hidden..(tid + 1) * hidden];
+            let b = &w[tid * hidden..(tid + 1) * hidden];
+            for (x, y) in a.iter().zip(b.iter()) {
+                assert!((x - y).abs() < 1e-4, "tid={tid} {x} vs {y}");
+            }
+        }
+        let tiles = pow2_tile_sizes(vocab).unwrap();
+        assert_eq!(tiles, vec![8, 2]);
+        let mut w2 = orig.clone();
+        hadamard_blocked_rows_tiles(&mut w2, vocab, hidden, seed, false, &tiles).unwrap();
+        hadamard_blocked_rows_tiles(&mut w2, vocab, hidden, seed, true, &tiles).unwrap();
+        for (a, b) in orig.iter().zip(w2.iter()) {
+            assert!((a - b).abs() < 1e-4);
+        }
+        assert!(hadamard_blocked_rows_tiles(
+            &mut orig.clone(),
+            vocab,
+            hidden,
+            seed,
+            true,
+            &[4, 4],
+        )
+        .is_err());
     }
 
     #[test]

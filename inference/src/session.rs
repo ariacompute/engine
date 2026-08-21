@@ -282,6 +282,7 @@ impl SessionBuilder {
         // Materialize with the same config Session uses for RoPE / head_dim /
         // layer_types so AttnKind and KV sharing match the forward path.
         let weights = materialize_with_config(&bundle, family, &conf)?;
+        require_gemma4_ple(&weights, &conf, family.path())?;
         load_profile_set_materialize(elapsed_ms(t_mat));
         let mut cuda = None;
         if compute == ComputeBackend::Cuda {
@@ -491,6 +492,28 @@ fn require_gemma4_config(
     }
     if conf.global_head_dim.unwrap_or(0) == 0 {
         return Err(missing("global_head_dim"));
+    }
+    Ok(())
+}
+
+fn gemma4_requires_ple(family_path: &str, hidden: usize) -> bool {
+    family_path.contains("gemma-4") && hidden >= 1024
+}
+
+fn require_gemma4_ple(
+    weights: &ModelWeights,
+    conf: &crate::bundle::ModelConfig,
+    family_path: &str,
+) -> Result<(), EngineError> {
+    if !gemma4_requires_ple(family_path, conf.hidden_size) {
+        return Ok(());
+    }
+    if weights.ple.is_none() {
+        return Err(EngineError::Format(format!(
+            "{family_path}: codebook PLE required for Gemma-4 E2B/E4B \
+             (embed_tokens_per_layer + per_layer_model_projection + \
+             per_layer_projection_norm); refusing silent no-op"
+        )));
     }
     Ok(())
 }
@@ -818,6 +841,7 @@ fn materialize_with_config(
     } else {
         MatWeight::from_loaded(b.weight_loaded_any(&out_n)?)
     };
+    let require_ple = gemma4_requires_ple(family.path(), hidden);
     let ple = {
         let embed_n = embed_per_layer_names();
         let proj_n: Vec<String> = per_layer_model_projection_names()
@@ -828,11 +852,10 @@ fn materialize_with_config(
             .iter()
             .map(|s| (*s).to_string())
             .collect();
-        match (
-            b.weight_loaded_any(&embed_n),
-            any_mat(b, &proj_n),
-            optional_vec(b, &norm_n),
-        ) {
+        let embed_res = b.weight_loaded_any(&embed_n);
+        let proj_res = any_mat(b, &proj_n);
+        let proj_norm = optional_vec(b, &norm_n);
+        match (embed_res, proj_res, proj_norm) {
             (Ok(embed), Ok(proj), Some(proj_norm)) => {
                 let d = proj_norm.len();
                 if d == 0 {
@@ -846,6 +869,22 @@ fn materialize_with_config(
                     proj_norm,
                     d,
                 })
+            }
+            (embed_res, proj_res, proj_norm) if require_ple => {
+                let embed_s = match &embed_res {
+                    Ok(_) => "ok".to_string(),
+                    Err(e) => e.to_string(),
+                };
+                let proj_s = match &proj_res {
+                    Ok(_) => "ok".to_string(),
+                    Err(e) => e.to_string(),
+                };
+                let norm_s = if proj_norm.is_some() { "ok" } else { "missing" };
+                return Err(EngineError::Format(format!(
+                    "{}: codebook PLE required (embed_tokens_per_layer={embed_s}, \
+                     per_layer_model_projection={proj_s}, per_layer_projection_norm={norm_s})",
+                    family.path()
+                )));
             }
             _ => None,
         }
@@ -3520,7 +3559,7 @@ mod tests {
 
     #[test]
     fn load_real_hf_named_bundle_if_present() {
-        // Optional local smoke: ARIA_SMOKE_BUNDLE=/path/to/qwen3-0.6b_q4
+        // Optional local smoke: ARIA_SMOKE_BUNDLE=/path/to/qwen3-0.6b_q4 or gemma-4-e2b-it_q4
         let Ok(path) = std::env::var("ARIA_SMOKE_BUNDLE") else {
             return;
         };
@@ -3528,13 +3567,30 @@ mod tests {
         if !path.join("config.json").is_file() {
             return;
         }
+        let family = if path.to_string_lossy().contains("gemma-4") {
+            "gemma/gemma-4-e2b-it"
+        } else {
+            "qwen/qwen3-0.6b"
+        };
         let s = SessionBuilder::new()
             .model(path)
-            .family("qwen/qwen3-0.6b")
+            .family(family)
             .build()
-            .expect("HF-named qwen bundle should materialize");
+            .unwrap_or_else(|e| panic!("{family} bundle should materialize: {e}"));
         assert!(s.config().num_layers > 0);
         assert!(s.config().hidden_size > 0);
+        if family.contains("gemma-4") && s.config().hidden_size >= 1024 {
+            assert!(
+                s.weights.ple.is_some(),
+                "real Gemma-4 q4 must load codebook PLE"
+            );
+            let hidden = s.config().hidden_size;
+            let vocab = s.config().vocab_size;
+            assert!(
+                s.weights.emb.data.len() >= vocab.saturating_mul(hidden),
+                "embed table too small for vocab={vocab} hidden={hidden}"
+            );
+        }
     }
 
     #[test]
@@ -3733,6 +3789,160 @@ mod tests {
         assert_eq!(batched.tokens, step.tokens);
         assert_eq!(batched.tokens.len(), 3);
         assert_eq!(s.config().sliding_window, Some(512));
+    }
+
+    #[test]
+    fn gemma4_ple_required_gate() {
+        assert!(!gemma4_requires_ple("gemma/gemma-4-e2b-it", 64));
+        assert!(gemma4_requires_ple("gemma/gemma-4-e2b-it", 1024));
+        assert!(gemma4_requires_ple("gemma/gemma-4-e2b-it", 1536));
+        assert!(!gemma4_requires_ple("qwen/qwen3-0.6b", 1536));
+    }
+
+    #[test]
+    fn gemma4_e2b_scale_missing_ple_is_hard_error() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = 1024usize;
+        let layers = 1usize;
+        let vocab = 8usize;
+        let n_heads = 8usize;
+        let n_kv = 1usize;
+        let head_dim = 128usize;
+        let q_dim = n_heads * head_dim;
+        let k_dim = n_kv * head_dim;
+        let inter = 32usize;
+        let p = "model.language_model";
+
+        let mut tensors = serde_json::Map::new();
+        let mut bin = Vec::new();
+        let mut add_raw = |name: &str, shape: Vec<usize>, data: &[f32]| {
+            let offset = bin.len();
+            for &v in data {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+            let nbytes = data.len() * 4;
+            tensors.insert(
+                name.to_string(),
+                json!({
+                    "kind": "raw",
+                    "dtype": "f32",
+                    "shape": shape,
+                    "offsets": { "data": [offset, nbytes] }
+                }),
+            );
+        };
+        let emb = vec![0.01f32; vocab * hidden];
+        add_raw(&format!("{p}.embed_tokens.weight"), vec![vocab, hidden], &emb);
+        let ones = vec![1.0f32; hidden];
+        add_raw(
+            &format!("{p}.layers.0.input_layernorm.weight"),
+            vec![hidden],
+            &ones,
+        );
+        add_raw(
+            &format!("{p}.layers.0.pre_feedforward_layernorm.weight"),
+            vec![hidden],
+            &ones,
+        );
+        add_raw(
+            &format!("{p}.layers.0.post_attention_layernorm.weight"),
+            vec![hidden],
+            &ones,
+        );
+        add_raw(
+            &format!("{p}.layers.0.post_feedforward_layernorm.weight"),
+            vec![hidden],
+            &ones,
+        );
+        add_raw(&format!("{p}.norm.weight"), vec![hidden], &ones);
+        let q = vec![0.01f32; q_dim * hidden];
+        let k = vec![0.01f32; k_dim * hidden];
+        add_raw(
+            &format!("{p}.layers.0.self_attn.q_proj.weight"),
+            vec![q_dim, hidden],
+            &q,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.k_proj.weight"),
+            vec![k_dim, hidden],
+            &k,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.v_proj.weight"),
+            vec![k_dim, hidden],
+            &k,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.o_proj.weight"),
+            vec![hidden, q_dim],
+            &q,
+        );
+        let qn = vec![1.0f32; head_dim];
+        add_raw(
+            &format!("{p}.layers.0.self_attn.q_norm.weight"),
+            vec![head_dim],
+            &qn,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.k_norm.weight"),
+            vec![head_dim],
+            &qn,
+        );
+        let g = vec![0.01f32; inter * hidden];
+        add_raw(
+            &format!("{p}.layers.0.mlp.gate_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.up_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.down_proj.weight"),
+            vec![hidden, inter],
+            &g,
+        );
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "test",
+            "group_size_default": 32,
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": layers,
+                "num_attention_heads": n_heads,
+                "num_kv_heads": n_kv,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 10000.0,
+                "hidden_act": "gelu_pytorch_tanh",
+                "tie_word_embeddings": true,
+                "head_dim": head_dim,
+                "global_head_dim": head_dim,
+                "sliding_window": 512,
+                "partial_rotary_factor": 0.25,
+                "num_kv_shared_layers": 0,
+                "layer_types": ["full_attention"]
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+
+        let err = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("PLE") && msg.contains("embed_tokens_per_layer"),
+            "{msg}"
+        );
     }
 
     #[test]

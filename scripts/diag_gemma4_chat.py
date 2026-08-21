@@ -4,8 +4,10 @@
 Encodes the same gemma4_it string the Rust session uses, POSTs the OpenAI chat
 payload, and optionally diffs against model/scripts/diag_gemma4_chat.py JSON.
 
-engine.log (H200, gemma-4-e2b-it_q4, temperature 0, Hello): content garbage,
-prompt_tokens=28 from the old <start_of_turn> markers (official template is 10).
+engine.log (H200, gemma-4-e2b-it_q4, temperature 0, Hello): multilingual garbage
+with prompt_tokens=10 (template is already aligned). Peer model diag that skips
+huge embed/PLE inject is an HF-fp32 teacher — do not treat that as proof the
+engine unpacked hub codebook tables correctly.
 
 H200 example (from engine repo root):
 
@@ -112,15 +114,29 @@ def _compare_peer(engine: dict, peer: dict) -> list[str]:
         )
     if peer.get("prompt_ids_hf") and e_ids and peer["prompt_ids_hf"] != e_ids:
         hints.append("TEMPLATE: engine gemma_it ids != HF apply_chat_template ids")
-    inj = peer.get("n_injected")
-    if isinstance(inj, int) and inj == 0:
+    inj = peer.get("inject") or {}
+    skipped_huge = inj.get("n_skipped_huge") or 0
+    inject_embeddings = inj.get("inject_embeddings")
+    if isinstance(skipped_huge, int) and skipped_huge > 0 and not inject_embeddings:
+        hints.append(
+            "peer skipped vocab/PLE inject (HF fp32 teacher); engine unpacks hub 2D "
+            "codebook embed_tokens / embed_tokens_per_layer — check load unrotate+gather+PLE, "
+            "not a model re-quantize"
+        )
+    n_injected = peer.get("n_injected")
+    if isinstance(n_injected, int) and n_injected == 0:
         hints.append("model INJECT failed; do not treat reconstruct as a teacher")
     recon = ((peer.get("chat") or {}).get("reconstruct") or {}).get("text_skip_special")
     eng_txt = engine.get("content")
     if recon and eng_txt:
         if recon.strip()[:20] == (eng_txt or "").strip()[:20]:
             hints.append(
-                "ENGINE matches HF+reconstruct prefix → garbage is QUANT (or shared template)"
+                "ENGINE matches HF+reconstruct prefix → remaining gap is elsewhere"
+            )
+        elif skipped_huge and not inject_embeddings:
+            hints.append(
+                "ENGINE text != peer reconstruct while peer kept HF embed/PLE; "
+                "prefer codebook unpack / PLE load over ENGINE_GRAPH"
             )
         else:
             hints.append(
