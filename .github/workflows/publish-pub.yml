@@ -1,0 +1,100 @@
+name: Publish pub.dev (package:aria_engine)
+
+# Publish the Flutter FFI binding (package:aria_engine) to pub.dev under
+# the verified publisher ariacompute.com, so consumers can use:
+#   dependencies:
+#     aria_engine: <version>
+#   import 'package:aria_engine/aria_engine.dart';
+# Listed at https://pub.dev/publishers/ariacompute.com/packages
+#
+# Version is injected into bindings/flutter/pubspec.yaml from the release
+# tag sans leading v (same parser as publish-npm.yml / publish-maven.yml).
+# Publish failures are hard failures (no continue-on-error); pub.dev
+# versions are immutable — republishing an existing version fails, bump
+# the tag to re-release.
+#
+# Auth (either is sufficient):
+#   PUB_CREDENTIALS — contents of ~/.config/dart/pub-credentials.json from
+#       `dart pub login` as a member of publisher ariacompute.com
+#       (Dart no longer writes ~/.pub-cache/credentials.json).
+#       Required for `release` / `workflow_dispatch` events (pub.dev OIDC
+#       only accepts tag `push`, optionally `workflow_dispatch` on a tag).
+#   GitHub Actions OIDC — job grants `id-token: write` and
+#       dart-lang/setup-dart wires the token. After the first publish,
+#       enable Automated publishing on
+#       https://pub.dev/packages/aria_engine/admin (repository
+#       ariacompute/engine, tag pattern v{{version}}), then Transfer the
+#       package to publisher ariacompute.com.
+#
+# First publish: the package is created under the uploading account; a
+# publisher admin then transfers it at the package Admin page so it
+# appears under ariacompute.com.
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (default: tag with v stripped)"
+        required: false
+
+jobs:
+  publish:
+    name: pub.dev package:aria_engine
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      # dart-lang/setup-dart provisions the GitHub OIDC token that pub.dev
+      # trusted publishing consumes. Flutter's bundled dart (installed next)
+      # may shadow this `dart` on PATH, but the pub auth state remains.
+      - uses: dart-lang/setup-dart@v1
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+      - name: Resolve version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          # release event: GITHUB_REF_NAME is the tag (e.g. v0.2.0 -> 0.2.0)
+          if [ -z "$VERSION" ] && [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          # manual dispatch without a version: fall back to the newest tag
+          if [ -z "$VERSION" ]; then
+            VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+          fi
+          [ -n "$VERSION" ] || VERSION="0.0.0"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Publishing version=$VERSION"
+      - name: Inject version into pubspec.yaml
+        run: |
+          # -i.bak works on both GNU sed (linux) and BSD sed
+          sed -i.bak "s/^version: .*/version: $VERSION/" bindings/flutter/pubspec.yaml
+          rm -f bindings/flutter/pubspec.yaml.bak
+          grep -E '^name:|^version:' bindings/flutter/pubspec.yaml
+      - name: Configure pub.dev credentials
+        env:
+          PUB_CREDENTIALS: ${{ secrets.PUB_CREDENTIALS }}
+        run: |
+          if [ -n "$PUB_CREDENTIALS" ]; then
+            # Current Dart/Flutter reads ~/.config/dart/pub-credentials.json
+            # (dart pub login). Also write the legacy pub-cache path.
+            mkdir -p "$HOME/.config/dart" "$HOME/.pub-cache"
+            printf '%s' "$PUB_CREDENTIALS" > "$HOME/.config/dart/pub-credentials.json"
+            printf '%s' "$PUB_CREDENTIALS" > "$HOME/.pub-cache/credentials.json"
+            chmod 600 "$HOME/.config/dart/pub-credentials.json" "$HOME/.pub-cache/credentials.json"
+            echo "Wrote PUB_CREDENTIALS to ~/.config/dart/pub-credentials.json"
+          else
+            echo "::warning::PUB_CREDENTIALS secret is empty; flutter pub publish will try GitHub Actions OIDC (configure Automated publishing on pub.dev)."
+          fi
+      - name: Publish to pub.dev
+        working-directory: bindings/flutter
+        run: |
+          flutter pub get
+          flutter pub publish --dry-run
+          flutter pub publish --force
