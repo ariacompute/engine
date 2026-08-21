@@ -917,7 +917,7 @@ pub fn hadamard_blocked_rows_tiles(
         ));
     }
     let covered: usize = sizes.iter().copied().sum();
-    if covered != rows || sizes.iter().any(|&s| s == 0) {
+    if covered != rows || sizes.contains(&0) {
         return Err(EngineError::ShapeMismatch(format!(
             "hadamard tiles {:?} cover {covered} != rows {rows}",
             sizes

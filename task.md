@@ -161,6 +161,7 @@
 - [x] Gemma-4 KV **cache** 按 `num_kv_shared_layers` + `layer_types` 同类复用（不 clone `wk`/`wv`）
 - [x] Gemma-4 双 RoPE（sliding θ=1e4 / full p-RoPE θ=1e6）+ 四 norm + PLE + embed `sqrt(H)` + attn scale `1.0`
 - [x] 滑动窗口 mask（Gemma-4 `sliding_window=512`；只裁 attention，不裁共享 KV cache）
+- [x] Gemma-4 `layer_scalar`（HF/JAX `skip_scale`）：无 `.weight` 的 raw 标量，层末乘残差；缺省 1.0；hub q4 Hello 依赖此项
 
 ### T64 — QK-Norm
 - [x] 别名 + op；Qwen3 / Gemma / LFM attn 路径

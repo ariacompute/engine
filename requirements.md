@@ -112,11 +112,35 @@
 | P0 | **LFM conv hybrid** | LFM2/2.5：`layer_types` / conv 层不要求 `q_proj`；实现 short-conv + cache；消费 `conv.*` 张量名 |
 | P0 | **MoE** | `lfm2-8b-a1b`、Inkling：真实 router + expert FFN；`text_moe_decoder_stub` 不得冒充生成；Inkling ArchClass 不得标纯 TextDense |
 | P0 | **Qwen3.5 / Bonsai** | linear_attention / Gated DeltaNet 层：实现或对未实现层返回 `Unsupported`；禁止当全 SDPA dense |
-| P1 | **Gemma 正确性** | GeGLU（`gelu_pytorch_tanh`）vs SwiGLU；RMSNorm `*(1+w)`（Gemma-4 为 `*w`，ones 初始化）；四 norm；`ffn_norm` 优先 `pre_feedforward_layernorm`；Gemma-4：**KV cache 按注意力类型复用**（非 clone `wk`/`wv`）、滑动窗口 mask（默认 512）、双/部分 RoPE、PLE、**`layer_scalar`（HF/JAX `skip_scale`，缺省 1.0）**。**真实 E2B/E4B（hidden≥1024）必须加载码本 PLE**（`embed_tokens_per_layer` + projection + 每层 gate/proj/norm）；禁止 `ple=None` 静默 no-op。词表/PLE 2D 与其它线性层同一解包：LSB unpack → 旋转域 dequant → `hadamard.blocks` 逆 blocked FWHT → 行 gather（shape `[vocab, hidden]` / `[vocab, layers*d]`）。 |
+| P1 | **Gemma 正确性** | GeGLU（`gelu_pytorch_tanh`）vs SwiGLU；RMSNorm `*(1+w)`（Gemma-4 为 `*w`，ones 初始化）；四 norm；`ffn_norm` 优先 `pre_feedforward_layernorm`；Gemma-4 文本 decoder 图见 **§3.3.2**（KV-share、滑动窗口、双/部分 RoPE、PLE、**`layer_scalar`**）。**真实 E2B/E4B（hidden≥1024）必须加载码本 PLE**（`embed_tokens_per_layer` + projection + 每层 gate/proj/norm）；禁止 `ple=None` 静默 no-op。词表/PLE 2D 与其它线性层同一解包：LSB unpack → 旋转域 dequant → `hadamard.blocks` 逆 blocked FWHT → 行 gather（shape `[vocab, hidden]` / `[vocab, layers*d]`）。 |
 | P1 | **QK-Norm** | Qwen3 / Gemma / LFM attn：加载并应用 `q_norm`/`k_norm` |
 | P1 | **VL/VLA** | 消费 bundle 内 vision/action 张量，或硬 `Unsupported`；禁止 RGB mean-pool / 假 action 冒充完成 |
 | P2 | **注册表对齐** | §1.1 与 `model` 同步：补登记 `lfm/lfm2.5-2.6b`（或双方删除） |
 | P2 | **Bundle `model` 扩展字段** | 消费 model 仓写入的 `head_dim` / `layer_types` / `num_kv_shared_layers` / `hidden_act` / nested RoPE 等（见 model Spec）。**Gemma-4** 另认 `sliding_window` / `global_head_dim` / `partial_rotary_factor`；bundle 缺省时按 HF E2B/E4B 架构补齐（hub 旧 q4 仅含基础字段亦可加载），显式写入值优先；补齐后仍不完整 → `Unsupported`。推荐用当前 `config_from_hf` 重量化并重新上传 hub。 |
+
+### 3.3.2 Gemma-4 文本 decoder（hub q4）
+
+Hub 已发布 `gemma-4-e2b-it_q4` 为消费契约：引擎须按现有张量名加载，**禁止**因缺 `config.json` 扩展字段而拒绝（几何补齐见上表 P2）。文本路径与 HF `Gemma4DecoderLayer` 对齐。
+
+**每层顺序**（prefill 与 decode 相同）：
+
+1. pre-attn RMSNorm → QK-norm → RoPE（sliding θ=1e4 / full p-RoPE θ=1e6）→ SDPA（滑动窗口默认 512 或 full causal；attn scale `1.0`）→ 残差。KV-share 层复用 producer cache，禁止 clone `wk`/`wv`。
+2. post-attn RMSNorm（若存在）。
+3. pre-FFN RMSNorm（`pre_feedforward_layernorm`）→ GeGLU → 残差；post-FFN RMSNorm（若存在）。
+4. PLE（真实 E2B/E4B 必有，见 P1）。
+5. **`hidden *= layer_scalar`**。
+
+**`layer_scalar`（HF 同名 / JAX `skip_scale`）**：
+
+| 项 | 约定 |
+|----|------|
+| 张量名 | 无 `.weight` 后缀：`blk.{i}.layer_scalar`、`model.language_model.layers.{i}.layer_scalar` 等 |
+| 布局 | `kind=raw`，shape `[]` 或 `[1]`；hub E2B q4 为每层一个（35 层） |
+| 加载 | 取有限标量；**缺省 1.0**（tiny / 无该张量的 fixture） |
+| 应用 | 该层 attn+FFN+PLE 全部完成后、进入下一层之前 |
+| 禁止 | 因无 `.weight` 忽略该张量。发布 checkpoint 的值 **不是** 1.0；省略等价恒等残差，greedy Hello 会变成多语言乱码 |
+
+embed 缩放 `sqrt(hidden)`；`final_logit_softcapping` 默认 30。chat 模板为 Gemma-4 `<|turn>`；Hello 的 `prompt_tokens` 为 **10**。
 
 ### 3.4 `aria-openai`
 
@@ -243,7 +267,7 @@
 
 **张量 `kind == "codebook"`**：`bits`、`group_size`、`shape` `[K,N]`、`row_pad`（**仅** group 对齐）、`codebook_share`（`group`\|`channel`）、`hadamard`（v2：`mode=blocked`、`blocks=[{start,size},…]`、`applied`、`seed`）、`offsets`（`packed_indices`、`codebook` 必填；legacy `input_scale*` / `norms` 可选）。
 
-**张量 `kind == "raw"`**：`dtype` `f16`\|`f32`、`shape`、`offsets.data`。
+**张量 `kind == "raw"`**：`dtype` `f16`\|`f32`、`shape`、`offsets.data`。含 1D 范数权重，以及 **0-d / `[1]` 标量**（Gemma-4 `layers.{i}.layer_scalar`，无 `.weight` 后缀；见 §3.3.2）。
 
 **`weight.bin`**：无文件头；按 `offsets` 的 `[start, length]` 切片。索引：bits 1–4 为 **LSB-first** 位打包；bits 8 为每索引 1 字节 `uint8`。码本：fp16，C-order；`group` → `(G, Kc)`，`channel` → `(G, N, Kc)`，`Kc = 2^bits`。
 
@@ -295,6 +319,7 @@
 - **B**：每个 text/MoE 家族具备 loader/graph 钩子并通过该类 tiny 或全量文本生成测试。
 - **C**：VL/VLA、ASR、embeddings/RAG、tool_calls 的 OpenAI 面；NEON vs scalar 对拍；`hybrid_execution=device` 禁止云卸载、`=cloud` 强制云端。
 - **真实 codebook（与 §3.3.1）**：至少一条非 tiny Gemma-4 / Qwen3 / LFM 路径在 HDM 接通后，层 RMSE 或短生成与 Python `reconstruct_weight` / 参考前向有界；未实现架构族须硬失败而非乱输出。
+- **Gemma-4 hub q4 Hello（§3.3.2）**：`gemma-4-e2b-it_q4`、`temperature=0`、chat「Hello」、`prompt_tokens=10` 时续写须为英文问候（如 `Hello! How can I help you today?`），禁止多语言乱码。须加载并应用每层 `layer_scalar`；仅 unpack embed/PLE 不足以通过。
 
 ## 7. 目录与依赖约定
 
@@ -414,6 +439,7 @@ Report-only JSON（`GET /v1/engine/profile` 或 `scripts/profile_qwen3_serve.py`
 - [x] §3.7 SDK bindings（C ABI + 八语言；OpenAI FFI 面；host/device-farm 测；release.yml 多 registry 发布 fail-pass）可接受
 - [x] §3.7 PyPI 发布方案 B（cibuildwheel 多平台 wheel + 内嵌动态库 + `_load_lib` 回退 + `publish-pypi.yml`）可接受
 - [x] §3.5 P2 规则+语义两层混合路由（`route_hybrid`；语义层失败静默回退；健康回退链；`/v1/engine/routes` 观测；无新增环境变量）可接受
+- [x] §3.3.2 Gemma-4 `layer_scalar`（HF/JAX `skip_scale`；raw 0-d/`[1]`；层末乘残差；缺省 1.0）与 hub `gemma-4-e2b-it_q4` Hello 验收可接受
 
 > **人工审核状态**：2026-08-02 **已通过（approved）**。§8 增补经 2026-08-03 用户锁定范围 **已通过**。§3.7 SDK bindings 按 2026-08-15 计划实施。§3.7 PyPI 发布方案 B 经 2026-08-19 用户确认 **已通过（approved）**。§3.5 P2 两层混合路由经 2026-08-21 用户确认 **已通过（approved）**。可据本 Spec 生成 / 执行 `task.md`。
 
