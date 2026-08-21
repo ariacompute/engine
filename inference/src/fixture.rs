@@ -390,7 +390,13 @@ pub fn write_tiny_q4_bundle(out: &Path) -> Result<(f32, std::path::PathBuf), Eng
             "intermediate_size": inter,
             "vocab_size": vocab,
             "context_length": 64,
-            "rope_theta": 10000.0
+            "rope_theta": 10000.0,
+            // Gemma-4 required fields (current model config_from_hf); ignored by other families.
+            "head_dim": hidden / heads,
+            "global_head_dim": hidden / heads,
+            "sliding_window": 512,
+            "partial_rotary_factor": 0.25,
+            "layer_types": ["full_attention", "full_attention"]
         },
         "tensors": w.tensors
     });

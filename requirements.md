@@ -116,7 +116,7 @@
 | P1 | **QK-Norm** | Qwen3 / Gemma / LFM attn：加载并应用 `q_norm`/`k_norm` |
 | P1 | **VL/VLA** | 消费 bundle 内 vision/action 张量，或硬 `Unsupported`；禁止 RGB mean-pool / 假 action 冒充完成 |
 | P2 | **注册表对齐** | §1.1 与 `model` 同步：补登记 `lfm/lfm2.5-2.6b`（或双方删除） |
-| P2 | **Bundle `model` 扩展字段** | 消费 model 仓写入的 `head_dim` / `layer_types` / `num_kv_shared_layers` / `hidden_act` / nested RoPE 等（见 model Spec）；缺字段时降级或 `Unsupported` |
+| P2 | **Bundle `model` 扩展字段** | 消费 model 仓写入的 `head_dim` / `layer_types` / `num_kv_shared_layers` / `hidden_act` / nested RoPE 等（见 model Spec）。**Gemma-4** 另须 `sliding_window` / `global_head_dim` / `partial_rotary_factor`；缺任一字段 → `Unsupported`（不兼容旧版 null bundle，须用当前 `config_from_hf` 重量化） |
 
 ### 3.4 `aria-openai`
 

@@ -41,13 +41,13 @@ pub struct ModelConfig {
     /// LFM2 short-conv kernel / cache length (HF `conv_L_cache`, default 3).
     #[serde(default)]
     pub conv_l_cache: Option<usize>,
-    /// Sliding-window attention length (HF `sliding_window`). Gemma-4 default 512.
+    /// Sliding-window attention length (HF `sliding_window`). Required for gemma-4.
     #[serde(default)]
     pub sliding_window: Option<usize>,
-    /// Gemma-4 global p-RoPE fraction (HF `partial_rotary_factor`). None → 0.25 on gemma-4.
+    /// Gemma-4 global p-RoPE fraction (HF `partial_rotary_factor`). Required for gemma-4.
     #[serde(default)]
     pub partial_rotary_factor: Option<f32>,
-    /// Gemma-4 full-attention head dim (HF `global_head_dim`, default 512).
+    /// Gemma-4 full-attention head dim (HF `global_head_dim`). Required for gemma-4.
     #[serde(default)]
     pub global_head_dim: Option<usize>,
 }

@@ -200,6 +200,8 @@ pub struct Session {
     use_gemma4: bool,
     use_geglu: bool,
     embed_scale: f32,
+    /// HF `final_logit_softcapping` (Gemma-4 default 30). None = disabled.
+    final_logit_softcap: Option<f32>,
     tokenizer: Option<BundleTokenizer>,
     /// Cleared at the start of each `generate`; reused across decode steps.
     decode: Option<DecodeState>,
@@ -268,10 +270,15 @@ impl SessionBuilder {
         let t_mmap = Instant::now();
         let bundle = load_bundle(&path)?;
         load_profile_set_mmap(elapsed_ms(t_mmap));
-        reject_unsupported_geometry(&bundle.model, family)?;
+        let mut conf = bundle.model.clone();
+        conf.rope_theta = effective_rope_theta(family.path(), conf.rope_theta);
+        require_gemma4_config(&conf, family.path())?;
+        reject_unsupported_geometry(&conf, family)?;
         let tokenizer = BundleTokenizer::try_load(&path)?;
         let t_mat = Instant::now();
-        let weights = materialize(&bundle, family)?;
+        // Materialize with the same config Session uses for RoPE / head_dim /
+        // layer_types so AttnKind and KV sharing match the forward path.
+        let weights = materialize_with_config(&bundle, family, &conf)?;
         load_profile_set_materialize(elapsed_ms(t_mat));
         let mut cuda = None;
         if compute == ComputeBackend::Cuda {
@@ -281,8 +288,6 @@ impl SessionBuilder {
             load_profile_set_cuda_upload(elapsed_ms(t_up));
             cuda = Some(ctx);
         }
-        let mut conf = bundle.model.clone();
-        conf.rope_theta = effective_rope_theta(family.path(), conf.rope_theta);
         let act = conf
             .hidden_act
             .as_deref()
@@ -291,24 +296,14 @@ impl SessionBuilder {
         let use_gemma4 = family.path().contains("gemma-4");
         let use_gemma_norm = family.path().contains("gemma") && !use_gemma4;
         let use_geglu = act.contains("gelu") || use_gemma4;
-        if use_gemma4 && conf.layer_types.is_none() {
-            conf.layer_types = Some(default_gemma4_layer_types(conf.num_layers));
-        }
-        if use_gemma4 && conf.sliding_window.unwrap_or(0) == 0 {
-            conf.sliding_window = Some(512);
-        }
-        if use_gemma4 && conf.partial_rotary_factor.is_none() {
-            // HF Gemma4TextConfig: full_attention rope_type=proportional, factor=0.25.
-            conf.partial_rotary_factor = Some(0.25);
-        }
-        if use_gemma4 && conf.global_head_dim.unwrap_or(0) == 0 {
-            conf.global_head_dim = Some(512);
-        }
+        // Real Gemma-4 E2B/E4B checkpoints always ship PLE. Tiny/unit fixtures may
+        // omit it; materialize already errors if model-level PLE is partial.
         let embed_scale = if family.path().contains("gemma") {
             (conf.hidden_size as f32).sqrt()
         } else {
             1.0
         };
+        let final_logit_softcap = if use_gemma4 { Some(30.0) } else { None };
         let load = load_profile_take();
         let last_profile = self.profile.then(|| EngineProfile {
             compute: compute_label.clone(),
@@ -325,6 +320,7 @@ impl SessionBuilder {
             use_gemma4,
             use_geglu,
             embed_scale,
+            final_logit_softcap,
             tokenizer,
             decode: None,
             compute,
@@ -348,11 +344,24 @@ fn reject_unsupported_geometry(
     family: Family,
 ) -> Result<(), EngineError> {
     let path = family.path();
-    // Hybrid linear-attn families must declare layer_types so we don't SDPA-fake.
-    if (path.contains("qwen3.5") || path.contains("bonsai")) && conf.layer_types.is_none() {
-        return Err(EngineError::Unsupported(format!(
-            "{path}: requires model.layer_types for Gated DeltaNet / full_attention mix"
-        )));
+    // Hybrid linear-attn families must declare linear_attention / delta layers.
+    if path.contains("qwen3.5") || path.contains("bonsai") {
+        let has_linear = conf
+            .layer_types
+            .as_ref()
+            .map(|t| {
+                t.iter().any(|s| {
+                    let s = s.to_ascii_lowercase();
+                    s.contains("linear_attention") || s.contains("delta")
+                })
+            })
+            .unwrap_or(false);
+        if !has_linear {
+            return Err(EngineError::Unsupported(format!(
+                "{path}: requires model.layer_types with Gated DeltaNet / linear_attention \
+                 (dense-only bundles are unsupported until DeltaNet lands)"
+            )));
+        }
     }
     // MoE families need explicit expert count (router/experts materialize from that).
     if family.is_moe() && conf.num_experts.unwrap_or(0) == 0 {
@@ -393,23 +402,80 @@ fn is_kv_consumer(conf: &crate::bundle::ModelConfig, layer: usize) -> bool {
     n > 0 && layer >= conf.num_layers.saturating_sub(n)
 }
 
-/// HF Gemma-4 default: 5 sliding + 1 full, last layer always full attention.
-fn default_gemma4_layer_types(n: usize) -> Vec<String> {
-    let mut types = Vec::with_capacity(n);
-    for i in 0..n {
-        if (i + 1) % 6 == 0 {
-            types.push("full_attention".into());
-        } else {
-            types.push("sliding_attention".into());
+/// Gemma-4 requires fields written by current `model` `config_from_hf`.
+/// Older Aria bundles with null `sliding_window` / `global_head_dim` /
+/// `partial_rotary_factor` / `layer_types` / `head_dim` are rejected — re-quantize.
+fn require_gemma4_config(
+    conf: &crate::bundle::ModelConfig,
+    family_path: &str,
+) -> Result<(), EngineError> {
+    if !family_path.contains("gemma-4") {
+        return Ok(());
+    }
+    let missing = |field: &str| {
+        EngineError::Unsupported(format!(
+            "{family_path}: model.{field} required (re-quantize with current model \
+             config_from_hf; legacy gemma-4 Aria bundles are unsupported)"
+        ))
+    };
+    match &conf.layer_types {
+        None => return Err(missing("layer_types")),
+        Some(t) if t.len() != conf.num_layers => {
+            return Err(EngineError::Unsupported(format!(
+                "{family_path}: model.layer_types length {} != num_layers {}",
+                t.len(),
+                conf.num_layers
+            )));
         }
+        Some(_) => {}
     }
-    if n > 0 {
-        types[n - 1] = "full_attention".into();
+    if conf.sliding_window.unwrap_or(0) == 0 {
+        return Err(missing("sliding_window"));
     }
-    types
+    match conf.partial_rotary_factor {
+        Some(f) if f > 0.0 && f <= 1.0 => {}
+        _ => return Err(missing("partial_rotary_factor")),
+    }
+    if conf.head_dim.unwrap_or(0) == 0 {
+        return Err(missing("head_dim"));
+    }
+    if conf.global_head_dim.unwrap_or(0) == 0 {
+        return Err(missing("global_head_dim"));
+    }
+    Ok(())
 }
 
-fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> {
+/// When bundle declares distinct global vs local head dims, prefer q_proj geometry.
+fn resolve_attn_kind(
+    conf: &crate::bundle::ModelConfig,
+    layer: usize,
+    q_dim: usize,
+    n_heads: usize,
+) -> AttnKind {
+    if n_heads > 0 && q_dim.is_multiple_of(n_heads) {
+        let head_from_q = q_dim / n_heads;
+        if let (Some(g), Some(h)) = (
+            conf.global_head_dim.filter(|d| *d > 0),
+            conf.head_dim.filter(|d| *d > 0),
+        ) {
+            if g != h {
+                if head_from_q == g {
+                    return AttnKind::Full;
+                }
+                if head_from_q == h {
+                    return AttnKind::Sliding;
+                }
+            }
+        }
+    }
+    attn_kind(conf, layer)
+}
+
+fn materialize_with_config(
+    b: &Bundle,
+    family: Family,
+    conf: &crate::bundle::ModelConfig,
+) -> Result<ModelWeights, EngineError> {
     fn any_mat(b: &Bundle, names: &[String]) -> Result<MatWeight, EngineError> {
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         Ok(MatWeight::from_loaded(b.weight_loaded_any(&refs)?))
@@ -421,12 +487,9 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
         any_vec(b, names).ok()
     }
 
-    let mut model = b.model.clone();
-    if family.path().contains("gemma-4") && model.layer_types.is_none() {
-        model.layer_types = Some(default_gemma4_layer_types(model.num_layers));
-    }
-    let m = &model;
+    let m = conf;
     let hidden = m.hidden_size;
+    let n_heads = m.num_attention_heads;
     let n_experts = m.num_experts.unwrap_or(0);
     let top_k = m.num_experts_per_tok.unwrap_or(1).max(1);
     // LFM MoE uses sigmoid routing; Mixtral/Inkling-style uses softmax.
@@ -599,15 +662,23 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
                 };
                 (wk, wv)
             };
+            let wq = any_mat(b, &attn_q_names(layer))?;
+            if wq.data.len() % hidden != 0 {
+                return Err(EngineError::ShapeMismatch(format!(
+                    "layer {layer} q_proj len {} not divisible by hidden {hidden}",
+                    wq.data.len()
+                )));
+            }
+            let q_dim = wq.data.len() / hidden;
             LayerOp::Attn(AttnWeights {
-                wq: any_mat(b, &attn_q_names(layer))?,
+                wq,
                 wk,
                 wv,
                 wo: any_mat(b, &attn_o_names(layer))?,
                 q_norm: optional_vec(b, &attn_q_norm_names(layer)),
                 k_norm: optional_vec(b, &attn_k_norm_names(layer)),
                 v_norm: optional_vec(b, &attn_v_norm_names(layer)),
-                kind: attn_kind(m, layer),
+                kind: resolve_attn_kind(m, layer, q_dim, n_heads),
             })
         };
 
@@ -752,6 +823,14 @@ fn materialize(b: &Bundle, family: Family) -> Result<ModelWeights, EngineError> 
                 return Err(EngineError::ShapeMismatch(format!(
                     "layer {i} PLE gate/proj shape mismatch (d={}, hidden={hidden})",
                     ple.d
+                )));
+            }
+            // HF `post_per_layer_input_norm` is RMSNorm(hidden_size), not ple_d.
+            // A wrong-sized weight would silently chunk-norm and corrupt residuals.
+            if lp.post_norm.len() != hidden {
+                return Err(EngineError::ShapeMismatch(format!(
+                    "layer {i} PLE post_norm len {} != hidden {hidden}",
+                    lp.post_norm.len()
                 )));
             }
         }
@@ -980,11 +1059,16 @@ impl Session {
 
     /// Encode OpenAI-style messages with the family / tokenizer chat template.
     pub fn encode_chat(&self, messages: &[ChatTurn]) -> Vec<u32> {
-        let family = self
-            .tokenizer
-            .as_ref()
-            .and_then(|t| t.chat_family_hint())
-            .unwrap_or(self.family.path());
+        // Prefer the session family when it is gemma-4 so a stale tokenizer hint
+        // (e.g. gemma-3 `<start_of_turn>`) cannot override `<|turn>` markers.
+        let family = if self.family.path().contains("gemma-4") {
+            self.family.path()
+        } else {
+            self.tokenizer
+                .as_ref()
+                .and_then(|t| t.chat_family_hint())
+                .unwrap_or(self.family.path())
+        };
         let prompt = apply_chat_template(family, messages);
         self.encode_text(&prompt)
     }
@@ -1179,7 +1263,8 @@ impl Session {
             match kind {
                 AttnKind::Sliding => (10_000.0, None),
                 AttnKind::Full => {
-                    let factor = self.conf.partial_rotary_factor.unwrap_or(0.25);
+                    // Validated by require_gemma4_config; 1.0 means full RoPE.
+                    let factor = self.conf.partial_rotary_factor.unwrap_or(1.0);
                     let partial = if factor > 0.0 && factor < 1.0 {
                         Some(factor)
                     } else {
@@ -1633,13 +1718,14 @@ impl Session {
             )));
         }
         let out_rows = self.weights.output.data.len() / hidden;
-        self.wmm(
+        let logits = self.wmm(
             &self.weights.output,
             &xn,
             out_rows,
             hidden,
             GemmAcct::LmHead,
-        )
+        )?;
+        Ok(self.softcap_logits(logits))
     }
 
     fn forward_step(&mut self, tok: u32) -> Result<Vec<f32>, EngineError> {
@@ -1869,7 +1955,17 @@ impl Session {
             )));
         }
         let out_rows = self.weights.output.data.len() / hidden;
-        self.wmm(&self.weights.output, &xn, out_rows, hidden, GemmAcct::LmHead)
+        let logits = self.wmm(&self.weights.output, &xn, out_rows, hidden, GemmAcct::LmHead)?;
+        Ok(self.softcap_logits(logits))
+    }
+
+    fn softcap_logits(&self, mut logits: Vec<f32>) -> Vec<f32> {
+        if let Some(cap) = self.final_logit_softcap.filter(|c| *c > 0.0) {
+            for x in &mut logits {
+                *x = (*x / cap).tanh() * cap;
+            }
+        }
+        logits
     }
 }
 
@@ -1921,6 +2017,41 @@ mod tests {
     use serde_json::{json, Value};
 
     #[test]
+    fn gemma4_rejects_legacy_bundle_missing_required_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let cfg_path = dir.path().join("config.json");
+        let raw = std::fs::read_to_string(&cfg_path).unwrap();
+        let mut cfg: Value = serde_json::from_str(&raw).unwrap();
+        // Simulate pre-config_from_hf Aria export (null / omitted gemma-4 fields).
+        let model = cfg["model"].as_object_mut().unwrap();
+        for key in [
+            "layer_types",
+            "sliding_window",
+            "partial_rotary_factor",
+            "global_head_dim",
+            "head_dim",
+        ] {
+            model.remove(key);
+        }
+        std::fs::write(&cfg_path, cfg.to_string()).unwrap();
+        let err = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap_err();
+        match err {
+            EngineError::Unsupported(msg) => {
+                assert!(
+                    msg.contains("required") || msg.contains("legacy"),
+                    "unexpected message: {msg}"
+                );
+            }
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn generate_tokens() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
@@ -1931,7 +2062,14 @@ mod tests {
             .unwrap();
         assert_eq!(s.config().sliding_window, Some(512));
         assert_eq!(s.config().partial_rotary_factor, Some(0.25));
-        assert_eq!(s.config().global_head_dim, Some(512));
+        assert_eq!(s.config().head_dim, Some(16));
+        assert_eq!(s.config().global_head_dim, Some(16));
+        assert_eq!(
+            s.config().layer_types.as_ref().map(|v| v.as_slice()),
+            Some(
+                ["full_attention".to_string(), "full_attention".to_string()].as_slice()
+            )
+        );
         assert_eq!(
             s.layer_rope_params(AttnKind::Full),
             (1_000_000.0, Some(0.25))
@@ -2174,7 +2312,12 @@ mod tests {
                 "intermediate_size": inter,
                 "vocab_size": vocab,
                 "context_length": 32,
-                "rope_theta": 10000.0
+                "rope_theta": 10000.0,
+                "head_dim": head_dim,
+                "global_head_dim": head_dim,
+                "sliding_window": 512,
+                "partial_rotary_factor": 0.25,
+                "layer_types": ["full_attention"]
             },
             "tensors": tensors
         });
@@ -2312,6 +2455,10 @@ mod tests {
                 "context_length": 32,
                 "rope_theta": 10000.0,
                 "num_kv_shared_layers": 1,
+                "head_dim": head_dim,
+                "global_head_dim": head_dim,
+                "sliding_window": 512,
+                "partial_rotary_factor": 0.25,
                 "layer_types": ["full_attention", "full_attention"]
             },
             "tensors": tensors
@@ -3071,11 +3218,15 @@ mod tests {
                 "num_attention_heads": n_heads,
                 "num_kv_heads": n_kv,
                 "head_dim": head_dim,
+                "global_head_dim": head_dim,
+                "sliding_window": 512,
+                "partial_rotary_factor": 0.25,
                 "intermediate_size": inter,
                 "vocab_size": vocab,
                 "context_length": 32,
                 "rope_theta": 10000.0,
-                "hidden_act": "gelu_pytorch_tanh"
+                "hidden_act": "gelu_pytorch_tanh",
+                "layer_types": ["full_attention"]
             },
             "tensors": tensors
         });
@@ -3493,6 +3644,10 @@ mod tests {
                 "rope_theta": 10000.0,
                 "hidden_act": "gelu_pytorch_tanh",
                 "tie_word_embeddings": true,
+                "head_dim": head_dim,
+                "global_head_dim": head_dim,
+                "sliding_window": 512,
+                "partial_rotary_factor": 0.25,
                 "layer_types": ["full_attention"]
             },
             "tensors": tensors
