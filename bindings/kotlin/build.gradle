@@ -1,6 +1,9 @@
+import com.vanniktech.maven.publish.SonatypeHost
+
 plugins {
     id 'java-library'
-    id 'maven-publish'
+    id 'org.jetbrains.kotlin.jvm' version '2.0.21'
+    id 'com.vanniktech.maven.publish' version '0.30.0'
 }
 
 group = 'com.ariacompute'
@@ -11,11 +14,42 @@ java {
     targetCompatibility = JavaVersion.VERSION_17
 }
 
-publishing {
-    publications {
-        maven(MavenPublication) {
-            from components.java
-            artifactId = 'engine'
+kotlin {
+    jvmToolchain(17)
+}
+
+// Maven Central (Central Portal) publishing via vanniktech plugin.
+// Credentials come from ORG_GRADLE_PROJECT_* env vars (see publish-maven.yml):
+//   mavenCentralUsername / mavenCentralPassword   — Sonatype user token
+//   signingInMemoryKey / signingInMemoryKeyPassword — ascii-armored GPG key
+// Version is injected via ARIA_VERSION (release tag sans leading v).
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, true)
+    signAllPublications()
+
+    coordinates('com.ariacompute', 'engine', project.version.toString())
+
+    pom {
+        name = 'Aria Engine'
+        description = 'Kotlin/JVM + Android JNI binding for the Aria inference engine (libaria_ffi).'
+        url = 'https://github.com/ariacompute/engine'
+        licenses {
+            license {
+                name = 'MIT License'
+                url = 'https://opensource.org/licenses/MIT'
+            }
+        }
+        developers {
+            developer {
+                id = 'ariacompute'
+                name = 'AriaCompute'
+                url = 'https://github.com/ariacompute'
+            }
+        }
+        scm {
+            url = 'https://github.com/ariacompute/engine'
+            connection = 'scm:git:git://github.com/ariacompute/engine.git'
+            developerConnection = 'scm:git:ssh://git@github.com/ariacompute/engine.git'
         }
     }
 }

@@ -10,4 +10,4 @@ AriaEngine("/path/to/bundle").use { eng ->
 }
 ```
 
-Published via `release.yml` (`./gradlew publish`, fail-pass).
+Published to Maven Central via `publish-maven.yml` (vanniktech plugin -> Central Portal, automatic release).

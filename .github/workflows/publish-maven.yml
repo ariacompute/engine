@@ -1,0 +1,65 @@
+name: Publish Maven Central (com.ariacompute:engine)
+
+# Publish the Kotlin/JVM + Android binding to Maven Central via the Sonatype
+# Central Portal (central.sonatype.com), so consumers can use:
+#   implementation("com.ariacompute:engine:<version>")
+# The Gradle build (bindings/kotlin/build.gradle) uses the vanniktech
+# maven-publish plugin: publishToMavenCentral(CENTRAL_PORTAL, automaticRelease)
+# + signAllPublications() with an in-memory GPG key. Version is injected via
+# the ARIA_VERSION env var (release tag sans leading v).
+# Publish failures are hard failures (no continue-on-error); Central versions
+# are immutable — republishing an existing version fails, bump the tag to
+# re-release.
+#
+# Secrets required:
+#   SONATYPE_USERNAME / SONATYPE_PASSWORD — central.sonatype.com user token
+#       (View Account -> Generate User Token); the account must own the
+#       verified `com.ariacompute` namespace
+#   GPG_PRIVATE_KEY  — ascii-armored private key (`gpg --export-secret-keys --armor`)
+#   GPG_PASSPHRASE   — passphrase for the key above (public key must be
+#       uploaded to a keyserver, e.g. keys.openpgp.org)
+
+on:
+  release:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to publish (default: tag with v stripped)"
+        required: false
+
+jobs:
+  publish:
+    name: Maven Central com.ariacompute:engine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Resolve version
+        shell: bash
+        run: |
+          VERSION="${{ inputs.version }}"
+          # release event: GITHUB_REF_NAME is the tag (e.g. v0.2.0 -> 0.2.0)
+          if [ -z "$VERSION" ] && [ "${GITHUB_EVENT_NAME}" = "release" ]; then
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          # manual dispatch without a version: fall back to the newest tag
+          if [ -z "$VERSION" ]; then
+            VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
+          fi
+          [ -n "$VERSION" ] || VERSION="0.0.0"
+          echo "ARIA_VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "Publishing version=$VERSION"
+      - name: Build
+        run: gradle -p bindings/kotlin build
+      - name: Publish to Maven Central
+        env:
+          ORG_GRADLE_PROJECT_mavenCentralUsername: ${{ secrets.SONATYPE_USERNAME }}
+          ORG_GRADLE_PROJECT_mavenCentralPassword: ${{ secrets.SONATYPE_PASSWORD }}
+          ORG_GRADLE_PROJECT_signingInMemoryKey: ${{ secrets.GPG_PRIVATE_KEY }}
+          ORG_GRADLE_PROJECT_signingInMemoryKeyPassword: ${{ secrets.GPG_PASSPHRASE }}
+        run: gradle -p bindings/kotlin publishAndReleaseToMavenCentral

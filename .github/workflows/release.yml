@@ -172,10 +172,10 @@ jobs:
         run: |
           echo "Configure PUB_CREDENTIALS secret then: cd bindings/flutter && dart pub publish --force"
           echo "pub.dev publish stub (fail-pass)"
-      - name: Maven Kotlin
+      - name: Maven Central com.ariacompute:engine
         continue-on-error: true
         run: |
-          echo "Configure Maven Central / GPG then: cd bindings/kotlin && ./gradlew publish"
+          echo "Maven publish handled by publish-maven.yml (vanniktech plugin -> Central Portal)"
           echo "Maven publish stub (fail-pass)"
       - name: CocoaPods Swift
         continue-on-error: true
