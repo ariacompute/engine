@@ -7,7 +7,8 @@ use crate::tensor_names::{
     attn_post_norm_names, attn_q_names, attn_q_norm_names, attn_v_names, attn_v_norm_names,
     conv_in_proj_names, conv_kernel_names, conv_out_proj_names, emb_names, embed_per_layer_names,
     ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_post_norm_names, ffn_up_names,
-    layer_ple_gate_names, layer_ple_post_norm_names, layer_ple_proj_names, linear_a_log_names,
+    layer_ple_gate_names, layer_ple_post_norm_names, layer_ple_proj_names, layer_scalar_names,
+    linear_a_log_names,
     linear_conv1d_names, linear_dt_bias_names, linear_in_proj_ba_names, linear_in_proj_qkvz_names,
     linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names, moe_expert_up_names,
     moe_router_names, output_names, output_norm_names, per_layer_model_projection_names,
@@ -177,6 +178,8 @@ struct LayerWeights {
     post_attn_norm: Option<Vec<f32>>,
     post_ffn_norm: Option<Vec<f32>>,
     ple: Option<LayerPle>,
+    /// HF `layer_scalar` / JAX `skip_scale`. 1.0 when the bundle omits it.
+    layer_scalar: f32,
     op: LayerOp,
     ffn: FfnWeights,
 }
@@ -809,12 +812,17 @@ fn materialize_with_config(
             _ => None,
         };
 
+        let layer_scalar = optional_vec(b, &layer_scalar_names(layer))
+            .and_then(|v| v.into_iter().find(|x| x.is_finite()))
+            .unwrap_or(1.0);
+
         layers.push(LayerWeights {
             attn_norm,
             ffn_norm,
             post_attn_norm,
             post_ffn_norm,
             ple,
+            layer_scalar,
             op,
             ffn,
         });
@@ -1505,6 +1513,15 @@ impl Session {
         Ok(())
     }
 
+    fn apply_layer_scalar(x: &mut [f32], scale: f32) {
+        if (scale - 1.0).abs() < 1e-8 {
+            return;
+        }
+        for v in x {
+            *v *= scale;
+        }
+    }
+
     fn apply_ffn(
         &self,
         layer: &LayerWeights,
@@ -1796,6 +1813,7 @@ impl Session {
             let down = self.apply_ffn(layer, &xn2, hidden)?;
             self.add_normed_residual(&mut x, &down, layer.post_ffn_norm.as_deref())?;
             self.apply_ple(&mut x, layer, li, ple_tok.as_deref(), hidden)?;
+            Self::apply_layer_scalar(&mut x, layer.layer_scalar);
         }
         state.pos = pos0 + seq;
         let last = &x[(seq - 1) * hidden..seq * hidden];
@@ -2034,6 +2052,7 @@ impl Session {
             let down = self.apply_ffn(layer, &xn2, hidden)?;
             self.add_normed_residual(&mut x, &down, layer.post_ffn_norm.as_deref())?;
             self.apply_ple(&mut x, layer, li, ple_tok.as_deref(), hidden)?;
+            Self::apply_layer_scalar(&mut x, layer.layer_scalar);
         }
         state.pos += 1;
         let xn = self.norm(&x, &self.weights.output_norm)?;
@@ -3650,6 +3669,8 @@ mod tests {
             vec![hidden],
             &n1,
         );
+        // HF skip_scale → layer_scalar (not ones at the published checkpoint).
+        add_raw(&format!("{p}.layers.0.layer_scalar"), vec![1], &[0.5f32]);
         let wq = vec![0.01f32; q_dim * hidden];
         let wk = vec![0.01f32; k_dim * hidden];
         let wv = vec![0.01f32; k_dim * hidden];
@@ -3765,6 +3786,7 @@ mod tests {
             .unwrap();
         assert!((s.embed_scale - (hidden as f32).sqrt()).abs() < 1e-5);
         assert!(s.weights.ple.is_some());
+        assert!((s.weights.layers[0].layer_scalar - 0.5).abs() < 1e-6);
         assert!(s.weights.layers[0].post_attn_norm.is_some());
         assert!(s.weights.layers[0].post_ffn_norm.is_some());
         let prompt = vec![1u32, 2];

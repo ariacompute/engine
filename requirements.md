@@ -112,7 +112,7 @@
 | P0 | **LFM conv hybrid** | LFM2/2.5：`layer_types` / conv 层不要求 `q_proj`；实现 short-conv + cache；消费 `conv.*` 张量名 |
 | P0 | **MoE** | `lfm2-8b-a1b`、Inkling：真实 router + expert FFN；`text_moe_decoder_stub` 不得冒充生成；Inkling ArchClass 不得标纯 TextDense |
 | P0 | **Qwen3.5 / Bonsai** | linear_attention / Gated DeltaNet 层：实现或对未实现层返回 `Unsupported`；禁止当全 SDPA dense |
-| P1 | **Gemma 正确性** | GeGLU（`gelu_pytorch_tanh`）vs SwiGLU；RMSNorm `*(1+w)`（Gemma-4 为 `*w`，ones 初始化）；四 norm；`ffn_norm` 优先 `pre_feedforward_layernorm`；Gemma-4：**KV cache 按注意力类型复用**（非 clone `wk`/`wv`）、滑动窗口 mask（默认 512）、双/部分 RoPE、PLE。**真实 E2B/E4B（hidden≥1024）必须加载码本 PLE**（`embed_tokens_per_layer` + projection + 每层 gate/proj/norm）；禁止 `ple=None` 静默 no-op。词表/PLE 2D 与其它线性层同一解包：LSB unpack → 旋转域 dequant → `hadamard.blocks` 逆 blocked FWHT → 行 gather（shape `[vocab, hidden]` / `[vocab, layers*d]`）。 |
+| P1 | **Gemma 正确性** | GeGLU（`gelu_pytorch_tanh`）vs SwiGLU；RMSNorm `*(1+w)`（Gemma-4 为 `*w`，ones 初始化）；四 norm；`ffn_norm` 优先 `pre_feedforward_layernorm`；Gemma-4：**KV cache 按注意力类型复用**（非 clone `wk`/`wv`）、滑动窗口 mask（默认 512）、双/部分 RoPE、PLE、**`layer_scalar`（HF/JAX `skip_scale`，缺省 1.0）**。**真实 E2B/E4B（hidden≥1024）必须加载码本 PLE**（`embed_tokens_per_layer` + projection + 每层 gate/proj/norm）；禁止 `ple=None` 静默 no-op。词表/PLE 2D 与其它线性层同一解包：LSB unpack → 旋转域 dequant → `hadamard.blocks` 逆 blocked FWHT → 行 gather（shape `[vocab, hidden]` / `[vocab, layers*d]`）。 |
 | P1 | **QK-Norm** | Qwen3 / Gemma / LFM attn：加载并应用 `q_norm`/`k_norm` |
 | P1 | **VL/VLA** | 消费 bundle 内 vision/action 张量，或硬 `Unsupported`；禁止 RGB mean-pool / 假 action 冒充完成 |
 | P2 | **注册表对齐** | §1.1 与 `model` 同步：补登记 `lfm/lfm2.5-2.6b`（或双方删除） |

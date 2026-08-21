@@ -137,6 +137,14 @@ pub fn layer_ple_post_norm_names(layer: usize) -> Vec<String> {
     names
 }
 
+/// HF Gemma-4 `layers.{i}.layer_scalar` (converted from JAX `skip_scale`).
+/// Not a `.weight` tensor — a 0-d / `[1]` residual multiplier after the layer.
+pub fn layer_scalar_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.layer_scalar")];
+    names.extend(with_layer_suffix(layer, "layer_scalar"));
+    names
+}
+
 pub fn attn_q_norm_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.attn_q_norm.weight")];
     names.extend(with_layer_suffix(layer, "self_attn.q_norm.weight"));
@@ -421,5 +429,8 @@ mod tests {
         assert!(layer_ple_gate_names(0)
             .iter()
             .any(|s| s.contains("per_layer_input_gate.weight")));
+        assert!(layer_scalar_names(0)
+            .iter()
+            .any(|s| s == "model.language_model.layers.0.layer_scalar"));
     }
 }
