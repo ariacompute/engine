@@ -190,9 +190,9 @@ export class Engine {
     this.lib = loadLib(opts.ffiLib);
     this.fnInit = this.lib.func("aria_model_init", "void*", ["str"]);
     this.fnDestroy = this.lib.func("aria_model_destroy", "void", ["void*"]);
-    this.fnComplete = this.lib.func("aria_complete", "int", ["void*", "str", "str", "str", "str", "size_t"]);
-    this.fnEmbed = this.lib.func("aria_embed", "int", ["void*", "str", "str", "size_t"]);
-    this.fnTranscribe = this.lib.func("aria_transcribe", "int", ["void*", "void*", "size_t", "str", "str", "size_t"]);
+    this.fnComplete = this.lib.func("aria_complete", "int", ["void*", "str", "str", "str", "void*", "size_t"]);
+    this.fnEmbed = this.lib.func("aria_embed", "int", ["void*", "str", "void*", "size_t"]);
+    this.fnTranscribe = this.lib.func("aria_transcribe", "int", ["void*", "void*", "size_t", "str", "void*", "size_t"]);
     this.fnLastError = this.lib.func("aria_last_error", "str", []);
     this.handle = this.fnInit(bundle) as unknown;
     if (!this.handle) {
@@ -214,13 +214,15 @@ export class Engine {
   }
 
   complete(messages: Turn[], opts: GenerateOptions = {}): CompleteResult {
-    const payload = JSON.stringify({ messages, opts });
+    const messagesJson = JSON.stringify(messages);
+    const optionsJson = JSON.stringify(opts || { max_tokens: 16 });
+    const toolsJson = JSON.stringify([]);
     const buf = Buffer.alloc(1 << 16);
     const rc = this.fnComplete(
       this.handle,
-      payload,
-      "",
-      "",
+      messagesJson,
+      optionsJson,
+      toolsJson,
       buf,
       buf.length,
     );
@@ -238,7 +240,7 @@ export class Engine {
 
   embed(text: string): number[] {
     const buf = Buffer.alloc(1 << 20);
-    const rc = this.fnEmbed(this.handle, text, buf, buf.length);
+    const rc = this.fnEmbed(this.handle, JSON.stringify({ input: text }), buf, buf.length);
     if (rc !== 0) {
       const err = this.fnLastError();
       throw new Error(err || "embed failed");
@@ -250,9 +252,9 @@ export class Engine {
     const buf = Buffer.alloc(1 << 16);
     const rc = this.fnTranscribe(
       this.handle,
-      pcm,
+      Buffer.from(pcm),
       pcm.length,
-      "",
+      null,
       buf,
       buf.length,
     );
