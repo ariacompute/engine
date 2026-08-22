@@ -51,7 +51,7 @@ function isLocalRef(ref) {
 }
 
 async function downloadModel(model, token, site = DEFAULT_SITE) {
-  if (!token) throw new Error('dashboard token is required to download a model');
+  if (!token) throw new Error('api token is required to download a model');
   const { slug, quant } = parseBundleName(model);
   const cache = cacheDir(model);
   if (require('fs').existsSync(cache) && (await AriaEngineModule?.isValidBundle?.(cache))) {
@@ -80,7 +80,7 @@ export class AriaEngine {
   static async open(modelRef, opts = {}) {
     if (isLocalRef(modelRef)) return new AriaEngine(modelRef);
     if (!opts.token) {
-      throw new Error(`model name '${modelRef}' requires a dashboard token to download`);
+      throw new Error(`model name '${modelRef}' requires an api token to download`);
     }
     const bundle = await downloadModel(modelRef, opts.token, opts.site ?? DEFAULT_SITE);
     return new AriaEngine(bundle);

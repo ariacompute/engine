@@ -19,6 +19,6 @@
     {"id": "open_model_name_requires_token", "intent": "Model name without token", "assert": "open_model/open rejects with clear missing-token error"},
     {"id": "open_local_path_ignores_token", "intent": "Local path with no token", "assert": "loads directly; token optional"},
     {"id": "download_cached_skip", "intent": "Valid cached bundle present", "assert": "download_model returns cache path without network"},
-    {"id": "download_invalid_token", "intent": "Bad/missing dashboard token", "assert": "download raises clear error, no silent failure"}
+    {"id": "download_invalid_token", "intent": "Bad/missing api token", "assert": "download raises clear error, no silent failure"}
   ]
 }

@@ -21,5 +21,5 @@ into `~/.ariacompute/models/{model}` and then loads it. A valid cached bundle is
 reused without re-downloading.
 
 ```go
-eng, err := aria.OpenModel("gemma-4-e2b-it_q4", "DASHBOARD_TOKEN", "")
+eng, err := aria.OpenModel("gemma-4-e2b-it_q4", "API_TOKEN", "")
 ```

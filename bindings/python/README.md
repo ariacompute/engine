@@ -28,7 +28,7 @@ with Engine("/path/to/bundle") as eng:
 缓存中已有有效 bundle 时直接复用，不重复下载。
 
 ```python
-with Engine("gemma-4-e2b-it_q4", token="DASHBOARD_TOKEN") as eng:
+with Engine("gemma-4-e2b-it_q4", token="API_TOKEN") as eng:
     print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
 ```
 

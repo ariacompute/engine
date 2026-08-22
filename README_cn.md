@@ -292,8 +292,8 @@ with Engine("/path/to/aria-bundle") as eng:
     print(out["response"])
     # 也可：eng.embed("hi"), eng.transcribe(pcm_bytes)
 
-# 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
-with Engine("gemma-4-e2b-it_q4", token="<dashboard_token>") as eng:
+# 或按模型名 —— 自动从 Dashboard 下载（需要 api token）：
+with Engine("gemma-4-e2b-it_q4", token="<api_token>") as eng:
     print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
 
@@ -317,7 +317,7 @@ console.log(out.response);
 eng.close();
 
 // 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
-const eng2 = await Engine.open("gemma-4-e2b-it_q4", { token: "<dashboard_token>" });
+const eng2 = await Engine.open("gemma-4-e2b-it_q4", { token: "<api_token>" });
 console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
 eng2.close();
 ```
@@ -357,7 +357,7 @@ func main() {
 	fmt.Println(out["response"])
 
 	// 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
-	eng2, err := aria.OpenModel("gemma-4-e2b-it_q4", "<dashboard_token>", "")
+	eng2, err := aria.OpenModel("gemma-4-e2b-it_q4", "<api_token>", "")
 	if err != nil {
 		panic(err)
 	}
@@ -386,7 +386,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
     let opts = OpenOptions {
-        token: Some("<dashboard_token>".into()),
+        token: Some("<api_token>".into()),
         site: None,
     };
     let mut eng2 = Engine::open_model("gemma-4-e2b-it_q4", &opts)?;

@@ -28,7 +28,7 @@ Dashboard private source (requires `token`; `site` defaults to
 it. A valid cached bundle is reused without re-downloading.
 
 ```dart
-final eng = await AriaEngine.open("gemma-4-e2b-it_q4", token: "DASHBOARD_TOKEN");
+final eng = await AriaEngine.open("gemma-4-e2b-it_q4", token: "API_TOKEN");
 ```
 
 Published to pub.dev via `publish-pub.yml`. Secret `PUB_CREDENTIALS` is the

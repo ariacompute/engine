@@ -22,7 +22,7 @@ into `~/.ariacompute/models/{model}` and then loads it. A valid cached bundle is
 reused without re-downloading.
 
 ```kotlin
-AriaEngine.open("gemma-4-e2b-it_q4", "DASHBOARD_TOKEN").use { eng ->
+AriaEngine.open("gemma-4-e2b-it_q4", "API_TOKEN").use { eng ->
   println(eng.complete("""[{"role":"user","content":"hi"}]"""))
 }
 ```

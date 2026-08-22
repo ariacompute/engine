@@ -27,6 +27,6 @@ loads it. A valid cached bundle is reused without re-downloading.
 
 ```rust
 use aria_engine::{Engine, OpenOptions};
-let opts = OpenOptions { token: Some("DASHBOARD_TOKEN".into()), site: None };
+let opts = OpenOptions { token: Some("API_TOKEN".into()), site: None };
 let mut eng = Engine::open_model("gemma-4-e2b-it_q4", &opts)?;
 ```

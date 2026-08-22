@@ -94,7 +94,7 @@ def download_model(model: str, token: str, site: Optional[str] = None) -> str:
     If a valid bundle already exists at the cache path, the download is skipped.
     """
     if token is None:
-        raise ValueError("dashboard token is required to download a model")
+        raise ValueError("api token is required to download a model")
     site = site or DEFAULT_SITE
     slug, quant = _parse_bundle_name(model)
     cache = os.path.join(_aria_home(), "models", model)
@@ -189,7 +189,7 @@ class Engine:
         if not (os.path.sep in model_ref or "\\" in model_ref or os.path.exists(model_ref)):
             if not token:
                 raise ValueError(
-                    f"model name '{model_ref}' requires a dashboard token to download"
+                    f"model name '{model_ref}' requires an api token to download"
                 )
             bundle_path = download_model(model_ref, token, site)
         self._handle = self._lib.aria_model_init(bundle_path.encode())

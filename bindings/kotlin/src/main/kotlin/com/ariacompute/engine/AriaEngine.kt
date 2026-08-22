@@ -105,7 +105,7 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
         @JvmOverloads
         @JvmStatic
         fun downloadModel(model: String, token: String, site: String = DEFAULT_SITE): String {
-            require(token.isNotEmpty()) { "dashboard token is required to download a model" }
+            require(token.isNotEmpty()) { "api token is required to download a model" }
             val (slug, quant) = parseBundleName(model)
             val cache = cacheDir(model)
             if (File(cache).exists() && isValidBundle(cache)) return cache
@@ -187,7 +187,7 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
         fun open(modelRef: String, token: String = "", site: String = DEFAULT_SITE): AriaEngine {
             if (isLocalRef(modelRef)) return AriaEngine(modelRef)
             if (token.isEmpty()) {
-                throw IllegalArgumentException("model name '$modelRef' requires a dashboard token to download")
+                throw IllegalArgumentException("model name '$modelRef' requires an api token to download")
             }
             val bundle = downloadModel(modelRef, token, site)
             return AriaEngine(bundle)

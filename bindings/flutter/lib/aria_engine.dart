@@ -66,7 +66,7 @@ bool _isLocalRef(String ref) =>
 Future<String> downloadModel(String model,
     {required String token, String site = _defaultSite}) async {
   if (token.isEmpty) {
-    throw ArgumentError('dashboard token is required to download a model');
+    throw ArgumentError('api token is required to download a model');
   }
   final (slug, quant) = _parseBundleName(model);
   final cache = Directory(_cacheDir(model));
@@ -156,7 +156,7 @@ class AriaEngine {
       {String? token, String site = _defaultSite, String? libPath}) async {
     if (_isLocalRef(modelRef)) return AriaEngine(modelRef, libPath: libPath);
     if (token == null || token.isEmpty) {
-      throw ArgumentError("model name '$modelRef' requires a dashboard token to download");
+      throw ArgumentError("model name '$modelRef' requires an api token to download");
     }
     final bundle = await downloadModel(modelRef, token: token, site: site);
     return AriaEngine(bundle, libPath: libPath);

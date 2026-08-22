@@ -70,7 +70,7 @@ impl Engine {
 /// Error returned by [`Engine::open_model`].
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
-    #[error("model name '{0}' requires a dashboard token")]
+    #[error("model name '{0}' requires an api token")]
     MissingToken(String),
     #[error("download failed: {0}")]
     Download(#[from] DownloadError),

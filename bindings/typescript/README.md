@@ -22,5 +22,5 @@ into `~/.ariacompute/models/{model}` and then loads it. A valid cached bundle is
 reused without re-downloading.
 
 ```ts
-const eng = await Engine.open("gemma-4-e2b-it_q4", { token: "DASHBOARD_TOKEN" });
+const eng = await Engine.open("gemma-4-e2b-it_q4", { token: "API_TOKEN" });
 ```

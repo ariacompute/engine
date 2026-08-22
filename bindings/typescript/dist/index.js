@@ -130,7 +130,7 @@ const encoder = new TextEncoder();
  * Skips the download when a valid bundle is already cached. */
 async function downloadModel(model, token, site = DEFAULT_SITE) {
     if (!token)
-        throw new Error("dashboard token is required to download a model");
+        throw new Error("api token is required to download a model");
     const { slug, quant } = parseBundleName(model);
     const cache = cacheDir(model);
     if (fs.existsSync(cache) && isValidBundle(cache))
@@ -192,7 +192,7 @@ class Engine {
         if (isLocalRef(modelRef))
             return new Engine(modelRef, opts);
         if (!opts.token) {
-            throw new Error(`model name '${modelRef}' requires a dashboard token to download`);
+            throw new Error(`model name '${modelRef}' requires an api token to download`);
         }
         const bundle = await downloadModel(modelRef, opts.token, opts.site ?? DEFAULT_SITE);
         return new Engine(bundle, opts);

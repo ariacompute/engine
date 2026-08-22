@@ -291,8 +291,8 @@ with Engine("/path/to/aria-bundle") as eng:
     )
     print(out["response"])
 
-# Or by model name — auto-downloads from Dashboard (needs token):
-with Engine("gemma-4-e2b-it_q4", token="<dashboard_token>") as eng:
+# Or by model name — auto-downloads from Dashboard (needs an api token):
+with Engine("gemma-4-e2b-it_q4", token="<api_token>") as eng:
     print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
     # also: eng.embed("hi"), eng.transcribe(pcm_bytes)
 ```
@@ -316,8 +316,8 @@ const out = eng.complete(
 console.log(out.response);
 eng.close();
 
-// Or by model name — auto-downloads from Dashboard (needs token):
-const eng2 = await Engine.open("gemma-4-e2b-it_q4", { token: "<dashboard_token>" });
+// Or by model name — auto-downloads from Dashboard (needs an api token):
+const eng2 = await Engine.open("gemma-4-e2b-it_q4", { token: "<api_token>" });
 console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
 eng2.close();
 ```

@@ -20,5 +20,5 @@ source (requires `token`; `site` defaults to `https://ariacompute.com`) into
 reused without re-downloading.
 
 ```swift
-let eng = try await AriaEngine.open("gemma-4-e2b-it_q4", token: "DASHBOARD_TOKEN")
+let eng = try await AriaEngine.open("gemma-4-e2b-it_q4", token: "API_TOKEN")
 ```

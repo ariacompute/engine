@@ -83,7 +83,7 @@ func isValidBundle(dir string) bool {
 // already cached, the download is skipped.
 func DownloadModel(model, token, site string) (string, error) {
 	if token == "" {
-		return "", errors.New("dashboard token is required to download a model")
+		return "", errors.New("api token is required to download a model")
 	}
 	if site == "" {
 		site = defaultSite
@@ -214,13 +214,13 @@ func extractZip(data []byte, dest string) error {
 
 // OpenModel opens a model by reference. If ref contains a separator or already
 // exists on disk it is loaded directly; otherwise it is treated as a model name
-// and auto-downloaded (requires a dashboard token) before loading.
+// and auto-downloaded (requires an api token) before loading.
 func OpenModel(ref, token, site string) (*Engine, error) {
 	if strings.ContainsAny(ref, "/\\") || fileExists(ref) {
 		return Open(ref)
 	}
 	if token == "" {
-		return nil, fmt.Errorf("model name %q requires a dashboard token to download", ref)
+		return nil, fmt.Errorf("model name %q requires an api token to download", ref)
 	}
 	bundle, err := DownloadModel(ref, token, site)
 	if err != nil {

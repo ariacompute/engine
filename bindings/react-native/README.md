@@ -19,5 +19,5 @@ reused without re-downloading. The zip streaming + extraction is delegated to th
 native `AriaEngineModule` bridge.
 
 ```js
-const eng = await AriaEngine.open("gemma-4-e2b-it_q4", { token: "DASHBOARD_TOKEN" });
+const eng = await AriaEngine.open("gemma-4-e2b-it_q4", { token: "API_TOKEN" });
 ```
