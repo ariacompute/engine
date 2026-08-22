@@ -47,6 +47,12 @@ export declare function isLocalRef(modelRef: string): boolean;
 export declare class Engine {
     private lib;
     private handle;
+    private fnInit;
+    private fnDestroy;
+    private fnComplete;
+    private fnEmbed;
+    private fnTranscribe;
+    private fnLastError;
     /** Construct from a local bundle directory. */
     constructor(bundle: string, opts?: OpenOptions);
     /** Auto-detect: a value containing a separator or already on disk is a local

@@ -173,15 +173,15 @@ class Engine {
     /** Construct from a local bundle directory. */
     constructor(bundle, opts = {}) {
         this.lib = loadLib(opts.ffiLib);
-        this.lib.func("aria_model_init", "void*", ["str"]);
-        this.lib.func("aria_model_destroy", "void", ["void*"]);
-        this.lib.func("aria_complete", "int", ["void*", "str", "str", "str", "str", "size_t"]);
-        this.lib.func("aria_embed", "int", ["void*", "str", "str", "size_t"]);
-        this.lib.func("aria_transcribe", "int", ["void*", "void*", "size_t", "str", "str", "size_t"]);
-        this.lib.func("aria_last_error", "str", []);
-        this.handle = this.lib.aria_model_init(bundle);
+        this.fnInit = this.lib.func("aria_model_init", "void*", ["str"]);
+        this.fnDestroy = this.lib.func("aria_model_destroy", "void", ["void*"]);
+        this.fnComplete = this.lib.func("aria_complete", "int", ["void*", "str", "str", "str", "str", "size_t"]);
+        this.fnEmbed = this.lib.func("aria_embed", "int", ["void*", "str", "str", "size_t"]);
+        this.fnTranscribe = this.lib.func("aria_transcribe", "int", ["void*", "void*", "size_t", "str", "str", "size_t"]);
+        this.fnLastError = this.lib.func("aria_last_error", "str", []);
+        this.handle = this.fnInit(bundle);
         if (!this.handle) {
-            const err = this.lib.aria_last_error();
+            const err = this.fnLastError();
             throw new Error(err || "init failed");
         }
     }
@@ -200,9 +200,9 @@ class Engine {
     complete(messages, opts = {}) {
         const payload = JSON.stringify({ messages, opts });
         const buf = Buffer.alloc(1 << 16);
-        const rc = this.lib.aria_complete(this.handle, payload, "", "", buf, buf.length);
+        const rc = this.fnComplete(this.handle, payload, "", "", buf, buf.length);
         if (rc !== 0) {
-            const err = this.lib.aria_last_error();
+            const err = this.fnLastError();
             return { success: false, response: "", error: err || "complete failed" };
         }
         try {
@@ -215,25 +215,25 @@ class Engine {
     }
     embed(text) {
         const buf = Buffer.alloc(1 << 20);
-        const rc = this.lib.aria_embed(this.handle, text, buf, buf.length);
+        const rc = this.fnEmbed(this.handle, text, buf, buf.length);
         if (rc !== 0) {
-            const err = this.lib.aria_last_error();
+            const err = this.fnLastError();
             throw new Error(err || "embed failed");
         }
         return JSON.parse(buf.toString("utf8").replace(/\0+$/, ""));
     }
     transcribe(pcm) {
         const buf = Buffer.alloc(1 << 16);
-        const rc = this.lib.aria_transcribe(this.handle, pcm, pcm.length, "", buf, buf.length);
+        const rc = this.fnTranscribe(this.handle, pcm, pcm.length, "", buf, buf.length);
         if (rc !== 0) {
-            const err = this.lib.aria_last_error();
+            const err = this.fnLastError();
             throw new Error(err || "transcribe failed");
         }
         return buf.toString("utf8").replace(/\0+$/, "");
     }
     close() {
         if (this.handle)
-            this.lib.aria_model_destroy(this.handle);
+            this.fnDestroy(this.handle);
         this.handle = null;
     }
 }
