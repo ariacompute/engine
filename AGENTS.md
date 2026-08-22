@@ -20,7 +20,7 @@
 - `inference/`：`ariacompute-inference` — Bundle 加载、Prefill/Decode、家族注册表
 - `graph/`：`ariacompute-graph` — Op DAG、BufferPool、mmap / external 零拷贝
 - `kernel/`：`ariacompute-kernel` — matmul / attention / norm / RoPE / dequant / FWHT / CUDA GEMM
-- `ffi/`：`ariacompute-ffi` — C ABI（cdylib/staticlib）；`bindings/` 八语言 SDK
+- `ffi/`：`ariacompute-ffi` — C ABI（cdylib/staticlib）；`bindings/` 八语言 SDK（均支持按模型名从 Dashboard 自动下载到 `~/.ariacompute/models` 再加载）
 - `bench/`：Python 引擎对标评测（§1.1 全家族；性能+质量；JSON+MD）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
 

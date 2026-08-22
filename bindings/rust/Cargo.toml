@@ -15,7 +15,11 @@ name = "aria_engine"
 [dependencies]
 ariacompute-inference = { workspace = true }
 ariacompute-ffi = { workspace = true }
+serde = { version = "1", features = ["derive"] }
 serde_json = { workspace = true }
+ureq = { version = "2", features = ["tls", "json"] }
+zip = { version = "2", default-features = false, features = ["deflate"] }
+thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

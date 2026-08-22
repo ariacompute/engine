@@ -238,7 +238,11 @@ Native C ABI (`ariacompute-ffi` / `libaria_ffi`) plus thin wrappers under `bindi
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
 
-C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_complete` / stream, `aria_embed`, `aria_transcribe`, tools JSON, `aria_model_destroy`, `aria_last_error`.
+C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_complete` / stream, `aria_embed`, `aria_transcribe`, tools JSON, `aria_model_destroy`, `aria_last_error`. New helpers for SDK auto-download: `aria_model_cache_dir(model)` (returns `~/.ariacompute/models/{model}`) and `aria_is_local_path(ref)` (1 = local path, 0 = model name, -1 = error).
+
+### Auto-download by model name
+
+Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name that the SDK downloads from the **Dashboard private source** (requires a dashboard `token`; `site_url` defaults to `https://ariacompute.com`, overridable via `site`/env). The download logic mirrors `aria-engine download` (Dashboard branch): resolve `slug`/`quant`, fetch the meta URL, stream the zip, validate the zip magic, extract (flattening a single top-level subdir), and verify `weight.bin` + `config.json` with `format == "aria-quant-bundle"`. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
@@ -279,12 +283,17 @@ pip install aria-engine
 ```python
 from aria_engine import Engine
 
+# Local bundle path:
 with Engine("/path/to/aria-bundle") as eng:
     out = eng.complete(
         [{"role": "user", "content": "Hello"}],
         {"max_tokens": 32},
     )
     print(out["response"])
+
+# Or by model name — auto-downloads from Dashboard (needs token):
+with Engine("gemma-4-e2b-it_q4", token="<dashboard_token>") as eng:
+    print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
     # also: eng.embed("hi"), eng.transcribe(pcm_bytes)
 ```
 
@@ -298,6 +307,7 @@ npm install @ariacompute/engine-ts
 ```ts
 import { Engine } from "@ariacompute/engine-ts";
 
+// Local bundle path:
 const eng = new Engine("/path/to/aria-bundle");
 const out = eng.complete(
   [{ role: "user", content: "Hello" }],
@@ -305,6 +315,11 @@ const out = eng.complete(
 );
 console.log(out.response);
 eng.close();
+
+// Or by model name — auto-downloads from Dashboard (needs token):
+const eng2 = await Engine.open("gemma-4-e2b-it_q4", { token: "<dashboard_token>" });
+console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
+eng2.close();
 ```
 
 **Go** (cgo; link against `libaria_ffi`):

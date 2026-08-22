@@ -19,6 +19,10 @@ kotlin {
     jvmToolchain(17)
 }
 
+dependencies {
+    implementation 'org.json:json:20240303'
+}
+
 // Maven Central (Central Portal) publishing via vanniktech plugin.
 // Sonatype credentials come from ORG_GRADLE_PROJECT_mavenCentralUsername/Password.
 // The GPG key MUST come from GPG_PRIVATE_KEY / GPG_PASSPHRASE (see publish-maven.yml):

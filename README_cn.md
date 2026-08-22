@@ -238,7 +238,11 @@ python -m bench run \
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
 
-C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`、`aria_complete` / stream、`aria_embed`、`aria_transcribe`、tools JSON、`aria_model_destroy`、`aria_last_error`。
+C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`、`aria_complete` / stream、`aria_embed`、`aria_transcribe`、tools JSON、`aria_model_destroy`、`aria_last_error`。新增自动下载辅助：`aria_model_cache_dir(model)`（返回 `~/.ariacompute/models/{model}`）与 `aria_is_local_path(ref)`（1=本地路径，0=模型名，-1=错误）。
+
+### 按模型名自动下载
+
+所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名，由 SDK 从 **Dashboard 私有源** 自动下载（需传入 dashboard `token`；`site_url` 默认 `https://ariacompute.com`，可用 `site`/环境变量覆盖）。下载逻辑与 `aria-engine download` 的 Dashboard 分支一致：解析 `slug`/`quant`、请求 meta URL、流式拉取 zip、校验 zip 魔数、解压（flatten 单层子目录）、校验 `weight.bin` + `config.json` 且 `format == "aria-quant-bundle"`。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
@@ -279,6 +283,7 @@ pip install aria-engine
 ```python
 from aria_engine import Engine
 
+# 本地 bundle 路径：
 with Engine("/path/to/aria-bundle") as eng:
     out = eng.complete(
         [{"role": "user", "content": "Hello"}],
@@ -286,6 +291,10 @@ with Engine("/path/to/aria-bundle") as eng:
     )
     print(out["response"])
     # 也可：eng.embed("hi"), eng.transcribe(pcm_bytes)
+
+# 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
+with Engine("gemma-4-e2b-it_q4", token="<dashboard_token>") as eng:
+    print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
 
 **TypeScript / Node**（`@ariacompute/engine-ts`）：
@@ -298,6 +307,7 @@ npm install @ariacompute/engine-ts
 ```ts
 import { Engine } from "@ariacompute/engine-ts";
 
+// 本地 bundle 路径：
 const eng = new Engine("/path/to/aria-bundle");
 const out = eng.complete(
   [{ role: "user", content: "Hello" }],
@@ -305,6 +315,11 @@ const out = eng.complete(
 );
 console.log(out.response);
 eng.close();
+
+// 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
+const eng2 = await Engine.open("gemma-4-e2b-it_q4", { token: "<dashboard_token>" });
+console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
+eng2.close();
 ```
 
 **Go**（cgo；链接 `libaria_ffi`）：
@@ -325,6 +340,7 @@ import (
 )
 
 func main() {
+	// 本地 bundle 路径：
 	eng, err := aria.Open("/path/to/aria-bundle")
 	if err != nil {
 		panic(err)
@@ -339,6 +355,14 @@ func main() {
 		panic(err)
 	}
 	fmt.Println(out["response"])
+
+	// 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
+	eng2, err := aria.OpenModel("gemma-4-e2b-it_q4", "<dashboard_token>", "")
+	if err != nil {
+		panic(err)
+	}
+	defer eng2.Close()
+	_ = eng2
 }
 ```
 
@@ -349,15 +373,25 @@ cargo add ariacompute-engine
 ```
 
 ```rust
-use aria_engine::{Engine, GenerateOpts};
+use aria_engine::{Engine, GenerateOpts, OpenOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // 本地 bundle 路径：
     let mut eng = Engine::open("/path/to/aria-bundle")?;
     let g = eng.complete("Hello", &GenerateOpts {
         max_tokens: 32,
         temperature: 0.0,
     })?;
     println!("{}", g.text);
+
+    // 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
+    let opts = OpenOptions {
+        token: Some("<dashboard_token>".into()),
+        site: None,
+    };
+    let mut eng2 = Engine::open_model("gemma-4-e2b-it_q4", &opts)?;
+    let g2 = eng2.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?;
+    println!("{}", g2.text);
     Ok(())
 }
 ```

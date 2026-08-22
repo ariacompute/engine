@@ -14,6 +14,16 @@ const char *aria_last_error(void);
 AriaModel *aria_model_init(const char *bundle_path);
 void aria_model_destroy(AriaModel *model);
 
+/* Model-name → cache-directory helpers (SDK auto-download support). */
+
+/* Returns "~/.ariacompute/models/{model}" as a `const char *`. Valid until the
+ * next call to a returning FFI function on this thread. NULL on error. */
+const char *aria_model_cache_dir(const char *model);
+
+/* Returns 1 if `ref_` looks like a local bundle path (contains a path
+ * separator or already exists on disk), 0 if it is a model name, -1 on error. */
+int aria_is_local_path(const char *ref_);
+
 int aria_complete(
     AriaModel *model,
     const char *messages_json,

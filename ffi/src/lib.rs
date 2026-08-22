@@ -6,13 +6,92 @@
 use aria_inference::{ChatTurn, GenerateOpts, Session, SessionBuilder};
 use serde_json::{json, Value};
 use std::cell::RefCell;
+use std::env;
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int, c_uchar, c_void};
+use std::path::PathBuf;
 use std::ptr;
 use std::slice;
 
 thread_local! {
     static LAST_ERROR: RefCell<Option<CString>> = const { RefCell::new(None) };
+    // Cache for strings returned to the caller as `const char *`. The pointer is
+    // valid until the next call to a returning function on this thread.
+    static LAST_STRING: RefCell<Option<CString>> = const { RefCell::new(None) };
+}
+
+/// Resolve the user-level Aria home (`~/.ariacompute`), overridable via
+/// `ARIA_COMPUTE_HOME` (mirrors `openai/src/config.rs::aria_home`).
+fn aria_home() -> Result<PathBuf, String> {
+    if let Ok(override_home) = env::var("ARIA_COMPUTE_HOME") {
+        if !override_home.is_empty() {
+            return Ok(PathBuf::from(override_home));
+        }
+    }
+    let home = if cfg!(windows) {
+        env::var("USERPROFILE").map_err(|_| "could not resolve home directory".to_string())?
+    } else {
+        env::var("HOME").map_err(|_| "could not resolve home directory".to_string())?
+    };
+    Ok(PathBuf::from(home).join(".ariacompute"))
+}
+
+/// Return the on-disk cache directory for a model name:
+/// `~/.ariacompute/models/{model}`. Overridable via `ARIA_COMPUTE_HOME`.
+///
+/// The returned `const char *` is owned by a thread-local cache and is valid
+/// until the next call to a returning FFI function on this thread. Returns
+/// `NULL` on error (inspect `aria_last_error`).
+#[no_mangle]
+pub extern "C" fn aria_model_cache_dir(model: *const c_char) -> *const c_char {
+    clear_error();
+    let model = match cstr_to_str(model) {
+        Ok(m) => m,
+        Err(e) => {
+            set_error(e);
+            return ptr::null();
+        }
+    };
+    match aria_home() {
+        Ok(home) => {
+            let dir = home.join("models").join(model);
+            let s = match CString::new(dir.to_string_lossy().as_bytes()) {
+                Ok(s) => s,
+                Err(e) => {
+                    set_error(e.to_string());
+                    return ptr::null();
+                }
+            };
+            let ptr = s.as_ptr();
+            LAST_STRING.with(|c| *c.borrow_mut() = Some(s));
+            ptr
+        }
+        Err(e) => {
+            set_error(e);
+            ptr::null()
+        }
+    }
+}
+
+/// Whether `ref_` should be treated as a local bundle path rather than a model
+/// name. A value containing a path separator or one that already exists on disk
+/// is a local path.
+#[no_mangle]
+pub extern "C" fn aria_is_local_path(ref_: *const c_char) -> c_int {
+    clear_error();
+    let s = match cstr_to_str(ref_) {
+        Ok(s) => s,
+        Err(e) => {
+            set_error(e);
+            return -1;
+        }
+    };
+    let is_local = s.contains('/') || s.contains('\\') || std::path::Path::new(s).exists();
+    if is_local {
+        1
+    } else {
+        0
+    }
 }
 
 pub struct AriaModel {
@@ -537,6 +616,34 @@ mod tests {
                 buf.len()
             ),
             0
+        );
+    }
+
+    #[test]
+    fn cache_dir_uses_aria_compute_home() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", tmp.path());
+        let model = CString::new("gemma-4-e2b-it_q4").unwrap();
+        let dir = aria_model_cache_dir(model.as_ptr());
+        assert!(!dir.is_null());
+        let s = unsafe { CStr::from_ptr(dir) }.to_str().unwrap();
+        assert_eq!(
+            s,
+            tmp.path().join("models").join("gemma-4-e2b-it_q4").to_str().unwrap()
+        );
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+    }
+
+    #[test]
+    fn is_local_path_detects_separator_and_existing() {
+        assert_eq!(aria_is_local_path(CString::new("/abs/path").unwrap().as_ptr()), 1);
+        assert_eq!(aria_is_local_path(CString::new("C:\\win\\path").unwrap().as_ptr()), 1);
+        assert_eq!(aria_is_local_path(CString::new("model_name").unwrap().as_ptr()), 0);
+        // an existing path on disk is treated as local
+        let tmp = tempfile::tempdir().unwrap();
+        assert_eq!(
+            aria_is_local_path(CString::new(tmp.path().to_str().unwrap()).unwrap().as_ptr()),
+            1
         );
     }
 }

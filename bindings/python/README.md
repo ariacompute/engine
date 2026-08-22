@@ -20,6 +20,18 @@ with Engine("/path/to/bundle") as eng:
     print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
 ```
 
+## 按模型名自动下载
+
+`Engine` 同时接受本地 bundle 路径或 Aria 模型名（如 `gemma-4-e2b-it_q4`）。含 `/`
+或本地已存在的值直接加载；否则由 SDK 从 **Dashboard 私有源** 自动下载（需 `token`，
+`site` 默认 `https://ariacompute.com`）到 `~/.ariacompute/models/{model}` 再加载。
+缓存中已有有效 bundle 时直接复用，不重复下载。
+
+```python
+with Engine("gemma-4-e2b-it_q4", token="DASHBOARD_TOKEN") as eng:
+    print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
+```
+
 ## 动态库查找顺序
 
 `_load_lib()` 按以下顺序解析：

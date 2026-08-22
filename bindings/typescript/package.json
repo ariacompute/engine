@@ -10,6 +10,7 @@
   },
   "license": "MIT",
   "dependencies": {
+    "fflate": "^0.8.2",
     "koffi": "^2.8.0"
   },
   "devDependencies": {
