@@ -159,7 +159,7 @@ embed 缩放 `sqrt(hidden)`；`final_logit_softcapping` 默认 30。chat 模板�
   - **下载源**（恰三）：Dashboard 认证 API、Hugging Face、ModelScope；**禁止**引擎直连公开 S3/COS registry URL。模型 `download` 与 CLI `upgrade` 宿主（GitHub/Gitee）分离。
   - 每次 `download` 探测连通性 + 短速率采样，选最优可达源；中途失败回退次优已探测源；不持久化强制源。
   - HF/MS 布局对齐 `serve/scripts/upload-model-hub.sh`：`{sdk}/{bundle}/{file}`，默认 `sdk=v1.0`。
-  - Bundle 名解析：`*_q4`→int4、`*_q8`→int8、`*_q326`/`*_q3.26`→int326；可选 `_channel` / `_group`（如 `*_q326_channel`）仍映射同一 quant。`serve` / `download` 已存在检查亦走该别名。否则整名 + 默认 int4。
+  - Bundle 名解析：`*_q4`→int4、`*_q8`→int8、`*_q326`/`*_q3.26`→int326；可选 `_channel` / `_group`（如 `*_q326_channel`）仍映射同一 quant。`serve` / `download` 已存在检查亦走该别名。否则整名 + 默认 int4。`infer_family_path` 须剥掉上述后缀再对照 §1.1；禁止把 `qwen3-0.6b_q326_channel` 回落成 `gemma/gemma-4-e2b-it` 并误要 PLE。
 
 ### 3.4.1 Config（`~/.ariacompute/config.yml`）
 

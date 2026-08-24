@@ -234,7 +234,7 @@ pub fn lookup_family(path: &str) -> Result<&'static FamilyEntry, EngineError> {
         .ok_or_else(|| EngineError::UnsupportedFamily(path.to_string()))
 }
 
-/// Map a bundle directory or `slug_q4` name onto a registry path.
+/// Map a bundle directory or `slug_q4` / `slug_q326_channel` name onto a registry path.
 pub fn infer_family_path(hint: &str) -> Option<&'static str> {
     let name = Path::new(hint)
         .file_name()
@@ -266,11 +266,20 @@ fn strip_quant_suffix(name: &str) -> &str {
     }
     if let Some(idx) = s.rfind("_q") {
         let suffix = &s[idx + 2..];
-        if !suffix.is_empty() && suffix.chars().all(|c| c.is_ascii_digit() || c == '.') {
+        if is_quant_suffix(suffix) {
             s = &s[..idx];
         }
     }
     s
+}
+
+/// `4` / `8` / `326` / `3.26`, optionally followed by codebook-share `_channel` / `_group`.
+fn is_quant_suffix(suffix: &str) -> bool {
+    let core = suffix
+        .strip_suffix("_channel")
+        .or_else(|| suffix.strip_suffix("_group"))
+        .unwrap_or(suffix);
+    !core.is_empty() && core.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
 /// Qwen3 (not 3.5 dual-RoPE) uses θ=1e6. Bundles that omit `rope_theta` hit serde
@@ -445,6 +454,22 @@ mod tests {
         assert_eq!(
             infer_family_path("gemma-4-e2b-it_q8"),
             Some("gemma/gemma-4-e2b-it")
+        );
+        assert_eq!(
+            infer_family_path("qwen3-0.6b_q326"),
+            Some("qwen/qwen3-0.6b")
+        );
+        assert_eq!(
+            infer_family_path("qwen3-0.6b_q326_channel"),
+            Some("qwen/qwen3-0.6b")
+        );
+        assert_eq!(
+            infer_family_path("/home/ubuntu/.ariacompute/models/qwen3-0.6b_q326_channel"),
+            Some("qwen/qwen3-0.6b")
+        );
+        assert_eq!(
+            infer_family_path("gemma-3-1b-it_q326_channel"),
+            Some("gemma/gemma-3-1b-it")
         );
         assert!(infer_family_path("totally-unknown_q4").is_none());
     }
