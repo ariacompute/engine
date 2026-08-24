@@ -179,6 +179,7 @@
 ### T67 — Qwen3.5 / Bonsai
 - [x] `layer_types` 驱动 Gated DeltaNet 循环 + full attention；无 `layer_types` 仍拒绝 dense 冒充
 - [x] 单测：linear_attention + full_attention generate
+- [x] 加载 HF Qwen3.5 拆分 `in_proj_qkv`/`z`、`in_proj_b`/`a`（兼容融合 qkvz/ba）
 - [ ] DeltaNet GQA（`n_v_heads != n_k_heads`）/ chunked prefill
 
 ### T68 — VL / VLA

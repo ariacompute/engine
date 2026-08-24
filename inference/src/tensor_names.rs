@@ -310,48 +310,56 @@ pub fn moe_expert_down_names(layer: usize, expert: usize) -> Vec<String> {
 }
 
 /// Qwen3.5 / Bonsai Gated DeltaNet projections.
+/// Qwen3-Next fused `in_proj_qkvz` / `in_proj_ba`; Qwen3.5 splits them into
+/// `in_proj_qkv`+`in_proj_z` and `in_proj_b`+`in_proj_a`.
 pub fn linear_in_proj_qkvz_names(layer: usize) -> Vec<String> {
-    let mut names = vec![format!("blk.{layer}.linear_attn.in_proj_qkvz.weight")];
-    names.extend(with_layer_suffix(layer, "linear_attn.in_proj_qkvz.weight"));
-    names.extend(with_layer_suffix(
-        layer,
-        "self_attn.in_proj_qkvz.weight",
-    ));
-    names
+    linear_attn_names(layer, "in_proj_qkvz.weight")
+}
+
+pub fn linear_in_proj_qkv_names(layer: usize) -> Vec<String> {
+    linear_attn_names(layer, "in_proj_qkv.weight")
+}
+
+pub fn linear_in_proj_z_names(layer: usize) -> Vec<String> {
+    linear_attn_names(layer, "in_proj_z.weight")
 }
 
 pub fn linear_in_proj_ba_names(layer: usize) -> Vec<String> {
-    let mut names = vec![format!("blk.{layer}.linear_attn.in_proj_ba.weight")];
-    names.extend(with_layer_suffix(layer, "linear_attn.in_proj_ba.weight"));
-    names.extend(with_layer_suffix(layer, "self_attn.in_proj_ba.weight"));
-    names
+    linear_attn_names(layer, "in_proj_ba.weight")
+}
+
+pub fn linear_in_proj_b_names(layer: usize) -> Vec<String> {
+    linear_attn_names(layer, "in_proj_b.weight")
+}
+
+pub fn linear_in_proj_a_names(layer: usize) -> Vec<String> {
+    linear_attn_names(layer, "in_proj_a.weight")
 }
 
 pub fn linear_conv1d_names(layer: usize) -> Vec<String> {
-    let mut names = vec![format!("blk.{layer}.linear_attn.conv1d.weight")];
-    names.extend(with_layer_suffix(layer, "linear_attn.conv1d.weight"));
-    names.extend(with_layer_suffix(layer, "self_attn.conv1d.weight"));
-    names
+    linear_attn_names(layer, "conv1d.weight")
 }
 
 pub fn linear_out_proj_names(layer: usize) -> Vec<String> {
-    let mut names = vec![format!("blk.{layer}.linear_attn.out_proj.weight")];
-    names.extend(with_layer_suffix(layer, "linear_attn.out_proj.weight"));
-    names.extend(with_layer_suffix(layer, "self_attn.out_proj.weight"));
-    names
+    linear_attn_names(layer, "out_proj.weight")
 }
 
 pub fn linear_a_log_names(layer: usize) -> Vec<String> {
-    let mut names = vec![format!("blk.{layer}.linear_attn.A_log")];
-    names.extend(with_layer_suffix(layer, "linear_attn.A_log"));
-    names.extend(with_layer_suffix(layer, "self_attn.A_log"));
+    let mut names = linear_attn_names(layer, "A_log");
+    names.extend(linear_attn_names(layer, "_fp32_params.A_log"));
     names
 }
 
 pub fn linear_dt_bias_names(layer: usize) -> Vec<String> {
-    let mut names = vec![format!("blk.{layer}.linear_attn.dt_bias")];
-    names.extend(with_layer_suffix(layer, "linear_attn.dt_bias"));
-    names.extend(with_layer_suffix(layer, "self_attn.dt_bias"));
+    let mut names = linear_attn_names(layer, "dt_bias");
+    names.extend(linear_attn_names(layer, "_fp32_params.dt_bias"));
+    names
+}
+
+fn linear_attn_names(layer: usize, suffix: &str) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.linear_attn.{suffix}")];
+    names.extend(with_layer_suffix(layer, &format!("linear_attn.{suffix}")));
+    names.extend(with_layer_suffix(layer, &format!("self_attn.{suffix}")));
     names
 }
 
@@ -432,5 +440,17 @@ mod tests {
         assert!(layer_scalar_names(0)
             .iter()
             .any(|s| s == "model.language_model.layers.0.layer_scalar"));
+        assert!(linear_in_proj_qkv_names(0)
+            .iter()
+            .any(|s| s == "model.layers.0.linear_attn.in_proj_qkv.weight"));
+        assert!(linear_in_proj_z_names(0)
+            .iter()
+            .any(|s| s == "model.language_model.layers.0.linear_attn.in_proj_z.weight"));
+        assert!(linear_in_proj_b_names(0)
+            .iter()
+            .any(|s| s == "model.layers.0.linear_attn.in_proj_b.weight"));
+        assert!(linear_in_proj_a_names(0)
+            .iter()
+            .any(|s| s == "model.layers.0.linear_attn.in_proj_a.weight"));
     }
 }

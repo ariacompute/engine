@@ -9,8 +9,9 @@ use crate::tensor_names::{
     ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_post_norm_names, ffn_up_names,
     layer_ple_gate_names, layer_ple_post_norm_names, layer_ple_proj_names, layer_scalar_names,
     linear_a_log_names,
-    linear_conv1d_names, linear_dt_bias_names, linear_in_proj_ba_names, linear_in_proj_qkvz_names,
-    linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names, moe_expert_up_names,
+    linear_conv1d_names, linear_dt_bias_names, linear_in_proj_a_names, linear_in_proj_b_names,
+    linear_in_proj_ba_names, linear_in_proj_qkv_names, linear_in_proj_qkvz_names,
+    linear_in_proj_z_names, linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names, moe_expert_up_names,
     moe_router_names, output_names, output_norm_names, per_layer_model_projection_names,
     per_layer_projection_norm_names, pre_feedforward_norm_names, vision_proj_names,
 };
@@ -63,6 +64,17 @@ impl MatWeight {
         Self {
             data: Arc::new(w.data),
             hdm_seed: w.hdm_seed,
+        }
+    }
+
+    /// Concatenate two `[out, hidden]` matrices along the output axis.
+    fn concat_out(a: &Self, b: &Self) -> Self {
+        let mut data = Vec::with_capacity(a.data.len() + b.data.len());
+        data.extend_from_slice(&a.data);
+        data.extend_from_slice(&b.data);
+        Self {
+            data: Arc::new(data),
+            hdm_seed: None,
         }
     }
 }
@@ -556,6 +568,13 @@ fn materialize_with_config(
         let refs: Vec<&str> = names.iter().map(String::as_str).collect();
         Ok(MatWeight::from_loaded(b.weight_loaded_any(&refs)?))
     }
+    fn try_mat(b: &Bundle, names: &[String]) -> Result<Option<MatWeight>, EngineError> {
+        match any_mat(b, names) {
+            Ok(w) => Ok(Some(w)),
+            Err(EngineError::Format(_)) => Ok(None),
+            Err(e) => Err(e),
+        }
+    }
     fn any_vec(b: &Bundle, names: &[String]) -> Result<Vec<f32>, EngineError> {
         Ok((*any_mat(b, names)?.data).clone())
     }
@@ -633,8 +652,20 @@ fn materialize_with_config(
                 kernel_size,
             })
         } else if layer_is_linear(m, layer) {
-            let qkvz = any_mat(b, &linear_in_proj_qkvz_names(layer))?;
-            let ba = any_mat(b, &linear_in_proj_ba_names(layer))?;
+            let qkvz = if let Some(w) = try_mat(b, &linear_in_proj_qkvz_names(layer))? {
+                w
+            } else {
+                let qkv = any_mat(b, &linear_in_proj_qkv_names(layer))?;
+                let z = any_mat(b, &linear_in_proj_z_names(layer))?;
+                MatWeight::concat_out(&qkv, &z)
+            };
+            let ba = if let Some(w) = try_mat(b, &linear_in_proj_ba_names(layer))? {
+                w
+            } else {
+                let proj_b = any_mat(b, &linear_in_proj_b_names(layer))?;
+                let proj_a = any_mat(b, &linear_in_proj_a_names(layer))?;
+                MatWeight::concat_out(&proj_b, &proj_a)
+            };
             let conv_w = any_mat(b, &linear_conv1d_names(layer))?;
             let out_proj = any_mat(b, &linear_out_proj_names(layer))?;
             let a_log = any_vec(b, &linear_a_log_names(layer))?;
@@ -3509,6 +3540,181 @@ mod tests {
         let mut s = SessionBuilder::new()
             .model(dir.path())
             .family("qwen/qwen3.5-2b")
+            .build()
+            .unwrap();
+        let gen = s
+            .generate(
+                &[1, 2, 3],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 2);
+    }
+
+    #[test]
+    fn gated_deltanet_split_qwen35_projections_generate() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = 8usize;
+        let inter = 16usize;
+        let vocab = 16usize;
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let q_dim = n_heads * head_dim;
+        let k_dim = n_kv * head_dim;
+        let n_lin = 2usize;
+        let hk = 4usize;
+        let hv = 4usize;
+        let key_dim = n_lin * hk;
+        let value_dim = n_lin * hv;
+        let conv_k = 4usize;
+        let conv_dim = key_dim * 2 + value_dim;
+
+        let mut tensors = serde_json::Map::new();
+        let mut bin = Vec::new();
+        let mut add_raw = |name: &str, shape: Vec<usize>, data: &[f32]| {
+            let offset = bin.len();
+            for &v in data {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+            let nbytes = data.len() * 4;
+            let mut meta = serde_json::Map::new();
+            meta.insert("kind".into(), json!("raw"));
+            meta.insert("dtype".into(), json!("f32"));
+            meta.insert("shape".into(), json!(shape));
+            meta.insert("offsets".into(), json!({ "data": [offset, nbytes] }));
+            tensors.insert(name.to_string(), Value::Object(meta));
+        };
+        let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
+        add_raw("model.embed_tokens.weight", vec![vocab, hidden], &emb);
+        let n1 = vec![1.0f32; hidden];
+        add_raw("model.layers.0.input_layernorm.weight", vec![hidden], &n1);
+        add_raw(
+            "model.layers.0.post_attention_layernorm.weight",
+            vec![hidden],
+            &n1,
+        );
+        let qkv = vec![0.02f32; (2 * key_dim + value_dim) * hidden];
+        let z = vec![0.02f32; value_dim * hidden];
+        let proj_b = vec![0.1f32; n_lin * hidden];
+        let proj_a = vec![0.1f32; n_lin * hidden];
+        let conv = vec![0.05f32; conv_dim * conv_k];
+        let a_log = vec![0.5f32; n_lin];
+        let dt = vec![1.0f32; n_lin];
+        let outp = vec![0.02f32; hidden * value_dim];
+        add_raw(
+            "model.layers.0.linear_attn.in_proj_qkv.weight",
+            vec![2 * key_dim + value_dim, hidden],
+            &qkv,
+        );
+        add_raw(
+            "model.layers.0.linear_attn.in_proj_z.weight",
+            vec![value_dim, hidden],
+            &z,
+        );
+        add_raw(
+            "model.layers.0.linear_attn.in_proj_b.weight",
+            vec![n_lin, hidden],
+            &proj_b,
+        );
+        add_raw(
+            "model.layers.0.linear_attn.in_proj_a.weight",
+            vec![n_lin, hidden],
+            &proj_a,
+        );
+        add_raw(
+            "model.layers.0.linear_attn.conv1d.weight",
+            vec![conv_dim, conv_k],
+            &conv,
+        );
+        add_raw("model.layers.0.linear_attn.A_log", vec![n_lin], &a_log);
+        add_raw("model.layers.0.linear_attn.dt_bias", vec![n_lin], &dt);
+        add_raw(
+            "model.layers.0.linear_attn.out_proj.weight",
+            vec![hidden, value_dim],
+            &outp,
+        );
+        let g = vec![0.02f32; inter * hidden];
+        let d = vec![0.02f32; hidden * inter];
+        add_raw(
+            "model.layers.0.mlp.gate_proj.weight",
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw("model.layers.0.mlp.up_proj.weight", vec![inter, hidden], &g);
+        add_raw(
+            "model.layers.0.mlp.down_proj.weight",
+            vec![hidden, inter],
+            &d,
+        );
+
+        add_raw("model.layers.1.input_layernorm.weight", vec![hidden], &n1);
+        add_raw(
+            "model.layers.1.post_attention_layernorm.weight",
+            vec![hidden],
+            &n1,
+        );
+        let wq = vec![0.02f32; q_dim * hidden];
+        let wk = vec![0.02f32; k_dim * hidden];
+        let wv = vec![0.02f32; k_dim * hidden];
+        let wo = vec![0.02f32; hidden * q_dim];
+        add_raw(
+            "model.layers.1.self_attn.q_proj.weight",
+            vec![q_dim, hidden],
+            &wq,
+        );
+        add_raw(
+            "model.layers.1.self_attn.k_proj.weight",
+            vec![k_dim, hidden],
+            &wk,
+        );
+        add_raw(
+            "model.layers.1.self_attn.v_proj.weight",
+            vec![k_dim, hidden],
+            &wv,
+        );
+        add_raw(
+            "model.layers.1.self_attn.o_proj.weight",
+            vec![hidden, q_dim],
+            &wo,
+        );
+        add_raw("model.layers.1.mlp.gate_proj.weight", vec![inter, hidden], &g);
+        add_raw("model.layers.1.mlp.up_proj.weight", vec![inter, hidden], &g);
+        add_raw(
+            "model.layers.1.mlp.down_proj.weight",
+            vec![hidden, inter],
+            &d,
+        );
+        add_raw("model.norm.weight", vec![hidden], &n1);
+        add_raw("lm_head.weight", vec![vocab, hidden], &emb);
+
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "test",
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": 2,
+                "num_attention_heads": n_heads,
+                "num_kv_heads": n_kv,
+                "head_dim": head_dim,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 10000.0,
+                "layer_types": ["linear_attention", "full_attention"]
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("qwen/qwen3.5-0.8b")
             .build()
             .unwrap();
         let gen = s
