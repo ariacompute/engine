@@ -5,7 +5,12 @@
 use aria_kernel::EngineError;
 
 /// Legacy helper kept for unit shape checks; Session no longer calls this for VL.
-pub fn vision_encode(rgb: &[u8], height: usize, width: usize, hidden: usize) -> Result<Vec<f32>, EngineError> {
+pub fn vision_encode(
+    rgb: &[u8],
+    height: usize,
+    width: usize,
+    hidden: usize,
+) -> Result<Vec<f32>, EngineError> {
     if height == 0 || width == 0 || hidden == 0 {
         return Err(EngineError::InvalidParam("vision dims must be > 0".into()));
     }

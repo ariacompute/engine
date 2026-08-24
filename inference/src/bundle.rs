@@ -440,10 +440,7 @@ impl Bundle {
 }
 
 /// Tile sizes from Python `hadamard.blocks` (`[{start,size},…]`); greedy pow2 if absent/invalid.
-fn hadamard_tile_sizes_from_meta(
-    hadamard: &Value,
-    rows: usize,
-) -> Result<Vec<usize>, EngineError> {
+fn hadamard_tile_sizes_from_meta(hadamard: &Value, rows: usize) -> Result<Vec<usize>, EngineError> {
     if let Some(blocks) = hadamard.get("blocks").and_then(|v| v.as_array()) {
         if !blocks.is_empty() {
             let mut sizes = Vec::with_capacity(blocks.len());

@@ -4,7 +4,9 @@ const INTEGER_BITS: [u8; 5] = [1, 2, 3, 4, 8];
 
 pub fn packed_size(count: usize, bits: u8) -> Result<usize, EngineError> {
     if !INTEGER_BITS.contains(&bits) {
-        return Err(EngineError::Quant(format!("bits must be 1-4 or 8, got {bits}")));
+        return Err(EngineError::Quant(format!(
+            "bits must be 1-4 or 8, got {bits}"
+        )));
     }
     Ok((count * bits as usize).div_ceil(8))
 }
@@ -97,10 +99,7 @@ mod tests {
 
     #[test]
     fn bad_bits() {
-        assert!(matches!(
-            pack_indices(&[0], 5),
-            Err(EngineError::Quant(_))
-        ));
+        assert!(matches!(pack_indices(&[0], 5), Err(EngineError::Quant(_))));
         assert!(matches!(
             unpack_indices(&[0], 1, 7),
             Err(EngineError::Quant(_))
@@ -118,9 +117,6 @@ mod tests {
 
     #[test]
     fn index_overflow() {
-        assert!(matches!(
-            pack_indices(&[16], 4),
-            Err(EngineError::Quant(_))
-        ));
+        assert!(matches!(pack_indices(&[16], 4), Err(EngineError::Quant(_))));
     }
 }

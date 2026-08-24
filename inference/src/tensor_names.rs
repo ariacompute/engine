@@ -91,7 +91,10 @@ pub fn attn_post_norm_names(layer: usize) -> Vec<String> {
 /// Gemma-2+ residual post-FFN norm.
 pub fn ffn_post_norm_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.ffn_post_norm.weight")];
-    names.extend(with_layer_suffix(layer, "post_feedforward_layernorm.weight"));
+    names.extend(with_layer_suffix(
+        layer,
+        "post_feedforward_layernorm.weight",
+    ));
     names
 }
 
@@ -142,6 +145,84 @@ pub fn layer_ple_post_norm_names(layer: usize) -> Vec<String> {
 pub fn layer_scalar_names(layer: usize) -> Vec<String> {
     let mut names = vec![format!("blk.{layer}.layer_scalar")];
     names.extend(with_layer_suffix(layer, "layer_scalar"));
+    names
+}
+
+/// Gemma-3n AltUp / Laurel (HF `Gemma3nTextDecoderLayer`).
+pub fn layer_altup_router_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.altup_router.weight")];
+    names.extend(with_layer_suffix(layer, "altup.modality_router.weight"));
+    names
+}
+
+pub fn layer_altup_router_norm_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.altup_router_norm.weight")];
+    names.extend(with_layer_suffix(layer, "altup.router_norm.weight"));
+    names
+}
+
+pub fn layer_altup_prediction_coef_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.altup_pred.weight")];
+    names.extend(with_layer_suffix(layer, "altup.prediction_coefs.weight"));
+    names
+}
+
+pub fn layer_altup_correction_coef_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.altup_corr.weight")];
+    names.extend(with_layer_suffix(layer, "altup.correction_coefs.weight"));
+    names
+}
+
+pub fn layer_altup_correct_scale_names(layer: usize) -> Vec<String> {
+    let mut names = vec![
+        format!("blk.{layer}.altup_correct_scale"),
+        format!("blk.{layer}.altup_correct_scale.weight"),
+    ];
+    names.extend(with_layer_suffix(layer, "altup.correct_output_scale"));
+    names.extend(with_layer_suffix(
+        layer,
+        "altup.correct_output_scale.weight",
+    ));
+    names
+}
+
+pub fn layer_laurel_left_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.laurel_left.weight")];
+    names.extend(with_layer_suffix(layer, "laurel.linear_left.weight"));
+    names
+}
+
+pub fn layer_laurel_right_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.laurel_right.weight")];
+    names.extend(with_layer_suffix(layer, "laurel.linear_right.weight"));
+    names
+}
+
+pub fn layer_laurel_norm_names(layer: usize) -> Vec<String> {
+    let mut names = vec![format!("blk.{layer}.laurel_norm.weight")];
+    names.extend(with_layer_suffix(layer, "laurel.post_laurel_norm.weight"));
+    names
+}
+
+fn model_level_names(suffix: &str) -> Vec<String> {
+    [
+        format!("model.language_model.{suffix}"),
+        format!("language_model.model.{suffix}"),
+        format!("model.{suffix}"),
+    ]
+    .into_iter()
+    .collect()
+}
+
+pub fn altup_projection_names(index: usize) -> Vec<String> {
+    let mut names = model_level_names(&format!("altup_projections.{index}.weight"));
+    names.insert(0, format!("altup_proj.{index}.weight"));
+    names
+}
+
+pub fn altup_unembed_names(index: usize) -> Vec<String> {
+    let mut names = model_level_names(&format!("altup_unembed_projections.{index}.weight"));
+    names.insert(0, format!("altup_unembed.{index}.weight"));
     names
 }
 
@@ -403,10 +484,10 @@ mod tests {
     fn aliases_cover_hf_blk_and_language_model() {
         let a = attn_norm_names(0);
         assert!(a.iter().any(|s| s.contains("attn_norm")));
-        assert!(a.iter().any(|s| s == "model.layers.0.input_layernorm.weight"));
         assert!(a
             .iter()
-            .any(|s| s == "model.layers.0.operator_norm.weight"));
+            .any(|s| s == "model.layers.0.input_layernorm.weight"));
+        assert!(a.iter().any(|s| s == "model.layers.0.operator_norm.weight"));
         assert!(a
             .iter()
             .any(|s| s == "model.language_model.layers.0.input_layernorm.weight"));
@@ -421,8 +502,9 @@ mod tests {
         assert!(f
             .iter()
             .any(|s| s == "model.layers.0.pre_feedforward_layernorm.weight"));
-        assert!(f.iter().any(|s| s.contains("language_model")
-            && s.contains("pre_feedforward_layernorm")));
+        assert!(f
+            .iter()
+            .any(|s| s.contains("language_model") && s.contains("pre_feedforward_layernorm")));
 
         assert_eq!(
             emb_names()[1],
@@ -433,8 +515,9 @@ mod tests {
         assert!(emb_names().contains(&"model.language_model.embed_tokens.weight"));
         assert!(output_names().contains(&"lm_head.weight"));
         assert!(output_norm_names().contains(&"model.language_model.norm.weight"));
-        assert!(embed_per_layer_names()
-            .contains(&"model.language_model.embed_tokens_per_layer.weight"));
+        assert!(
+            embed_per_layer_names().contains(&"model.language_model.embed_tokens_per_layer.weight")
+        );
         assert!(attn_post_norm_names(0)
             .iter()
             .any(|s| s == "model.layers.0.post_attention_layernorm.weight"));
@@ -447,6 +530,18 @@ mod tests {
         assert!(layer_scalar_names(0)
             .iter()
             .any(|s| s == "model.language_model.layers.0.layer_scalar"));
+        assert!(layer_altup_router_names(0)
+            .iter()
+            .any(|s| s == "model.language_model.layers.0.altup.modality_router.weight"));
+        assert!(layer_laurel_left_names(0)
+            .iter()
+            .any(|s| s == "model.language_model.layers.0.laurel.linear_left.weight"));
+        assert!(altup_projection_names(0)
+            .iter()
+            .any(|s| s == "model.language_model.altup_projections.0.weight"));
+        assert!(altup_unembed_names(1)
+            .iter()
+            .any(|s| s == "model.language_model.altup_unembed_projections.1.weight"));
         assert!(linear_in_proj_qkv_names(0)
             .iter()
             .any(|s| s == "model.layers.0.linear_attn.in_proj_qkv.weight"));

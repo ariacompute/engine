@@ -2,30 +2,34 @@ use crate::bundle::{load_bundle, Bundle, LoadedWeight};
 use crate::chat::{apply_chat_template, strip_assistant_visible, ChatTurn};
 use crate::family::{effective_rope_theta, graph_hook, require_runnable, ArchClass, Family};
 use crate::multimodal::asr_transcribe_pcm16le;
-use crate::tensor_names::{
-    action_head_names, attn_k_names, attn_k_norm_names, attn_norm_names, attn_o_names,
-    attn_post_norm_names, attn_q_names, attn_q_norm_names, attn_v_names, attn_v_norm_names,
-    conv_in_proj_names, conv_kernel_names, conv_out_proj_names, emb_names, embed_per_layer_names,
-    ffn_down_names, ffn_gate_names, ffn_norm_names, ffn_post_norm_names, ffn_up_names,
-    layer_ple_gate_names, layer_ple_post_norm_names, layer_ple_proj_names, layer_scalar_names,
-    linear_a_log_names,
-    linear_conv1d_names, linear_dt_bias_names, linear_in_proj_a_names, linear_in_proj_b_names,
-    linear_in_proj_ba_names, linear_in_proj_qkv_names, linear_in_proj_qkvz_names,
-    linear_in_proj_z_names, linear_out_norm_names, linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names, moe_expert_up_names,
-    moe_router_names, output_names, output_norm_names, per_layer_model_projection_names,
-    per_layer_projection_norm_names, pre_feedforward_norm_names, vision_proj_names,
-};
 use crate::profile::{
     elapsed_ms, load_profile_begin, load_profile_set_cuda_upload, load_profile_set_materialize,
     load_profile_set_mmap, load_profile_take, EngineProfile, GenerateProfile,
+};
+use crate::tensor_names::{
+    action_head_names, altup_projection_names, altup_unembed_names, attn_k_names,
+    attn_k_norm_names, attn_norm_names, attn_o_names, attn_post_norm_names, attn_q_names,
+    attn_q_norm_names, attn_v_names, attn_v_norm_names, conv_in_proj_names, conv_kernel_names,
+    conv_out_proj_names, emb_names, embed_per_layer_names, ffn_down_names, ffn_gate_names,
+    ffn_norm_names, ffn_post_norm_names, ffn_up_names, layer_altup_correct_scale_names,
+    layer_altup_correction_coef_names, layer_altup_prediction_coef_names, layer_altup_router_names,
+    layer_altup_router_norm_names, layer_laurel_left_names, layer_laurel_norm_names,
+    layer_laurel_right_names, layer_ple_gate_names, layer_ple_post_norm_names,
+    layer_ple_proj_names, layer_scalar_names, linear_a_log_names, linear_conv1d_names,
+    linear_dt_bias_names, linear_in_proj_a_names, linear_in_proj_b_names, linear_in_proj_ba_names,
+    linear_in_proj_qkv_names, linear_in_proj_qkvz_names, linear_in_proj_z_names,
+    linear_out_norm_names, linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names,
+    moe_expert_up_names, moe_router_names, output_names, output_norm_names,
+    per_layer_model_projection_names, per_layer_projection_norm_names, pre_feedforward_norm_names,
+    vision_proj_names,
 };
 use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use aria_kernel::{
     attention_causal_with_scale, attention_with_scale, gated_delta_step, geglu, gelu_pytorch_tanh,
     hdm_linear, kv_sliding_view, linear_cpu, moe_topk_route, resolve_compute, rms_norm,
-    rms_norm_gemma, rope_half, rope_half_partial, rope_half_proportional, short_conv_step, silu_vec,
-    softplus, swiglu,
-    ComputeBackend, ComputePref, CudaContext, EngineError, GatedDeltaStep,
+    rms_norm_gemma, rope_half, rope_half_partial, rope_half_proportional, short_conv_step,
+    silu_vec, softplus, swiglu, ComputeBackend, ComputePref, CudaContext, EngineError,
+    GatedDeltaStep,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -199,12 +203,33 @@ struct PleModel {
     d: usize,
 }
 
+/// HF `Gemma3nTextAltUp` (4 parallel residual streams).
+struct LayerAltUp {
+    modality_router: MatWeight,
+    router_norm: Vec<f32>,
+    prediction_coefs: MatWeight,
+    correction_coefs: MatWeight,
+    correct_output_scale: Vec<f32>,
+}
+
+/// HF `Gemma3nTextLaurelBlock` (low-rank residual).
+struct LayerLaurel {
+    left: MatWeight,
+    right: MatWeight,
+    post_norm: Vec<f32>,
+    rank: usize,
+}
+
 struct LayerWeights {
     attn_norm: Vec<f32>,
     ffn_norm: Vec<f32>,
     post_attn_norm: Option<Vec<f32>>,
     post_ffn_norm: Option<Vec<f32>>,
     ple: Option<LayerPle>,
+    altup: Option<LayerAltUp>,
+    laurel: Option<LayerLaurel>,
+    /// Gemma-3n `activation_sparsity_pattern` (0 = dense GeGLU).
+    activation_sparsity: f32,
     /// HF `layer_scalar` / JAX `skip_scale`. 1.0 when the bundle omits it.
     layer_scalar: f32,
     op: LayerOp,
@@ -219,6 +244,9 @@ struct ModelWeights {
     vision: Option<MatWeight>,
     action: Option<MatWeight>,
     ple: Option<PleModel>,
+    /// Gemma-3n `altup_projections` (length `altup_num_inputs - 1`, typically 3).
+    altup_projections: Vec<MatWeight>,
+    altup_unembed: Vec<MatWeight>,
 }
 
 pub struct Session {
@@ -228,6 +256,7 @@ pub struct Session {
     conf: crate::bundle::ModelConfig,
     use_gemma_norm: bool,
     use_gemma4: bool,
+    use_gemma3n: bool,
     use_geglu: bool,
     embed_scale: f32,
     /// HF `final_logit_softcapping` (Gemma-4 default 30). None = disabled.
@@ -306,6 +335,7 @@ impl SessionBuilder {
         // from HF architecture then validate. Bundle values always win when present.
         fill_gemma4_architecture_defaults(&mut conf, family.path());
         fill_gemma3_architecture_defaults(&mut conf, family.path());
+        fill_gemma3n_architecture_defaults(&mut conf, family.path());
         fill_qwen35_architecture_defaults(&mut conf, family.path());
         require_gemma4_config(&conf, family.path())?;
         reject_unsupported_geometry(&conf, family)?;
@@ -315,6 +345,7 @@ impl SessionBuilder {
         // layer_types so AttnKind and KV sharing match the forward path.
         let weights = materialize_with_config(&bundle, family, &conf)?;
         require_gemma4_ple(&weights, &conf, family.path())?;
+        require_gemma3n_altup(&weights, &conf, family.path())?;
         load_profile_set_materialize(elapsed_ms(t_mat));
         let mut cuda = None;
         if compute == ComputeBackend::Cuda {
@@ -330,8 +361,10 @@ impl SessionBuilder {
             .unwrap_or("")
             .to_ascii_lowercase();
         let use_gemma4 = family.path().contains("gemma-4");
+        let use_gemma3n = is_gemma3n(family.path());
         // Qwen3.5 `Qwen3_5RMSNorm` is Gemma-style *(1+w) with zeros init (not Qwen3 *w).
-        let use_gemma_norm = (family.path().contains("gemma") && !use_gemma4)
+        // Gemma-3n / Gemma-4 use ones-init `*w` (`scale_plus_one=False`).
+        let use_gemma_norm = (family.path().contains("gemma") && !use_gemma4 && !use_gemma3n)
             || family.path().contains("qwen3.5");
         let use_geglu = act.contains("gelu") || family.path().contains("gemma");
         // Real Gemma-4 E2B/E4B checkpoints always ship PLE. Tiny/unit fixtures may
@@ -341,7 +374,11 @@ impl SessionBuilder {
         } else {
             1.0
         };
-        let final_logit_softcap = if use_gemma4 { Some(30.0) } else { None };
+        let final_logit_softcap = if use_gemma4 || use_gemma3n {
+            Some(30.0)
+        } else {
+            None
+        };
         let load = load_profile_take();
         let last_profile = self.profile.then(|| EngineProfile {
             compute: compute_label.clone(),
@@ -356,6 +393,7 @@ impl SessionBuilder {
             conf,
             use_gemma_norm,
             use_gemma4,
+            use_gemma3n,
             use_geglu,
             embed_scale,
             final_logit_softcap,
@@ -458,6 +496,12 @@ fn is_gemma3_text(path: &str) -> bool {
     path.to_ascii_lowercase().contains("gemma-3-")
 }
 
+fn is_gemma3n(path: &str) -> bool {
+    path.to_ascii_lowercase().contains("gemma-3n")
+}
+
+const GEMMA3N_ALTUP_N: usize = 4;
+
 /// HF Gemma-3: `_sliding_window_pattern=6` → 5×sliding + 1×full.
 fn default_gemma3_layer_types(n: usize) -> Vec<String> {
     (0..n)
@@ -484,8 +528,43 @@ fn fill_gemma3_architecture_defaults(conf: &mut crate::bundle::ModelConfig, fami
     if conf.sliding_window.unwrap_or(0) == 0 {
         conf.sliding_window = Some(512);
     }
-    if conf.hidden_act.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+    if conf
+        .hidden_act
+        .as_ref()
+        .map(|s| s.is_empty())
+        .unwrap_or(true)
+    {
         conf.hidden_act = Some("gelu_pytorch_tanh".into());
+    }
+}
+
+/// Gemma-3n-E2B/E4B: 4×sliding + 1×full (same cadence as Gemma-4), dual RoPE
+/// (sliding θ=1e4 / full θ=1e6, **not** p-RoPE), head_dim=256, KV-share=15.
+fn fill_gemma3n_architecture_defaults(conf: &mut crate::bundle::ModelConfig, family_path: &str) {
+    if !is_gemma3n(family_path) {
+        return;
+    }
+    if conf.layer_types.as_ref().map(|t| t.len()) != Some(conf.num_layers) {
+        conf.layer_types = Some(default_gemma4_layer_types(conf.num_layers));
+    }
+    if conf.sliding_window.unwrap_or(0) == 0 {
+        conf.sliding_window = Some(512);
+    }
+    if conf
+        .hidden_act
+        .as_ref()
+        .map(|s| s.is_empty())
+        .unwrap_or(true)
+    {
+        conf.hidden_act = Some("gelu_pytorch_tanh".into());
+    }
+    if conf.hidden_size >= 1024 {
+        if conf.head_dim.unwrap_or(0) == 0 {
+            conf.head_dim = Some(256);
+        }
+        if conf.num_kv_shared_layers.is_none() {
+            conf.num_kv_shared_layers = Some(15);
+        }
     }
 }
 
@@ -579,7 +658,36 @@ fn require_gemma4_config(
 }
 
 fn gemma4_requires_ple(family_path: &str, hidden: usize) -> bool {
-    family_path.contains("gemma-4") && hidden >= 1024
+    (family_path.contains("gemma-4") || is_gemma3n(family_path)) && hidden >= 1024
+}
+
+fn gemma3n_requires_altup(family_path: &str, hidden: usize) -> bool {
+    is_gemma3n(family_path) && hidden >= 1024
+}
+
+fn require_gemma3n_altup(
+    weights: &ModelWeights,
+    conf: &crate::bundle::ModelConfig,
+    family_path: &str,
+) -> Result<(), EngineError> {
+    if !gemma3n_requires_altup(family_path, conf.hidden_size) {
+        return Ok(());
+    }
+    let n_extra = GEMMA3N_ALTUP_N - 1;
+    if weights.altup_projections.len() != n_extra || weights.altup_unembed.len() != n_extra {
+        return Err(EngineError::Format(format!(
+            "{family_path}: Gemma-3n AltUp projections required \
+             (altup_projections + altup_unembed_projections); refusing silent no-op"
+        )));
+    }
+    for (i, layer) in weights.layers.iter().enumerate() {
+        if layer.altup.is_none() || layer.laurel.is_none() {
+            return Err(EngineError::Format(format!(
+                "{family_path}: Gemma-3n layer {i} missing AltUp/Laurel weights"
+            )));
+        }
+    }
+    Ok(())
 }
 
 fn require_gemma4_ple(
@@ -592,7 +700,7 @@ fn require_gemma4_ple(
     }
     if weights.ple.is_none() {
         return Err(EngineError::Format(format!(
-            "{family_path}: codebook PLE required for Gemma-4 E2B/E4B \
+            "{family_path}: codebook PLE required for Gemma-4 / Gemma-3n E2B/E4B \
              (embed_tokens_per_layer + per_layer_model_projection + \
              per_layer_projection_norm); refusing silent no-op"
         )));
@@ -678,8 +786,7 @@ fn split_interleaved_q_gate(
             let src = t * packed + h * (2 * head_dim);
             let dst = t * q_dim + h * head_dim;
             q[dst..dst + head_dim].copy_from_slice(&mixed[src..src + head_dim]);
-            gate[dst..dst + head_dim]
-                .copy_from_slice(&mixed[src + head_dim..src + 2 * head_dim]);
+            gate[dst..dst + head_dim].copy_from_slice(&mixed[src + head_dim..src + 2 * head_dim]);
         }
     }
     Ok((q, gate))
@@ -920,8 +1027,7 @@ fn materialize_with_config(
             };
             let wq = any_mat(b, &attn_q_names(layer))?;
             let wo = any_mat(b, &attn_o_names(layer))?;
-            let (_q_out, q_dim, q_gate) =
-                attn_q_geometry(wq.data.len(), wo.data.len(), hidden)?;
+            let (_q_out, q_dim, q_gate) = attn_q_geometry(wq.data.len(), wo.data.len(), hidden)?;
             LayerOp::Attn(AttnWeights {
                 wq,
                 wk,
@@ -989,6 +1095,72 @@ fn materialize_with_config(
             _ => None,
         };
 
+        let altup = match (
+            try_mat(b, &layer_altup_router_names(layer))?,
+            optional_vec(b, &layer_altup_router_norm_names(layer)),
+            try_mat(b, &layer_altup_prediction_coef_names(layer))?,
+            try_mat(b, &layer_altup_correction_coef_names(layer))?,
+            optional_vec(b, &layer_altup_correct_scale_names(layer)),
+        ) {
+            (
+                Some(modality_router),
+                Some(router_norm),
+                Some(prediction_coefs),
+                Some(correction_coefs),
+                Some(correct_output_scale),
+            ) => Some(LayerAltUp {
+                modality_router,
+                router_norm,
+                prediction_coefs,
+                correction_coefs,
+                correct_output_scale,
+            }),
+            (None, None, None, None, None) => None,
+            _ => {
+                return Err(EngineError::Format(format!(
+                    "layer {layer}: partial Gemma-3n AltUp tensors (need router, norms, pred/corr coefs, correct_output_scale)"
+                )));
+            }
+        };
+
+        let laurel = match (
+            try_mat(b, &layer_laurel_left_names(layer))?,
+            try_mat(b, &layer_laurel_right_names(layer))?,
+            optional_vec(b, &layer_laurel_norm_names(layer)),
+        ) {
+            (Some(left), Some(right), Some(post_norm)) => {
+                if hidden == 0 || left.data.len() % hidden != 0 {
+                    return Err(EngineError::ShapeMismatch(format!(
+                        "layer {layer} laurel left not divisible by hidden"
+                    )));
+                }
+                let rank = left.data.len() / hidden;
+                if rank == 0 || right.data.len() != hidden * rank {
+                    return Err(EngineError::ShapeMismatch(format!(
+                        "layer {layer} laurel rank/shape mismatch"
+                    )));
+                }
+                Some(LayerLaurel {
+                    left,
+                    right,
+                    post_norm,
+                    rank,
+                })
+            }
+            (None, None, None) => None,
+            _ => {
+                return Err(EngineError::Format(format!(
+                    "layer {layer}: partial Gemma-3n Laurel tensors"
+                )));
+            }
+        };
+
+        let activation_sparsity = if is_gemma3n(family.path()) && m.num_layers >= 30 && layer < 10 {
+            0.95
+        } else {
+            0.0
+        };
+
         let layer_scalar = optional_vec(b, &layer_scalar_names(layer))
             .and_then(|v| v.into_iter().find(|x| x.is_finite()))
             .unwrap_or(1.0);
@@ -999,6 +1171,9 @@ fn materialize_with_config(
             post_attn_norm,
             post_ffn_norm,
             ple,
+            altup,
+            laurel,
+            activation_sparsity,
             layer_scalar,
             op,
             ffn,
@@ -1018,9 +1193,10 @@ fn materialize_with_config(
     let emb = MatWeight::from_loaded(b.weight_loaded_any(&emb_n)?);
     let output = if m.tie_word_embeddings.unwrap_or(false)
         || family.path().contains("gemma-4")
+        || is_gemma3n(family.path())
         || (family.path().contains("qwen3") && !family.path().contains("qwen3.5"))
     {
-        // Qwen3-0.6B/1.7B and Gemma-4 tie lm_head to embed; prefer embed even
+        // Qwen3-0.6B/1.7B, Gemma-4, and Gemma-3n tie lm_head to embed.
         // if a separate lm_head tensor exists (often a worse-quantized copy).
         emb.clone()
     } else {
@@ -1109,6 +1285,38 @@ fn materialize_with_config(
             }
         }
     }
+    let n_extra = GEMMA3N_ALTUP_N - 1;
+    let mut altup_projections = Vec::new();
+    let mut altup_unembed = Vec::new();
+    let mut altup_partial = false;
+    for i in 0..n_extra {
+        match try_mat(b, &altup_projection_names(i))? {
+            Some(w) => altup_projections.push(w),
+            None => altup_partial = true,
+        }
+        match try_mat(b, &altup_unembed_names(i))? {
+            Some(w) => altup_unembed.push(w),
+            None => altup_partial = true,
+        }
+    }
+    if altup_partial {
+        if !altup_projections.is_empty() || !altup_unembed.is_empty() {
+            return Err(EngineError::Format(
+                "partial Gemma-3n altup_projections / altup_unembed_projections".into(),
+            ));
+        }
+        altup_projections.clear();
+        altup_unembed.clear();
+    } else {
+        for w in altup_projections.iter().chain(altup_unembed.iter()) {
+            if w.data.len() != hidden * hidden {
+                return Err(EngineError::ShapeMismatch(format!(
+                    "Gemma-3n altup projection len {} != hidden² {hidden}",
+                    w.data.len()
+                )));
+            }
+        }
+    }
     Ok(ModelWeights {
         emb,
         layers,
@@ -1117,6 +1325,8 @@ fn materialize_with_config(
         vision: any_mat(b, &vis_n).ok(),
         action: any_mat(b, &act_n).ok(),
         ple,
+        altup_projections,
+        altup_unembed,
     })
 }
 
@@ -1132,6 +1342,9 @@ fn upload_weights(ctx: &CudaContext, w: &ModelWeights) -> Result<(), EngineError
     if let Some(ple) = &w.ple {
         ctx.upload(&ple.embed)?;
         ctx.upload(&ple.proj.data)?;
+    }
+    for wproj in w.altup_projections.iter().chain(w.altup_unembed.iter()) {
+        ctx.upload(&wproj.data)?;
     }
     for layer in &w.layers {
         match &layer.op {
@@ -1159,13 +1372,24 @@ fn upload_weights(ctx: &CudaContext, w: &ModelWeights) -> Result<(), EngineError
             ctx.upload(&ple.gate.data)?;
             ctx.upload(&ple.proj.data)?;
         }
+        if let Some(altup) = &layer.altup {
+            ctx.upload(&altup.modality_router.data)?;
+            ctx.upload(&altup.prediction_coefs.data)?;
+            ctx.upload(&altup.correction_coefs.data)?;
+        }
+        if let Some(laurel) = &layer.laurel {
+            ctx.upload(&laurel.left.data)?;
+            ctx.upload(&laurel.right.data)?;
+        }
         match &layer.ffn {
             FfnWeights::Dense { gate, up, down } => {
                 ctx.upload(&gate.data)?;
                 ctx.upload(&up.data)?;
                 ctx.upload(&down.data)?;
             }
-            FfnWeights::MoE { router, experts, .. } => {
+            FfnWeights::MoE {
+                router, experts, ..
+            } => {
                 ctx.upload(&router.data)?;
                 for e in experts {
                     ctx.upload(&e.gate.data)?;
@@ -1515,7 +1739,7 @@ impl Session {
     }
 
     fn attn_scale(&self, head_dim: usize) -> f32 {
-        if self.use_gemma4 {
+        if self.use_gemma4 || self.use_gemma3n {
             1.0
         } else {
             1.0 / (head_dim as f32).sqrt()
@@ -1547,7 +1771,7 @@ impl Session {
                     (1_000_000.0, mode)
                 }
             }
-        } else if is_gemma3_text(self.family.path()) {
+        } else if is_gemma3_text(self.family.path()) || self.use_gemma3n {
             // HF: sliding `rope_local_base_freq=1e4`, global `rope_theta=1e6`.
             // Not Gemma-4 p-RoPE (proportional / partial factor).
             match kind {
@@ -1637,12 +1861,272 @@ impl Session {
                 )));
             }
             self.norm(&v, vn)
-        } else if self.use_gemma4 {
+        } else if self.use_gemma4 || self.use_gemma3n {
             let ones = vec![1.0f32; head_dim];
             rms_norm(&v, &ones, 1e-6)
         } else {
             Ok(v)
         }
+    }
+
+    fn has_gemma3n_graph(&self) -> bool {
+        self.use_gemma3n
+            && self.weights.altup_projections.len() == GEMMA3N_ALTUP_N - 1
+            && self.weights.altup_unembed.len() == GEMMA3N_ALTUP_N - 1
+    }
+
+    fn match_token_magnitude(
+        src: &[f32],
+        target: &[f32],
+        hidden: usize,
+    ) -> Result<Vec<f32>, EngineError> {
+        if src.len() != target.len() || hidden == 0 || !src.len().is_multiple_of(hidden) {
+            return Err(EngineError::ShapeMismatch(
+                "Gemma-3n magnitude match length mismatch".into(),
+            ));
+        }
+        let seq = src.len() / hidden;
+        let mut out = src.to_vec();
+        for t in 0..seq {
+            let tb = t * hidden;
+            let mut t_ms = 0.0f32;
+            let mut s_ms = 0.0f32;
+            for i in 0..hidden {
+                t_ms += target[tb + i] * target[tb + i];
+                s_ms += src[tb + i] * src[tb + i];
+            }
+            let target_mag = (t_ms / hidden as f32).sqrt();
+            let src_mag = (s_ms / hidden as f32).max(1e-5).sqrt();
+            let scale = target_mag / src_mag;
+            for i in 0..hidden {
+                out[tb + i] *= scale;
+            }
+        }
+        Ok(out)
+    }
+
+    fn gemma3n_expand_streams(
+        &self,
+        x0: &[f32],
+        hidden: usize,
+    ) -> Result<Vec<Vec<f32>>, EngineError> {
+        let mut streams = vec![x0.to_vec()];
+        for proj in &self.weights.altup_projections {
+            let p = self.wmm(proj, x0, hidden, hidden, GemmAcct::Other)?;
+            streams.push(Self::match_token_magnitude(&p, x0, hidden)?);
+        }
+        Ok(streams)
+    }
+
+    fn gemma3n_unembed_streams(
+        &self,
+        streams: &[Vec<f32>],
+        hidden: usize,
+    ) -> Result<Vec<f32>, EngineError> {
+        if streams.len() != GEMMA3N_ALTUP_N {
+            return Err(EngineError::Format(
+                "Gemma-3n unembed expects 4 AltUp streams".into(),
+            ));
+        }
+        let mut acc = streams[0].clone();
+        for (i, proj) in self.weights.altup_unembed.iter().enumerate() {
+            let u = self.wmm(proj, &streams[i + 1], hidden, hidden, GemmAcct::Other)?;
+            let matched = Self::match_token_magnitude(&u, &streams[0], hidden)?;
+            for (a, b) in acc.iter_mut().zip(matched.iter()) {
+                *a += *b;
+            }
+        }
+        let n = GEMMA3N_ALTUP_N as f32;
+        for v in &mut acc {
+            *v /= n;
+        }
+        Ok(acc)
+    }
+
+    fn altup_modalities(
+        &self,
+        altup: &LayerAltUp,
+        x: &[f32],
+        hidden: usize,
+    ) -> Result<Vec<f32>, EngineError> {
+        if altup.router_norm.len() != hidden {
+            return Err(EngineError::ShapeMismatch(
+                "Gemma-3n altup.router_norm dim mismatch".into(),
+            ));
+        }
+        let mut xn = self.norm(x, &altup.router_norm)?;
+        let scale = (hidden as f32).sqrt().recip();
+        for v in &mut xn {
+            *v *= scale;
+        }
+        let mut routed = self.wmm(
+            &altup.modality_router,
+            &xn,
+            GEMMA3N_ALTUP_N,
+            hidden,
+            GemmAcct::Other,
+        )?;
+        for v in &mut routed {
+            *v = v.tanh();
+        }
+        Ok(routed)
+    }
+
+    fn altup_predict(
+        &self,
+        layer: &LayerWeights,
+        streams: &[Vec<f32>],
+        hidden: usize,
+    ) -> Result<Vec<Vec<f32>>, EngineError> {
+        let altup = layer
+            .altup
+            .as_ref()
+            .ok_or_else(|| EngineError::Format("Gemma-3n layer missing AltUp".into()))?;
+        let n = GEMMA3N_ALTUP_N;
+        if streams.len() != n {
+            return Err(EngineError::Format(
+                "Gemma-3n predict expects 4 streams".into(),
+            ));
+        }
+        let seq = streams[0].len() / hidden;
+        let routed = self.altup_modalities(altup, &streams[0], hidden)?;
+        let coefs = self.wmm(&altup.prediction_coefs, &routed, n * n, n, GemmAcct::Other)?;
+        let mut preds = vec![vec![0.0f32; seq * hidden]; n];
+        for t in 0..seq {
+            for out_s in 0..n {
+                for h in 0..hidden {
+                    let mut acc = streams[out_s][t * hidden + h];
+                    for in_s in 0..n {
+                        acc += streams[in_s][t * hidden + h] * coefs[t * n * n + out_s * n + in_s];
+                    }
+                    preds[out_s][t * hidden + h] = acc;
+                }
+            }
+        }
+        Ok(preds)
+    }
+
+    fn altup_correct(
+        &self,
+        layer: &LayerWeights,
+        predictions: &[Vec<f32>],
+        activated: &[f32],
+        hidden: usize,
+    ) -> Result<Vec<Vec<f32>>, EngineError> {
+        let altup = layer
+            .altup
+            .as_ref()
+            .ok_or_else(|| EngineError::Format("Gemma-3n layer missing AltUp".into()))?;
+        let n = GEMMA3N_ALTUP_N;
+        let seq = activated.len() / hidden;
+        let routed = self.altup_modalities(altup, activated, hidden)?;
+        let mut coefs = self.wmm(&altup.correction_coefs, &routed, n, n, GemmAcct::Other)?;
+        for v in &mut coefs {
+            *v += 1.0;
+        }
+        let mut out = Vec::with_capacity(n);
+        for (si, pred) in predictions.iter().enumerate() {
+            let mut row = pred.clone();
+            for t in 0..seq {
+                let c = coefs[t * n + si];
+                for h in 0..hidden {
+                    let idx = t * hidden + h;
+                    let innov = activated[idx] - predictions[0][idx];
+                    row[idx] += innov * c;
+                }
+            }
+            out.push(row);
+        }
+        Ok(out)
+    }
+
+    fn apply_laurel(
+        &self,
+        layer: &LayerWeights,
+        xn: &[f32],
+        hidden: usize,
+    ) -> Result<Vec<f32>, EngineError> {
+        let laurel = layer
+            .laurel
+            .as_ref()
+            .ok_or_else(|| EngineError::Format("Gemma-3n layer missing Laurel".into()))?;
+        let left = self.wmm(&laurel.left, xn, laurel.rank, hidden, GemmAcct::Ffn)?;
+        let right = self.wmm(&laurel.right, &left, hidden, laurel.rank, GemmAcct::Ffn)?;
+        let nrm = self.norm(&right, &laurel.post_norm)?;
+        let mut out = xn.to_vec();
+        for (a, b) in out.iter_mut().zip(nrm.iter()) {
+            *a += *b;
+        }
+        Ok(out)
+    }
+
+    fn scale_altup_active(
+        &self,
+        layer: &LayerWeights,
+        x: &mut [f32],
+        hidden: usize,
+    ) -> Result<(), EngineError> {
+        let Some(altup) = &layer.altup else {
+            return Ok(());
+        };
+        if altup.correct_output_scale.len() == 1 {
+            let s = altup.correct_output_scale[0];
+            for v in x.iter_mut() {
+                *v *= s;
+            }
+            return Ok(());
+        }
+        if altup.correct_output_scale.len() != hidden {
+            return Err(EngineError::ShapeMismatch(format!(
+                "altup.correct_output_scale len {} != hidden {hidden}",
+                altup.correct_output_scale.len()
+            )));
+        }
+        let seq = x.len() / hidden;
+        for t in 0..seq {
+            for h in 0..hidden {
+                x[t * hidden + h] *= altup.correct_output_scale[h];
+            }
+        }
+        Ok(())
+    }
+
+    /// After SDPA `ao`, mix Laurel, run FFN, AltUp-correct, and add PLE to streams 1:.
+    fn gemma3n_after_attn(
+        &self,
+        streams: &mut [Vec<f32>],
+        predictions: &[Vec<f32>],
+        laurel: &[f32],
+        ao: &[f32],
+        layer: &LayerWeights,
+        li: usize,
+        ple_tok: Option<&[f32]>,
+        hidden: usize,
+    ) -> Result<(), EngineError> {
+        let mut active = predictions[0].clone();
+        self.add_normed_residual(&mut active, ao, layer.post_attn_norm.as_deref())?;
+        let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
+        let mut mix = vec![0.0f32; active.len()];
+        for i in 0..active.len() {
+            mix[i] = (active[i] + laurel[i]) * inv_sqrt2;
+        }
+        let xn2 = self.norm(&mix, &layer.ffn_norm)?;
+        let down = self.apply_ffn(layer, &xn2, hidden)?;
+        self.add_normed_residual(&mut mix, &down, layer.post_ffn_norm.as_deref())?;
+        let corrected = self.altup_correct(layer, predictions, &mix, hidden)?;
+        for (dst, src) in streams.iter_mut().zip(corrected.into_iter()) {
+            *dst = src;
+        }
+        let mut first = streams[0].clone();
+        self.scale_altup_active(layer, &mut first, hidden)?;
+        if let Some(delta) = self.ple_delta(&first, layer, li, ple_tok, hidden)? {
+            for s in streams.iter_mut().skip(1) {
+                for (a, b) in s.iter_mut().zip(delta.iter()) {
+                    *a += *b;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn compute_ple_inputs(
@@ -1689,16 +2173,16 @@ impl Session {
         Ok(Some(proj))
     }
 
-    fn apply_ple(
+    fn ple_delta(
         &self,
-        x: &mut [f32],
+        x: &[f32],
         layer: &LayerWeights,
         li: usize,
         ple_tok: Option<&[f32]>,
         hidden: usize,
-    ) -> Result<(), EngineError> {
+    ) -> Result<Option<Vec<f32>>, EngineError> {
         let (Some(ple), Some(ple_tok)) = (&layer.ple, ple_tok) else {
-            return Ok(());
+            return Ok(None);
         };
         let d = self
             .weights
@@ -1718,9 +2202,21 @@ impl Session {
             }
         }
         let proj = self.wmm(&ple.proj, &gated, hidden, d, GemmAcct::Ffn)?;
-        let nrm = self.norm(&proj, &ple.post_norm)?;
-        for (a, b) in x.iter_mut().zip(nrm.iter()) {
-            *a += *b;
+        Ok(Some(self.norm(&proj, &ple.post_norm)?))
+    }
+
+    fn apply_ple(
+        &self,
+        x: &mut [f32],
+        layer: &LayerWeights,
+        li: usize,
+        ple_tok: Option<&[f32]>,
+        hidden: usize,
+    ) -> Result<(), EngineError> {
+        if let Some(delta) = self.ple_delta(x, layer, li, ple_tok, hidden)? {
+            for (a, b) in x.iter_mut().zip(delta.iter()) {
+                *a += *b;
+            }
         }
         Ok(())
     }
@@ -1756,7 +2252,10 @@ impl Session {
                         "dense FFN weight shape mismatch".into(),
                     ));
                 }
-                let g = self.wmm(gate, xn2, inter, hidden, GemmAcct::Ffn)?;
+                let mut g = self.wmm(gate, xn2, inter, hidden, GemmAcct::Ffn)?;
+                if layer.activation_sparsity > 0.0 {
+                    g = gaussian_topk(&g, inter, layer.activation_sparsity)?;
+                }
                 let u = self.wmm(up, xn2, inter, hidden, GemmAcct::Ffn)?;
                 let h = if self.use_geglu {
                     geglu(&g, &u)?
@@ -1915,9 +2414,24 @@ impl Session {
             }
         }
         let ple_tok = self.compute_ple_inputs(toks, &x)?;
+        let mut gemma3n_streams = if self.has_gemma3n_graph() {
+            Some(self.gemma3n_expand_streams(&x, hidden)?)
+        } else {
+            None
+        };
 
         for (li, layer) in self.weights.layers.iter().enumerate() {
-            let xn = self.norm(&x, &layer.attn_norm)?;
+            let mut gemma3n_preds = None;
+            let mut gemma3n_laurel = None;
+            let xn = if let Some(ref streams) = gemma3n_streams {
+                let preds = self.altup_predict(layer, streams, hidden)?;
+                let xn = self.norm(&preds[0], &layer.attn_norm)?;
+                gemma3n_laurel = Some(self.apply_laurel(layer, &xn, hidden)?);
+                gemma3n_preds = Some(preds);
+                xn
+            } else {
+                self.norm(&x, &layer.attn_norm)?
+            };
             match &layer.op {
                 LayerOp::Attn(attn) => {
                     if attn.wq.data.len() % hidden != 0 {
@@ -1977,15 +2491,7 @@ impl Session {
                             }
                             k = self.norm(&k, kn)?;
                         }
-                        Self::apply_rope_seq(
-                            &mut k,
-                            seq,
-                            k_dim,
-                            head_dim,
-                            pos0,
-                            theta,
-                            rope,
-                        )?;
+                        Self::apply_rope_seq(&mut k, seq, k_dim, head_dim, pos0, theta, rope)?;
                         v = self.apply_v_norm(v, attn.v_norm.as_deref(), head_dim)?;
                         state.k_caches[li] = k;
                         state.v_caches[li] = v;
@@ -2015,12 +2521,26 @@ impl Session {
                         apply_sigmoid_gate(&mut attn_out, &gate)?;
                     }
                     let ao = self.wmm(&attn.wo, &attn_out, hidden, q_dim, GemmAcct::Attn)?;
+                    if let (Some(ref mut streams), Some(preds), Some(laurel)) =
+                        (gemma3n_streams.as_mut(), gemma3n_preds, gemma3n_laurel)
+                    {
+                        self.gemma3n_after_attn(
+                            streams,
+                            &preds,
+                            &laurel,
+                            &ao,
+                            layer,
+                            li,
+                            ple_tok.as_deref(),
+                            hidden,
+                        )?;
+                        continue;
+                    }
                     self.add_normed_residual(&mut x, &ao, layer.post_attn_norm.as_deref())?;
                 }
                 LayerOp::Conv(_) | LayerOp::Linear(_) => {
                     return Err(EngineError::Unsupported(
-                        "batched prefill is only implemented for attention+dense FFN layers"
-                            .into(),
+                        "batched prefill is only implemented for attention+dense FFN layers".into(),
                     ));
                 }
             }
@@ -2029,6 +2549,9 @@ impl Session {
             self.add_normed_residual(&mut x, &down, layer.post_ffn_norm.as_deref())?;
             self.apply_ple(&mut x, layer, li, ple_tok.as_deref(), hidden)?;
             Self::apply_layer_scalar(&mut x, layer.layer_scalar);
+        }
+        if let Some(streams) = gemma3n_streams {
+            x = self.gemma3n_unembed_streams(&streams, hidden)?;
         }
         state.pos = pos0 + seq;
         let last = &x[(seq - 1) * hidden..seq * hidden];
@@ -2089,9 +2612,24 @@ impl Session {
             }
         }
         let ple_tok = self.compute_ple_inputs(&[tok], &x)?;
+        let mut gemma3n_streams = if self.has_gemma3n_graph() {
+            Some(self.gemma3n_expand_streams(&x, hidden)?)
+        } else {
+            None
+        };
 
         for (li, layer) in self.weights.layers.iter().enumerate() {
-            let xn = self.norm(&x, &layer.attn_norm)?;
+            let mut gemma3n_preds = None;
+            let mut gemma3n_laurel = None;
+            let xn = if let Some(ref streams) = gemma3n_streams {
+                let preds = self.altup_predict(layer, streams, hidden)?;
+                let xn = self.norm(&preds[0], &layer.attn_norm)?;
+                gemma3n_laurel = Some(self.apply_laurel(layer, &xn, hidden)?);
+                gemma3n_preds = Some(preds);
+                xn
+            } else {
+                self.norm(&x, &layer.attn_norm)?
+            };
             match &layer.op {
                 LayerOp::Attn(attn) => {
                     if attn.wq.data.len() % hidden != 0 {
@@ -2187,6 +2725,21 @@ impl Session {
                         apply_sigmoid_gate(&mut attn_out, &gate)?;
                     }
                     let ao = self.wmm(&attn.wo, &attn_out, hidden, q_dim, GemmAcct::Attn)?;
+                    if let (Some(ref mut streams), Some(preds), Some(laurel)) =
+                        (gemma3n_streams.as_mut(), gemma3n_preds, gemma3n_laurel)
+                    {
+                        self.gemma3n_after_attn(
+                            streams,
+                            &preds,
+                            &laurel,
+                            &ao,
+                            layer,
+                            li,
+                            ple_tok.as_deref(),
+                            hidden,
+                        )?;
+                        continue;
+                    }
                     self.add_normed_residual(&mut x, &ao, layer.post_attn_norm.as_deref())?;
                 }
                 LayerOp::Conv(conv) => {
@@ -2279,6 +2832,9 @@ impl Session {
             self.apply_ple(&mut x, layer, li, ple_tok.as_deref(), hidden)?;
             Self::apply_layer_scalar(&mut x, layer.layer_scalar);
         }
+        if let Some(streams) = gemma3n_streams {
+            x = self.gemma3n_unembed_streams(&streams, hidden)?;
+        }
         state.pos += 1;
         let xn = self.norm(&x, &self.weights.output_norm)?;
         if !self.weights.output.data.len().is_multiple_of(hidden) {
@@ -2288,7 +2844,13 @@ impl Session {
             )));
         }
         let out_rows = self.weights.output.data.len() / hidden;
-        let logits = self.wmm(&self.weights.output, &xn, out_rows, hidden, GemmAcct::LmHead)?;
+        let logits = self.wmm(
+            &self.weights.output,
+            &xn,
+            out_rows,
+            hidden,
+            GemmAcct::LmHead,
+        )?;
         Ok(self.softcap_logits(logits))
     }
 
@@ -2300,6 +2862,39 @@ impl Session {
         }
         logits
     }
+}
+
+/// Gemma-3n `_gaussian_topk`: ReLU(x - (mean + std * Φ^{-1}(sparsity))) per token.
+fn gaussian_topk(gate: &[f32], inter: usize, sparsity: f32) -> Result<Vec<f32>, EngineError> {
+    if inter == 0 || !gate.len().is_multiple_of(inter) {
+        return Err(EngineError::ShapeMismatch(
+            "gaussian_topk: gate len not divisible by intermediate_size".into(),
+        ));
+    }
+    let z = if (sparsity - 0.95).abs() < 0.02 {
+        1.644_853_8
+    } else {
+        // Fallback: N(0,1) icdf ≈ √2 erfinv(2p-1); 0.95 is the published pattern.
+        1.644_853_8 * (sparsity / 0.95).clamp(0.0, 4.0)
+    };
+    let seq = gate.len() / inter;
+    let mut out = vec![0.0f32; gate.len()];
+    let n = inter as f32;
+    for t in 0..seq {
+        let row = &gate[t * inter..(t + 1) * inter];
+        let mean = row.iter().sum::<f32>() / n;
+        let mut var = 0.0f32;
+        for &v in row {
+            let d = v - mean;
+            var += d * d;
+        }
+        var /= n;
+        let cutoff = mean + var.sqrt() * z;
+        for i in 0..inter {
+            out[t * inter + i] = (row[i] - cutoff).max(0.0);
+        }
+    }
+    Ok(out)
 }
 
 fn argmax(v: &[f32]) -> u32 {
@@ -2393,10 +2988,7 @@ mod tests {
         assert_eq!(t[5], "full_attention");
         assert_eq!(t[11], "full_attention");
         assert_eq!(t[17], "full_attention");
-        assert_eq!(
-            t.iter().filter(|s| *s == "sliding_attention").count(),
-            15
-        );
+        assert_eq!(t.iter().filter(|s| *s == "sliding_attention").count(), 15);
     }
 
     #[test]
@@ -2421,6 +3013,56 @@ mod tests {
         let types = s.config().layer_types.as_ref().expect("layer_types");
         assert_eq!(types.len(), s.config().num_layers);
         assert!(types.iter().all(|t| t == "sliding_attention"));
+        assert_eq!(
+            s.layer_rope_params(AttnKind::Sliding),
+            (10_000.0, RopeMode::Full)
+        );
+        assert_eq!(
+            s.layer_rope_params(AttnKind::Full),
+            (1_000_000.0, RopeMode::Full)
+        );
+        let gen = s
+            .generate(
+                &[1, 2],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 2);
+    }
+
+    #[test]
+    fn gemma3n_not_gemma3_text_and_fills_4plus1_dual_rope() {
+        assert!(is_gemma3n("gemma/gemma-3n-e2b-it"));
+        assert!(is_gemma3n("gemma/gemma-3n-e4b-it"));
+        assert!(!is_gemma3n("gemma/gemma-3-270m-it"));
+        let t = default_gemma4_layer_types(30);
+        assert_eq!(t[4], "full_attention");
+        assert_eq!(t[9], "full_attention");
+        assert_eq!(t[29], "full_attention");
+        assert_eq!(t.iter().filter(|s| *s == "sliding_attention").count(), 24);
+
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let cfg_path = dir.path().join("config.json");
+        let raw = std::fs::read_to_string(&cfg_path).unwrap();
+        let mut cfg: Value = serde_json::from_str(&raw).unwrap();
+        let model = cfg["model"].as_object_mut().unwrap();
+        for key in ["layer_types", "sliding_window", "hidden_act"] {
+            model.remove(key);
+        }
+        std::fs::write(&cfg_path, cfg.to_string()).unwrap();
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-3n-e2b-it")
+            .build()
+            .unwrap();
+        assert!(!s.use_gemma_norm, "Gemma-3n RMSNorm is *w, not *(1+w)");
+        assert!((s.attn_scale(256) - 1.0).abs() < 1e-6);
+        assert_eq!(s.final_logit_softcap, Some(30.0));
+        assert_eq!(s.config().sliding_window, Some(512));
         assert_eq!(
             s.layer_rope_params(AttnKind::Sliding),
             (10_000.0, RopeMode::Full)
@@ -2552,8 +3194,16 @@ mod tests {
             &wo,
         );
         let qn = vec![1.0f32; head_dim];
-        add_raw("model.layers.0.self_attn.q_norm.weight", vec![head_dim], &qn);
-        add_raw("model.layers.0.self_attn.k_norm.weight", vec![head_dim], &qn);
+        add_raw(
+            "model.layers.0.self_attn.q_norm.weight",
+            vec![head_dim],
+            &qn,
+        );
+        add_raw(
+            "model.layers.0.self_attn.k_norm.weight",
+            vec![head_dim],
+            &qn,
+        );
         let g = vec![0.02f32; inter * hidden];
         let d = vec![0.02f32; hidden * inter];
         add_raw(
@@ -4067,7 +4717,11 @@ mod tests {
             vec![hidden, q_dim],
             &wo,
         );
-        add_raw("model.layers.1.mlp.gate_proj.weight", vec![inter, hidden], &g);
+        add_raw(
+            "model.layers.1.mlp.gate_proj.weight",
+            vec![inter, hidden],
+            &g,
+        );
         add_raw("model.layers.1.mlp.up_proj.weight", vec![inter, hidden], &g);
         add_raw(
             "model.layers.1.mlp.down_proj.weight",
@@ -4410,7 +5064,267 @@ mod tests {
         assert!(!gemma4_requires_ple("gemma/gemma-4-e2b-it", 64));
         assert!(gemma4_requires_ple("gemma/gemma-4-e2b-it", 1024));
         assert!(gemma4_requires_ple("gemma/gemma-4-e2b-it", 1536));
+        assert!(gemma4_requires_ple("gemma/gemma-3n-e2b-it", 2048));
         assert!(!gemma4_requires_ple("qwen/qwen3-0.6b", 1536));
+        assert!(!gemma3n_requires_altup("gemma/gemma-3n-e2b-it", 64));
+        assert!(gemma3n_requires_altup("gemma/gemma-3n-e2b-it", 2048));
+        assert!(!gemma3n_requires_altup("gemma/gemma-4-e2b-it", 2048));
+    }
+
+    #[test]
+    fn gemma3n_altup_laurel_ple_generate() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = 8usize;
+        let layers = 1usize;
+        let inter = 16usize;
+        let vocab = 16usize;
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let q_dim = n_heads * head_dim;
+        let k_dim = n_kv * head_dim;
+        let ple_d = 4usize;
+        let rank = 2usize;
+        let n_alt = 4usize;
+        let p = "model.language_model";
+
+        let mut tensors = serde_json::Map::new();
+        let mut bin = Vec::new();
+        let mut add_raw = |name: &str, shape: Vec<usize>, data: &[f32]| {
+            let offset = bin.len();
+            for &v in data {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+            let nbytes = data.len() * 4;
+            let mut meta = serde_json::Map::new();
+            meta.insert("kind".into(), json!("raw"));
+            meta.insert("dtype".into(), json!("f32"));
+            meta.insert("shape".into(), json!(shape));
+            meta.insert("offsets".into(), json!({ "data": [offset, nbytes] }));
+            tensors.insert(name.to_string(), Value::Object(meta));
+        };
+        let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
+        add_raw(
+            &format!("{p}.embed_tokens.weight"),
+            vec![vocab, hidden],
+            &emb,
+        );
+        let n1 = vec![1.0f32; hidden];
+        add_raw(
+            &format!("{p}.layers.0.input_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.post_attention_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.pre_feedforward_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.post_feedforward_layernorm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        let wq = vec![0.01f32; q_dim * hidden];
+        let wk = vec![0.01f32; k_dim * hidden];
+        let wv = vec![0.01f32; k_dim * hidden];
+        let wo = vec![0.01f32; hidden * q_dim];
+        add_raw(
+            &format!("{p}.layers.0.self_attn.q_proj.weight"),
+            vec![q_dim, hidden],
+            &wq,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.k_proj.weight"),
+            vec![k_dim, hidden],
+            &wk,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.v_proj.weight"),
+            vec![k_dim, hidden],
+            &wv,
+        );
+        add_raw(
+            &format!("{p}.layers.0.self_attn.o_proj.weight"),
+            vec![hidden, q_dim],
+            &wo,
+        );
+        let g = vec![0.01f32; inter * hidden];
+        let d = vec![0.01f32; hidden * inter];
+        add_raw(
+            &format!("{p}.layers.0.mlp.gate_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.up_proj.weight"),
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw(
+            &format!("{p}.layers.0.mlp.down_proj.weight"),
+            vec![hidden, inter],
+            &d,
+        );
+        let packed = layers * ple_d;
+        add_raw(
+            &format!("{p}.embed_tokens_per_layer.weight"),
+            vec![vocab, packed],
+            &vec![0.02f32; vocab * packed],
+        );
+        add_raw(
+            &format!("{p}.per_layer_model_projection.weight"),
+            vec![packed, hidden],
+            &vec![0.01f32; packed * hidden],
+        );
+        add_raw(
+            &format!("{p}.per_layer_projection_norm.weight"),
+            vec![ple_d],
+            &vec![1.0f32; ple_d],
+        );
+        add_raw(
+            &format!("{p}.layers.0.per_layer_input_gate.weight"),
+            vec![ple_d, hidden],
+            &vec![0.01f32; ple_d * hidden],
+        );
+        add_raw(
+            &format!("{p}.layers.0.per_layer_projection.weight"),
+            vec![hidden, ple_d],
+            &vec![0.01f32; hidden * ple_d],
+        );
+        add_raw(
+            &format!("{p}.layers.0.post_per_layer_input_norm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.altup.modality_router.weight"),
+            vec![n_alt, hidden],
+            &vec![0.01f32; n_alt * hidden],
+        );
+        add_raw(
+            &format!("{p}.layers.0.altup.router_norm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.altup.prediction_coefs.weight"),
+            vec![n_alt * n_alt, n_alt],
+            &vec![0.0f32; n_alt * n_alt * n_alt],
+        );
+        add_raw(
+            &format!("{p}.layers.0.altup.correction_coefs.weight"),
+            vec![n_alt, n_alt],
+            &vec![0.0f32; n_alt * n_alt],
+        );
+        add_raw(
+            &format!("{p}.layers.0.altup.correct_output_scale"),
+            vec![hidden],
+            &n1,
+        );
+        add_raw(
+            &format!("{p}.layers.0.laurel.linear_left.weight"),
+            vec![rank, hidden],
+            &vec![0.01f32; rank * hidden],
+        );
+        add_raw(
+            &format!("{p}.layers.0.laurel.linear_right.weight"),
+            vec![hidden, rank],
+            &vec![0.01f32; hidden * rank],
+        );
+        add_raw(
+            &format!("{p}.layers.0.laurel.post_laurel_norm.weight"),
+            vec![hidden],
+            &n1,
+        );
+        let eye: Vec<f32> = (0..hidden * hidden)
+            .map(|i| if i / hidden == i % hidden { 0.05 } else { 0.0 })
+            .collect();
+        for i in 0..3 {
+            add_raw(
+                &format!("{p}.altup_projections.{i}.weight"),
+                vec![hidden, hidden],
+                &eye,
+            );
+            add_raw(
+                &format!("{p}.altup_unembed_projections.{i}.weight"),
+                vec![hidden, hidden],
+                &eye,
+            );
+        }
+        add_raw(&format!("{p}.norm.weight"), vec![hidden], &n1);
+        add_raw("lm_head.weight", vec![vocab, hidden], &emb);
+
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "test",
+            "group_size_default": 32,
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": layers,
+                "num_attention_heads": n_heads,
+                "num_kv_heads": n_kv,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 1000000.0,
+                "hidden_act": "gelu_pytorch_tanh",
+                "tie_word_embeddings": true,
+                "head_dim": head_dim,
+                "sliding_window": 512,
+                "layer_types": ["full_attention"]
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-3n-e2b-it")
+            .build()
+            .unwrap();
+        assert!(s.has_gemma3n_graph());
+        assert!(s.weights.ple.is_some());
+        assert!(s.weights.layers[0].altup.is_some());
+        assert!(s.weights.layers[0].laurel.is_some());
+        let prompt = vec![1u32, 2];
+        let batched = s
+            .generate(
+                &prompt,
+                &GenerateOpts {
+                    max_tokens: 3,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        let step = s
+            .generate(
+                &prompt,
+                &GenerateOpts {
+                    max_tokens: 3,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(batched.tokens, step.tokens);
+        assert_eq!(batched.tokens.len(), 3);
+    }
+
+    #[test]
+    fn gaussian_topk_sparsity_zeros_below_cutoff() {
+        let row: Vec<f32> = (0..100).map(|i| i as f32).collect();
+        let y = gaussian_topk(&row, 100, 0.95).unwrap();
+        assert!(y.iter().all(|&v| v >= 0.0));
+        assert!(y.iter().filter(|&&v| v == 0.0).count() > 50);
+        assert!(y.iter().any(|&v| v > 0.0));
     }
 
     #[test]
@@ -4446,7 +5360,11 @@ mod tests {
             );
         };
         let emb = vec![0.01f32; vocab * hidden];
-        add_raw(&format!("{p}.embed_tokens.weight"), vec![vocab, hidden], &emb);
+        add_raw(
+            &format!("{p}.embed_tokens.weight"),
+            vec![vocab, hidden],
+            &emb,
+        );
         let ones = vec![1.0f32; hidden];
         add_raw(
             &format!("{p}.layers.0.input_layernorm.weight"),

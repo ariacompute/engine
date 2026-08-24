@@ -153,30 +153,24 @@ mod tests {
 
     #[test]
     fn qwen3_wraps_user_and_closes_think() {
-        let s = apply_chat_template(
-            "qwen/qwen3-0.6b",
-            &[ChatTurn::new("user", "Hello")],
-        );
+        let s = apply_chat_template("qwen/qwen3-0.6b", &[ChatTurn::new("user", "Hello")]);
         assert!(s.contains("<|im_start|>user\nHello<|im_end|>"), "{s}");
-        assert!(s.contains("<|im_start|>assistant\n<think>\n\n</think>\n\n"), "{s}");
+        assert!(
+            s.contains("<|im_start|>assistant\n<think>\n\n</think>\n\n"),
+            "{s}"
+        );
         assert!(!s.ends_with("Hello"), "{s}");
     }
 
     #[test]
     fn gemma4_uses_pipe_turn_markers() {
-        let s = apply_chat_template(
-            "gemma/gemma-4-e2b-it",
-            &[ChatTurn::new("user", "Hello")],
-        );
+        let s = apply_chat_template("gemma/gemma-4-e2b-it", &[ChatTurn::new("user", "Hello")]);
         assert_eq!(s, "<bos><|turn>user\nHello<turn|>\n<|turn>model\n");
     }
 
     #[test]
     fn gemma3_keeps_start_of_turn() {
-        let s = apply_chat_template(
-            "gemma/gemma-3-1b-it",
-            &[ChatTurn::new("user", "Hi")],
-        );
+        let s = apply_chat_template("gemma/gemma-3-1b-it", &[ChatTurn::new("user", "Hi")]);
         assert!(s.contains("<start_of_turn>user\nHi<end_of_turn>"), "{s}");
         assert!(s.ends_with("<start_of_turn>model\n"), "{s}");
     }

@@ -50,7 +50,10 @@ impl BundleTokenizer {
             return Ok(None);
         }
         let tok = Tokenizer::from_file(&path).map_err(|e| {
-            EngineError::Format(format!("tokenizer.json load failed ({}): {e}", path.display()))
+            EngineError::Format(format!(
+                "tokenizer.json load failed ({}): {e}",
+                path.display()
+            ))
         })?;
         Ok(Some(Self::wrap(tok)))
     }
@@ -213,7 +216,9 @@ mod tests {
     fn try_load_from_dir() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("tokenizer.json"), word_level_json()).unwrap();
-        let tok = BundleTokenizer::try_load(dir.path()).unwrap().expect("loaded");
+        let tok = BundleTokenizer::try_load(dir.path())
+            .unwrap()
+            .expect("loaded");
         assert_eq!(tok.encode("Hello").unwrap(), vec![0]);
     }
 

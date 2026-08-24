@@ -421,7 +421,9 @@ mod tests {
         // Every registry row appears in EXPECTED.
         for e in FAMILY_REGISTRY {
             assert!(
-                EXPECTED_BASE_MODELS.iter().any(|(p, b)| *p == e.path && *b == e.base_model),
+                EXPECTED_BASE_MODELS
+                    .iter()
+                    .any(|(p, b)| *p == e.path && *b == e.base_model),
                 "unexpected registry entry {}",
                 e.path
             );
@@ -442,17 +444,23 @@ mod tests {
             require_stage_a("gemma/gemma-4-e2b-it").unwrap().path(),
             "gemma/gemma-4-e2b-it"
         );
-        assert_eq!(lookup_family("lfm/lfm2-8b-a1b").unwrap().arch, ArchClass::TextMoE);
-        assert_eq!(lookup_family("lfm/lfm2-vl-450m").unwrap().arch, ArchClass::VL);
-        assert_eq!(lookup_family("openvla/openvla-7b").unwrap().arch, ArchClass::VLA);
+        assert_eq!(
+            lookup_family("lfm/lfm2-8b-a1b").unwrap().arch,
+            ArchClass::TextMoE
+        );
+        assert_eq!(
+            lookup_family("lfm/lfm2-vl-450m").unwrap().arch,
+            ArchClass::VL
+        );
+        assert_eq!(
+            lookup_family("openvla/openvla-7b").unwrap().arch,
+            ArchClass::VLA
+        );
     }
 
     #[test]
     fn infer_family_from_bundle_dirname() {
-        assert_eq!(
-            infer_family_path("qwen3-0.6b_q4"),
-            Some("qwen/qwen3-0.6b")
-        );
+        assert_eq!(infer_family_path("qwen3-0.6b_q4"), Some("qwen/qwen3-0.6b"));
         assert_eq!(
             infer_family_path("/home/ubuntu/.ariacompute/models/qwen3-0.6b_q4"),
             Some("qwen/qwen3-0.6b")
@@ -486,6 +494,8 @@ mod tests {
         assert!((effective_rope_theta("qwen/qwen3-0.6b", 1_000_000.0) - 1_000_000.0).abs() < 1.0);
         assert!((effective_rope_theta("gemma/gemma-4-e2b-it", 10_000.0) - 10_000.0).abs() < 1.0);
         assert!((effective_rope_theta("qwen/qwen3.5-2b", 10_000.0) - 10_000_000.0).abs() < 1.0);
-        assert!((effective_rope_theta("qwen/qwen3.5-0.8b", 10_000_000.0) - 10_000_000.0).abs() < 1.0);
+        assert!(
+            (effective_rope_theta("qwen/qwen3.5-0.8b", 10_000_000.0) - 10_000_000.0).abs() < 1.0
+        );
     }
 }

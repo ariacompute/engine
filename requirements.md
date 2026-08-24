@@ -112,11 +112,11 @@
 | P0 | **LFM conv hybrid** | LFM2/2.5：`layer_types` / conv 层不要求 `q_proj`；实现 short-conv + cache；消费 `conv.*` 张量名 |
 | P0 | **MoE** | `lfm2-8b-a1b`、Inkling：真实 router + expert FFN；`text_moe_decoder_stub` 不得冒充生成；Inkling ArchClass 不得标纯 TextDense |
 | P0 | **Qwen3.5 / Bonsai** | linear_attention / Gated DeltaNet 层：实现或对未实现层返回 `Unsupported`；禁止当全 SDPA dense。消费 HF Qwen3.5 拆分投影（`in_proj_qkv`+`in_proj_z`、`in_proj_b`+`in_proj_a`），兼容 Qwen3-Next 融合 `in_proj_qkvz` / `in_proj_ba`。全注意力 `attn_output_gate`：`q_proj` 为每头 `[q \| gate]`（out=`2*heads*head_dim`），`o_proj` 仍为 `heads*head_dim`；attn 后 `sigmoid(gate)` 再投影。**RoPE**：HF `rope_parameters.partial_rotary_factor=0.25`（只转前 `head_dim*0.25`，inv_freq 以该 rotary_dim 为分母，**不是** Gemma-4 p-RoPE）+ `rope_theta=1e7`；hub q4 缺字段时引擎按此补齐。禁止对 Qwen3.5 全头 `rotate_half` / Llama θ=1e4（Hello greedy 会跑满 `max_tokens` 且 `content` 为空）。**RMSNorm**：HF `Qwen3_5RMSNorm` 为 Gemma 式 `x*rrms*(1+w)`（weight 零初始化），含 input/post-attn/q_norm/k_norm/final `norm`；禁止当 Qwen3/Llama `*w`（隐状态被压扁后 Hello greedy `content` 为空）。DeltaNet 输出 `Qwen3_5RMSNormGated` 仍为 ones-init `*w`，须加载 `linear_attn.norm.weight`。 |
-| P1 | **Gemma 正确性** | GeGLU（`gelu_pytorch_tanh`）vs SwiGLU；RMSNorm `*(1+w)`（Gemma-4 为 `*w`，ones 初始化）；四 norm；`ffn_norm` 优先 `pre_feedforward_layernorm`。**Gemma-3 文本（270m/1b，不含 3n）**：HF `_sliding_window_pattern=6`（5×sliding+1×full）、`sliding_window=512`、双 RoPE（sliding θ=1e4 / full θ=1e6，**不是** Gemma-4 p-RoPE）；hub q326/q4 缺 `layer_types`/`hidden_act` 时引擎按此补齐。禁止把 Gemma-3 当全 full + 单一 θ（Hello greedy 会塌成印地语循环乱码）。Gemma-4 文本 decoder 图见 **§3.3.2**（KV-share、滑动窗口、双/部分 RoPE、PLE、**`layer_scalar`**）。**真实 E2B/E4B（hidden≥1024）必须加载码本 PLE**（`embed_tokens_per_layer` + projection + 每层 gate/proj/norm）；禁止 `ple=None` 静默 no-op。词表/PLE 2D 与其它线性层同一解包：LSB unpack → 旋转域 dequant → `hadamard.blocks` 逆 blocked FWHT → 行 gather（shape `[vocab, hidden]` / `[vocab, layers*d]`）。 |
+| P1 | **Gemma 正确性** | GeGLU（`gelu_pytorch_tanh`）vs SwiGLU；RMSNorm `*(1+w)`（**Gemma-4 / Gemma-3n** 为 `*w`，ones 初始化 / `scale_plus_one=False`）；四 norm；`ffn_norm` 优先 `pre_feedforward_layernorm`。**Gemma-3 文本（270m/1b，不含 3n）**：HF `_sliding_window_pattern=6`（5×sliding+1×full）、`sliding_window=512`、双 RoPE（sliding θ=1e4 / full θ=1e6，**不是** Gemma-4 p-RoPE）；hub q326/q4 缺 `layer_types`/`hidden_act` 时引擎按此补齐。禁止把 Gemma-3 当全 full + 单一 θ（Hello greedy 会塌成印地语循环乱码）。**Gemma-3n E2B/E4B** 见 **§3.3.3**（4×sliding+1×full、双 RoPE 全头、attn scale `1.0`、logit softcap 30、AltUp+Laurel、PLE 加到非 active 流、前 10 层 gaussian top-k）。Gemma-4 文本 decoder 图见 **§3.3.2**（KV-share、滑动窗口、双/部分 RoPE、PLE、**`layer_scalar`**）。**真实 E2B/E4B（hidden≥1024）必须加载码本 PLE**（`embed_tokens_per_layer` + projection + 每层 gate/proj/norm）；禁止 `ple=None` 静默 no-op。词表/PLE 2D 与其它线性层同一解包：LSB unpack → 旋转域 dequant → `hadamard.blocks` 逆 blocked FWHT → 行 gather（shape `[vocab, hidden]` / `[vocab, layers*d]`）。 |
 | P1 | **QK-Norm** | Qwen3 / Gemma / LFM attn：加载并应用 `q_norm`/`k_norm` |
 | P1 | **VL/VLA** | 消费 bundle 内 vision/action 张量，或硬 `Unsupported`；禁止 RGB mean-pool / 假 action 冒充完成 |
 | P2 | **注册表对齐** | §1.1 与 `model` 同步：补登记 `lfm/lfm2.5-2.6b`（或双方删除） |
-| P2 | **Bundle `model` 扩展字段** | 消费 model 仓写入的 `head_dim` / `layer_types` / `num_kv_shared_layers` / `hidden_act` / nested RoPE 等（见 model Spec）。**Gemma-4** 另认 `sliding_window` / `global_head_dim` / `partial_rotary_factor`；**Gemma-3 文本**另认 5+1 `layer_types` / `sliding_window=512`。bundle 缺省时按 HF 架构补齐（hub 旧 q4/q326 仅含基础字段亦可加载），显式写入值优先；Gemma-4 补齐后仍不完整 → `Unsupported`。推荐用当前 `config_from_hf` 重量化并重新上传 hub。 |
+| P2 | **Bundle `model` 扩展字段** | 消费 model 仓写入的 `head_dim` / `layer_types` / `num_kv_shared_layers` / `hidden_act` / nested RoPE 等（见 model Spec）。**Gemma-4** 另认 `sliding_window` / `global_head_dim` / `partial_rotary_factor`；**Gemma-3 文本**另认 5+1 `layer_types` / `sliding_window=512`；**Gemma-3n** 另认 4+1 `layer_types` / `sliding_window=512` / `head_dim=256` / `num_kv_shared_layers=15`（**不是** Gemma-4 `global_head_dim=512` 或 p-RoPE）。bundle 缺省时按 HF 架构补齐（hub 旧 q4/q326 仅含基础字段亦可加载），显式写入值优先；Gemma-4 补齐后仍不完整 → `Unsupported`。推荐用当前 `config_from_hf` 重量化并重新上传 hub。 |
 
 ### 3.3.2 Gemma-4 文本 decoder（hub q4）
 
@@ -141,6 +141,25 @@ Hub 已发布 `gemma-4-e2b-it_q4` 为消费契约：引擎须按现有张量名�
 | 禁止 | 因无 `.weight` 忽略该张量。发布 checkpoint 的值 **不是** 1.0；省略等价恒等残差，greedy Hello 会变成多语言乱码 |
 
 embed 缩放 `sqrt(hidden)`；`final_logit_softcapping` 默认 30。chat 模板为 Gemma-4 `<|turn>`；Hello 的 `prompt_tokens` 为 **10**。
+
+### 3.3.3 Gemma-3n 文本 decoder（hub q4）
+
+Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不是** Gemma-3 文本（5+1 + `*(1+w)`），也 **不是** Gemma-4 p-RoPE。文本路径与 HF `Gemma3nTextDecoderLayer` 对齐。
+
+| 项 | 约定 |
+|----|------|
+| 层型 | 重复 4×sliding + 1×full（full 在 4,9,…,n−1）；`sliding_window=512` |
+| RoPE | sliding θ=1e4 / full θ=1e6，**全头**（禁止 p-RoPE / `partial_rotary_factor`） |
+| RMSNorm | ones-init `*w`（`scale_plus_one=False`）；禁止 Gemma-3 `*(1+w)` |
+| Attn | QK-norm + V-norm（无 scale 时等价 ones）；scale **`1.0`**（不是 `1/sqrt(head_dim)`） |
+| 其它 | embed `sqrt(H)`；`final_logit_softcapping=30`；tied embed；KV-share 默认 15；`head_dim=256` |
+| AltUp | 4 条残差流；加载 `altup_projections` / `altup_unembed_projections` 与每层 `altup.*`；真实 E2B（hidden≥1024）缺则硬失败 |
+| Laurel | 每层 `linear_left`/`linear_right`/`post_laurel_norm`；与 attn 残差 `(attn_gated + laurel)/√2` |
+| PLE | 与 Gemma-4 同名张量；**加到 AltUp 非 active 流**（`corrected[1:] += delta`），禁止只加到 stream 0 |
+| FFN | 前 10 层 `activation_sparsity=0.95` 的 gaussian top-k（`relu(x − (μ + σ Φ^{-1}(0.95)))`）再 GeGLU |
+| Chat | Gemma-3 `<start_of_turn>`（不是 Gemma-4 `<\|turn>`）；Hello `prompt_tokens=10` |
+
+禁止把 Gemma-3n 当普通 Gemma-3 decoder（Hello greedy 会变成多语言乱码）。
 
 ### 3.4 `aria-openai`
 
@@ -320,6 +339,7 @@ embed 缩放 `sqrt(hidden)`；`final_logit_softcapping` 默认 30。chat 模板�
 - **C**：VL/VLA、ASR、embeddings/RAG、tool_calls 的 OpenAI 面；NEON vs scalar 对拍；`hybrid_execution=device` 禁止云卸载、`=cloud` 强制云端。
 - **真实 codebook（与 §3.3.1）**：至少一条非 tiny Gemma-4 / Qwen3 / LFM 路径在 HDM 接通后，层 RMSE 或短生成与 Python `reconstruct_weight` / 参考前向有界；未实现架构族须硬失败而非乱输出。
 - **Gemma-4 hub q4 Hello（§3.3.2）**：`gemma-4-e2b-it_q4`、`temperature=0`、chat「Hello」、`prompt_tokens=10` 时续写须为英文问候（如 `Hello! How can I help you today?`），禁止多语言乱码。须加载并应用每层 `layer_scalar`；仅 unpack embed/PLE 不足以通过。
+- **Gemma-3n hub q4 Hello（§3.3.3）**：`gemma-3n-e2b-it_q4`、`temperature=0`、chat「Hello」、`prompt_tokens=10` 时续写须为可读英文（问候/帮助），禁止多语言乱码。须走 AltUp+Laurel+3n PLE，禁止当 Gemma-3 `*(1+w)` / 单一 RoPE。
 
 ## 7. 目录与依赖约定
 
