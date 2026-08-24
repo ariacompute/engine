@@ -344,6 +344,13 @@ pub fn linear_out_proj_names(layer: usize) -> Vec<String> {
     linear_attn_names(layer, "out_proj.weight")
 }
 
+/// Gated DeltaNet output RMSNormGated (`* w`, ones-init).
+pub fn linear_out_norm_names(layer: usize) -> Vec<String> {
+    let mut names = linear_attn_names(layer, "norm.weight");
+    names.extend(linear_attn_names(layer, "out_norm.weight"));
+    names
+}
+
 pub fn linear_a_log_names(layer: usize) -> Vec<String> {
     let mut names = linear_attn_names(layer, "A_log");
     names.extend(linear_attn_names(layer, "_fp32_params.A_log"));
@@ -452,5 +459,8 @@ mod tests {
         assert!(linear_in_proj_a_names(0)
             .iter()
             .any(|s| s == "model.layers.0.linear_attn.in_proj_a.weight"));
+        assert!(linear_out_norm_names(0)
+            .iter()
+            .any(|s| s == "model.layers.0.linear_attn.norm.weight"));
     }
 }

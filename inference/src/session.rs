@@ -11,7 +11,7 @@ use crate::tensor_names::{
     linear_a_log_names,
     linear_conv1d_names, linear_dt_bias_names, linear_in_proj_a_names, linear_in_proj_b_names,
     linear_in_proj_ba_names, linear_in_proj_qkv_names, linear_in_proj_qkvz_names,
-    linear_in_proj_z_names, linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names, moe_expert_up_names,
+    linear_in_proj_z_names, linear_out_norm_names, linear_out_proj_names, moe_expert_down_names, moe_expert_gate_names, moe_expert_up_names,
     moe_router_names, output_names, output_norm_names, per_layer_model_projection_names,
     per_layer_projection_norm_names, pre_feedforward_norm_names, vision_proj_names,
 };
@@ -147,6 +147,8 @@ struct DeltaWeights {
     conv: Vec<f32>,
     conv_k: usize,
     out_proj: MatWeight,
+    /// HF `linear_attn.norm.weight` (RMSNormGated, ones-init `* w`). Default ones.
+    out_norm: Vec<f32>,
     a_log: Vec<f32>,
     dt_bias: Vec<f32>,
     n_k_heads: usize,
@@ -327,7 +329,9 @@ impl SessionBuilder {
             .unwrap_or("")
             .to_ascii_lowercase();
         let use_gemma4 = family.path().contains("gemma-4");
-        let use_gemma_norm = family.path().contains("gemma") && !use_gemma4;
+        // Qwen3.5 `Qwen3_5RMSNorm` is Gemma-style *(1+w) with zeros init (not Qwen3 *w).
+        let use_gemma_norm = (family.path().contains("gemma") && !use_gemma4)
+            || family.path().contains("qwen3.5");
         let use_geglu = act.contains("gelu") || use_gemma4;
         // Real Gemma-4 E2B/E4B checkpoints always ship PLE. Tiny/unit fixtures may
         // omit it; materialize already errors if model-level PLE is partial.
@@ -826,12 +830,21 @@ fn materialize_with_config(
                     out_proj.data.len()
                 )));
             }
+            let out_norm = optional_vec(b, &linear_out_norm_names(layer))
+                .unwrap_or_else(|| vec![1.0f32; head_v]);
+            if out_norm.len() != head_v {
+                return Err(EngineError::ShapeMismatch(format!(
+                    "layer {layer} linear_attn.norm len {} != head_v {head_v}",
+                    out_norm.len()
+                )));
+            }
             LayerOp::Linear(DeltaWeights {
                 qkvz,
                 ba,
                 conv: (*conv_w.data).clone(),
                 conv_k,
                 out_proj,
+                out_norm,
                 a_log,
                 dt_bias,
                 n_k_heads,
@@ -1572,7 +1585,7 @@ impl Session {
                     vn.len()
                 )));
             }
-            rms_norm(&v, vn, 1e-6)
+            self.norm(&v, vn)
         } else if self.use_gemma4 {
             let ones = vec![1.0f32; head_dim];
             rms_norm(&v, &ones, 1e-6)
@@ -1883,7 +1896,7 @@ impl Session {
                                 qn.len()
                             )));
                         }
-                        q = rms_norm(&q, qn, 1e-6)?;
+                        q = self.norm(&q, qn)?;
                     }
                     let (theta, rope) = self.layer_rope_params(attn.kind);
                     Self::apply_rope_seq(&mut q, seq, q_dim, head_dim, pos0, theta, rope)?;
@@ -1911,7 +1924,7 @@ impl Session {
                                     kn.len()
                                 )));
                             }
-                            k = rms_norm(&k, kn, 1e-6)?;
+                            k = self.norm(&k, kn)?;
                         }
                         Self::apply_rope_seq(
                             &mut k,
@@ -2057,7 +2070,7 @@ impl Session {
                                 qn.len()
                             )));
                         }
-                        q = rms_norm(&q, qn, 1e-6)?;
+                        q = self.norm(&q, qn)?;
                     }
                     let (theta, rope) = self.layer_rope_params(attn.kind);
                     Self::apply_rope(&mut q, head_dim, pos, theta, rope)?;
@@ -2085,7 +2098,7 @@ impl Session {
                                     kn.len()
                                 )));
                             }
-                            k = rms_norm(&k, kn, 1e-6)?;
+                            k = self.norm(&k, kn)?;
                         }
                         Self::apply_rope(&mut k, head_dim, pos, theta, rope)?;
                         v = self.apply_v_norm(v, attn.v_norm.as_deref(), head_dim)?;
@@ -2198,9 +2211,8 @@ impl Session {
                         dk: dn.head_k,
                         dv: dn.head_v,
                     })?;
-                    // RMSNormGated approx: rms(core) * silu(z)
-                    let ones = vec![1.0f32; dn.head_v];
-                    core = rms_norm(&core, &ones, 1e-6)?;
+                    // RMSNormGated: weight * rms(core) * silu(z) (ones-init `* w`, not Gemma 1+w).
+                    core = rms_norm(&core, &dn.out_norm, 1e-6)?;
                     let mut z_act = z;
                     silu_vec(&mut z_act);
                     for i in 0..core.len() {
