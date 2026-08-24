@@ -116,7 +116,7 @@
 | P1 | **QK-Norm** | Qwen3 / Gemma / LFM attn：加载并应用 `q_norm`/`k_norm` |
 | P1 | **VL/VLA** | 消费 bundle 内 vision/action 张量，或硬 `Unsupported`；禁止 RGB mean-pool / 假 action 冒充完成 |
 | P2 | **注册表对齐** | §1.1 与 `model` 同步：补登记 `lfm/lfm2.5-2.6b`（或双方删除） |
-| P2 | **Bundle `model` 扩展字段** | 消费 model 仓写入的 `head_dim` / `layer_types` / `num_kv_shared_layers` / `hidden_act` / nested RoPE 等（见 model Spec）。**Gemma-4** 另认 `sliding_window` / `global_head_dim` / `partial_rotary_factor`；**Gemma-3 文本**另认 5+1 `layer_types` / `sliding_window=512`；**Gemma-3n** 另认 4+1 `layer_types` / `sliding_window=512` / `head_dim=256` / `num_kv_shared_layers=15`（**不是** Gemma-4 `global_head_dim=512` 或 p-RoPE）。bundle 缺省时按 HF 架构补齐（hub 旧 q4/q326 仅含基础字段亦可加载），显式写入值优先；Gemma-4 补齐后仍不完整 → `Unsupported`。推荐用当前 `config_from_hf` 重量化并重新上传 hub。 |
+| P2 | **Bundle `model` 扩展字段** | 消费 model 仓写入的 `head_dim` / `layer_types` / `num_kv_shared_layers` / `hidden_act` / nested RoPE 等（见 model Spec）。**Gemma-4** 另认 `sliding_window` / `global_head_dim` / `partial_rotary_factor`；**Gemma-3 文本**另认 5+1 `layer_types` / `sliding_window=512`；**Gemma-3n** 另认 4+1 `layer_types` / `sliding_window=512` / `head_dim=256` / `num_kv_shared_layers`（缺省按 `num_layers−20`：E2B 10 / E4B 15；**不是** Gemma-4 `global_head_dim=512` 或 p-RoPE）。bundle 缺省时按 HF 架构补齐（hub 旧 q4/q326 仅含基础字段亦可加载），显式写入值优先；Gemma-4 补齐后仍不完整 → `Unsupported`。推荐用当前 `config_from_hf` 重量化并重新上传 hub。 |
 
 ### 3.3.2 Gemma-4 文本 decoder（hub q4）
 
@@ -152,8 +152,8 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 | RoPE | sliding θ=1e4 / full θ=1e6，**全头**（禁止 p-RoPE / `partial_rotary_factor`） |
 | RMSNorm | ones-init `*w`（`scale_plus_one=False`）；禁止 Gemma-3 `*(1+w)` |
 | Attn | QK-norm + V-norm（无 scale 时等价 ones）；scale **`1.0`**（不是 `1/sqrt(head_dim)`） |
-| 其它 | embed `sqrt(H)`；`final_logit_softcapping=30`；tied embed；KV-share 默认 15；`head_dim=256` |
-| AltUp | 4 条残差流；加载 `altup_projections` / `altup_unembed_projections` 与每层 `altup.*`；真实 E2B（hidden≥1024）缺则硬失败 |
+| 其它 | embed `sqrt(H)`；`final_logit_softcapping=30`；tied embed；KV-share 为最后 `num_layers−20` 层（E2B 30→10，E4B 35→15；禁止把 E2B 填成 15）；`head_dim=256` |
+| AltUp | 4 条残差流；`router_input_scale=1/hidden`（**不是** `1/√H`，否则 tanh 饱和、greedy 会吐 `<bos>`/`<pad>`）；加载 `altup_projections` / `altup_unembed_projections` 与每层 `altup.*`；真实 E2B（hidden≥1024）缺则硬失败 |
 | Laurel | 每层 `linear_left`/`linear_right`/`post_laurel_norm`；与 attn 残差 `(attn_gated + laurel)/√2` |
 | PLE | 与 Gemma-4 同名张量；**加到 AltUp 非 active 流**（`corrected[1:] += delta`），禁止只加到 stream 0 |
 | FFN | 前 10 层 `activation_sparsity=0.95` 的 gaussian top-k（`relu(x − (μ + σ Φ^{-1}(0.95)))`）再 GeGLU |

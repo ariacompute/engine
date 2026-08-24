@@ -502,6 +502,20 @@ fn is_gemma3n(path: &str) -> bool {
 
 const GEMMA3N_ALTUP_N: usize = 4;
 
+/// HF `router_input_scale = hidden ** -1` (not `1/sqrt(hidden)`).
+fn altup_router_input_scale(hidden: usize) -> f32 {
+    if hidden == 0 {
+        0.0
+    } else {
+        1.0 / hidden as f32
+    }
+}
+
+/// Google unshared KV layers = 20 → E2B (30) shares 10, E4B (35) shares 15.
+fn gemma3n_default_kv_shared(num_layers: usize) -> usize {
+    num_layers.saturating_sub(20.min(num_layers))
+}
+
 /// HF Gemma-3: `_sliding_window_pattern=6` → 5×sliding + 1×full.
 fn default_gemma3_layer_types(n: usize) -> Vec<String> {
     (0..n)
@@ -539,7 +553,8 @@ fn fill_gemma3_architecture_defaults(conf: &mut crate::bundle::ModelConfig, fami
 }
 
 /// Gemma-3n-E2B/E4B: 4×sliding + 1×full (same cadence as Gemma-4), dual RoPE
-/// (sliding θ=1e4 / full θ=1e6, **not** p-RoPE), head_dim=256, KV-share=15.
+/// (sliding θ=1e4 / full θ=1e6, **not** p-RoPE), head_dim=256.
+/// KV-share: last `num_layers-20` layers (E2B=10, E4B=15), not a hardcoded 15.
 fn fill_gemma3n_architecture_defaults(conf: &mut crate::bundle::ModelConfig, family_path: &str) {
     if !is_gemma3n(family_path) {
         return;
@@ -563,7 +578,7 @@ fn fill_gemma3n_architecture_defaults(conf: &mut crate::bundle::ModelConfig, fam
             conf.head_dim = Some(256);
         }
         if conf.num_kv_shared_layers.is_none() {
-            conf.num_kv_shared_layers = Some(15);
+            conf.num_kv_shared_layers = Some(gemma3n_default_kv_shared(conf.num_layers));
         }
     }
 }
@@ -1955,7 +1970,7 @@ impl Session {
             ));
         }
         let mut xn = self.norm(x, &altup.router_norm)?;
-        let scale = (hidden as f32).sqrt().recip();
+        let scale = altup_router_input_scale(hidden);
         for v in &mut xn {
             *v *= scale;
         }
@@ -3043,6 +3058,13 @@ mod tests {
         assert_eq!(t[9], "full_attention");
         assert_eq!(t[29], "full_attention");
         assert_eq!(t.iter().filter(|s| *s == "sliding_attention").count(), 24);
+        assert_eq!(gemma3n_default_kv_shared(30), 10);
+        assert_eq!(gemma3n_default_kv_shared(35), 15);
+        assert_eq!(gemma3n_default_kv_shared(2), 0);
+        assert!(
+            (altup_router_input_scale(2048) - 1.0 / 2048.0).abs() < 1e-12,
+            "HF router_input_scale is 1/hidden, not 1/sqrt(hidden)"
+        );
 
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();

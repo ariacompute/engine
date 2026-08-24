@@ -17,6 +17,7 @@ const STOP_TOKEN_STRINGS: &[&str] = &[
     "<turn|>",
     "<eos>",
     "<|end|>",
+    "<pad>",
 ];
 
 #[derive(Clone)]
