@@ -115,6 +115,9 @@ struct AttnWeights {
     k_norm: Option<Vec<f32>>,
     v_norm: Option<Vec<f32>>,
     kind: AttnKind,
+    /// HF `attn_output_gate`: `q_proj` is `[num_heads, 2*head_dim]` packed
+    /// as interleaved query|gate per head (Qwen3.5).
+    q_gate: bool,
 }
 
 #[derive(Clone)]
@@ -559,6 +562,79 @@ fn resolve_attn_kind(
     attn_kind(conf, layer)
 }
 
+/// `q_proj` out vs `o_proj` in. Qwen3.5 fuses query+sigmoid-gate in `q_proj` (`* 2`).
+fn attn_q_geometry(
+    wq_len: usize,
+    wo_len: usize,
+    hidden: usize,
+) -> Result<(usize, usize, bool), EngineError> {
+    if hidden == 0 || !wq_len.is_multiple_of(hidden) {
+        return Err(EngineError::ShapeMismatch(format!(
+            "attn q proj weight not divisible by hidden_size (len={wq_len} hidden={hidden})"
+        )));
+    }
+    if !wo_len.is_multiple_of(hidden) {
+        return Err(EngineError::ShapeMismatch(format!(
+            "attn output proj weight not divisible by hidden_size (len={wo_len} hidden={hidden})"
+        )));
+    }
+    let q_out = wq_len / hidden;
+    let wo_in = wo_len / hidden;
+    if q_out == wo_in {
+        Ok((q_out, q_out, false))
+    } else if q_out == 2 * wo_in {
+        Ok((q_out, wo_in, true))
+    } else {
+        Err(EngineError::ShapeMismatch(format!(
+            "attn output proj weight shape mismatch (wo_len={wo_len} hidden={hidden} q_out={q_out})"
+        )))
+    }
+}
+
+/// Unpack per-head `[q | gate]` from fused `q_proj` (HF `torch.chunk(..., 2, dim=-1)`).
+fn split_interleaved_q_gate(
+    mixed: &[f32],
+    seq: usize,
+    n_heads: usize,
+    head_dim: usize,
+) -> Result<(Vec<f32>, Vec<f32>), EngineError> {
+    let q_dim = n_heads.saturating_mul(head_dim);
+    let packed = q_dim.saturating_mul(2);
+    if packed == 0 || mixed.len() != seq * packed {
+        return Err(EngineError::ShapeMismatch(format!(
+            "gated q_proj out {} != seq*2*q_dim {}*{packed}",
+            mixed.len(),
+            seq
+        )));
+    }
+    let mut q = vec![0.0f32; seq * q_dim];
+    let mut gate = vec![0.0f32; seq * q_dim];
+    for t in 0..seq {
+        for h in 0..n_heads {
+            let src = t * packed + h * (2 * head_dim);
+            let dst = t * q_dim + h * head_dim;
+            q[dst..dst + head_dim].copy_from_slice(&mixed[src..src + head_dim]);
+            gate[dst..dst + head_dim]
+                .copy_from_slice(&mixed[src + head_dim..src + 2 * head_dim]);
+        }
+    }
+    Ok((q, gate))
+}
+
+fn apply_sigmoid_gate(x: &mut [f32], gate: &[f32]) -> Result<(), EngineError> {
+    if x.len() != gate.len() {
+        return Err(EngineError::ShapeMismatch(format!(
+            "attn output gate len {} != attn out {}",
+            gate.len(),
+            x.len()
+        )));
+    }
+    for (v, g) in x.iter_mut().zip(gate) {
+        *v *= 1.0 / (1.0 + (-*g).exp());
+    }
+    Ok(())
+}
+
 fn materialize_with_config(
     b: &Bundle,
     family: Family,
@@ -770,22 +846,19 @@ fn materialize_with_config(
                 (wk, wv)
             };
             let wq = any_mat(b, &attn_q_names(layer))?;
-            if wq.data.len() % hidden != 0 {
-                return Err(EngineError::ShapeMismatch(format!(
-                    "layer {layer} q_proj len {} not divisible by hidden {hidden}",
-                    wq.data.len()
-                )));
-            }
-            let q_dim = wq.data.len() / hidden;
+            let wo = any_mat(b, &attn_o_names(layer))?;
+            let (_q_out, q_dim, q_gate) =
+                attn_q_geometry(wq.data.len(), wo.data.len(), hidden)?;
             LayerOp::Attn(AttnWeights {
                 wq,
                 wk,
                 wv,
-                wo: any_mat(b, &attn_o_names(layer))?,
+                wo,
                 q_norm: optional_vec(b, &attn_q_norm_names(layer)),
                 k_norm: optional_vec(b, &attn_k_norm_names(layer)),
                 v_norm: optional_vec(b, &attn_v_norm_names(layer)),
                 kind: resolve_attn_kind(m, layer, q_dim, n_heads),
+                q_gate,
             })
         };
 
@@ -1744,14 +1817,21 @@ impl Session {
                             "attn q proj weight not divisible by hidden_size".into(),
                         ));
                     }
-                    let q_dim = attn.wq.data.len() / hidden;
+                    let q_out = attn.wq.data.len() / hidden;
+                    let q_dim = if attn.q_gate { q_out / 2 } else { q_out };
                     let head_dim = self.layer_head_dim(attn.kind, q_dim, n_heads)?;
                     if attn.wo.data.len() != hidden * q_dim {
-                        return Err(EngineError::ShapeMismatch(
-                            "attn output proj weight shape mismatch".into(),
-                        ));
+                        return Err(EngineError::ShapeMismatch(format!(
+                            "attn output proj weight shape mismatch (wo_len={} hidden={hidden} q_dim={q_dim})",
+                            attn.wo.data.len()
+                        )));
                     }
-                    let mut q = self.wmm(&attn.wq, &xn, q_dim, hidden, GemmAcct::Attn)?;
+                    let mixed = self.wmm(&attn.wq, &xn, q_out, hidden, GemmAcct::Attn)?;
+                    let (mut q, gate) = if attn.q_gate {
+                        split_interleaved_q_gate(&mixed, seq, n_heads, head_dim)?
+                    } else {
+                        (mixed, Vec::new())
+                    };
                     if let Some(qn) = &attn.q_norm {
                         if qn.len() != head_dim {
                             return Err(EngineError::ShapeMismatch(format!(
@@ -1830,6 +1910,10 @@ impl Session {
                         self.attn_scale(head_dim),
                         self.attn_window(attn.kind),
                     )?;
+                    let mut attn_out = attn_out;
+                    if attn.q_gate {
+                        apply_sigmoid_gate(&mut attn_out, &gate)?;
+                    }
                     let ao = self.wmm(&attn.wo, &attn_out, hidden, q_dim, GemmAcct::Attn)?;
                     self.add_normed_residual(&mut x, &ao, layer.post_attn_norm.as_deref())?;
                 }
@@ -1915,14 +1999,21 @@ impl Session {
                             "attn q proj weight not divisible by hidden_size".into(),
                         ));
                     }
-                    let q_dim = attn.wq.data.len() / hidden;
+                    let q_out = attn.wq.data.len() / hidden;
+                    let q_dim = if attn.q_gate { q_out / 2 } else { q_out };
                     let head_dim = self.layer_head_dim(attn.kind, q_dim, n_heads)?;
                     if attn.wo.data.len() != hidden * q_dim {
-                        return Err(EngineError::ShapeMismatch(
-                            "attn output proj weight shape mismatch".into(),
-                        ));
+                        return Err(EngineError::ShapeMismatch(format!(
+                            "attn output proj weight shape mismatch (wo_len={} hidden={hidden} q_dim={q_dim})",
+                            attn.wo.data.len()
+                        )));
                     }
-                    let mut q = self.wmm(&attn.wq, &xn, q_dim, hidden, GemmAcct::Attn)?;
+                    let mixed = self.wmm(&attn.wq, &xn, q_out, hidden, GemmAcct::Attn)?;
+                    let (mut q, gate) = if attn.q_gate {
+                        split_interleaved_q_gate(&mixed, 1, n_heads, head_dim)?
+                    } else {
+                        (mixed, Vec::new())
+                    };
                     if let Some(qn) = &attn.q_norm {
                         if qn.len() != head_dim {
                             return Err(EngineError::ShapeMismatch(format!(
@@ -1991,6 +2082,10 @@ impl Session {
                         head_dim,
                         self.attn_scale(head_dim),
                     )?;
+                    let mut attn_out = attn_out;
+                    if attn.q_gate {
+                        apply_sigmoid_gate(&mut attn_out, &gate)?;
+                    }
                     let ao = self.wmm(&attn.wo, &attn_out, hidden, q_dim, GemmAcct::Attn)?;
                     self.add_normed_residual(&mut x, &ao, layer.post_attn_norm.as_deref())?;
                 }
@@ -2225,6 +2320,131 @@ mod tests {
             .unwrap();
         assert!(!gen.tokens.is_empty());
         assert!(!gen.text.is_empty());
+    }
+
+    #[test]
+    fn split_interleaved_q_gate_matches_hf_chunk() {
+        // 2 heads, head_dim=2: packed [h0q, h0g, h1q, h1g]
+        let mixed = vec![1.0, 2.0, 10.0, 20.0, 3.0, 4.0, 30.0, 40.0];
+        let (q, g) = split_interleaved_q_gate(&mixed, 1, 2, 2).unwrap();
+        assert_eq!(q, vec![1.0, 2.0, 3.0, 4.0]);
+        assert_eq!(g, vec![10.0, 20.0, 30.0, 40.0]);
+    }
+
+    #[test]
+    fn qwen35_attn_output_gate_generate() {
+        let dir = tempfile::tempdir().unwrap();
+        let hidden = 8usize;
+        let inter = 16usize;
+        let vocab = 16usize;
+        let n_heads = 2usize;
+        let n_kv = 1usize;
+        let head_dim = 4usize;
+        let q_dim = n_heads * head_dim;
+        let k_dim = n_kv * head_dim;
+
+        let mut tensors = serde_json::Map::new();
+        let mut bin = Vec::new();
+        let mut add_raw = |name: &str, shape: Vec<usize>, data: &[f32]| {
+            let offset = bin.len();
+            for &v in data {
+                bin.extend_from_slice(&v.to_le_bytes());
+            }
+            let nbytes = data.len() * 4;
+            let mut meta = serde_json::Map::new();
+            meta.insert("kind".into(), json!("raw"));
+            meta.insert("dtype".into(), json!("f32"));
+            meta.insert("shape".into(), json!(shape));
+            meta.insert("offsets".into(), json!({ "data": [offset, nbytes] }));
+            tensors.insert(name.to_string(), Value::Object(meta));
+        };
+        let emb: Vec<f32> = (0..vocab * hidden).map(|i| i as f32 * 0.01).collect();
+        add_raw("model.embed_tokens.weight", vec![vocab, hidden], &emb);
+        let n1 = vec![1.0f32; hidden];
+        add_raw("model.layers.0.input_layernorm.weight", vec![hidden], &n1);
+        add_raw(
+            "model.layers.0.post_attention_layernorm.weight",
+            vec![hidden],
+            &n1,
+        );
+        let wq = vec![0.02f32; 2 * q_dim * hidden];
+        let wk = vec![0.02f32; k_dim * hidden];
+        let wv = vec![0.02f32; k_dim * hidden];
+        let wo = vec![0.02f32; hidden * q_dim];
+        add_raw(
+            "model.layers.0.self_attn.q_proj.weight",
+            vec![2 * q_dim, hidden],
+            &wq,
+        );
+        add_raw(
+            "model.layers.0.self_attn.k_proj.weight",
+            vec![k_dim, hidden],
+            &wk,
+        );
+        add_raw(
+            "model.layers.0.self_attn.v_proj.weight",
+            vec![k_dim, hidden],
+            &wv,
+        );
+        add_raw(
+            "model.layers.0.self_attn.o_proj.weight",
+            vec![hidden, q_dim],
+            &wo,
+        );
+        let qn = vec![1.0f32; head_dim];
+        add_raw("model.layers.0.self_attn.q_norm.weight", vec![head_dim], &qn);
+        add_raw("model.layers.0.self_attn.k_norm.weight", vec![head_dim], &qn);
+        let g = vec![0.02f32; inter * hidden];
+        let d = vec![0.02f32; hidden * inter];
+        add_raw(
+            "model.layers.0.mlp.gate_proj.weight",
+            vec![inter, hidden],
+            &g,
+        );
+        add_raw("model.layers.0.mlp.up_proj.weight", vec![inter, hidden], &g);
+        add_raw(
+            "model.layers.0.mlp.down_proj.weight",
+            vec![hidden, inter],
+            &d,
+        );
+        add_raw("model.norm.weight", vec![hidden], &n1);
+        add_raw("lm_head.weight", vec![vocab, hidden], &emb);
+        let cfg = json!({
+            "format": "aria-quant-bundle",
+            "format_version": 2,
+            "quantization": "test",
+            "hadamard_seed": 0,
+            "model": {
+                "hidden_size": hidden,
+                "num_layers": 1,
+                "num_attention_heads": n_heads,
+                "num_kv_heads": n_kv,
+                "head_dim": head_dim,
+                "intermediate_size": inter,
+                "vocab_size": vocab,
+                "context_length": 32,
+                "rope_theta": 10000.0,
+                "layer_types": ["full_attention"]
+            },
+            "tensors": tensors
+        });
+        std::fs::write(dir.path().join("config.json"), cfg.to_string()).unwrap();
+        std::fs::write(dir.path().join("weight.bin"), &bin).unwrap();
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("qwen/qwen3-0.6b")
+            .build()
+            .unwrap();
+        let gen = s
+            .generate(
+                &[1, 2],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 2);
     }
 
     #[test]
