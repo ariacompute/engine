@@ -282,11 +282,17 @@ fn is_quant_suffix(suffix: &str) -> bool {
     !core.is_empty() && core.chars().all(|c| c.is_ascii_digit() || c == '.')
 }
 
-/// Qwen3 (not 3.5 dual-RoPE) uses θ=1e6. Bundles that omit `rope_theta` hit serde
-/// default 10000 and produce garbage completions.
+/// Qwen3 uses θ=1e6; Qwen3.5 gated attention uses θ=1e7 (`rope_parameters.rope_theta`).
+/// Bundles that omit `rope_theta` hit serde default 10000 and produce empty / garbage
+/// completions (Hello → `content: ""` with a full `max_tokens` budget).
 pub fn effective_rope_theta(family_path: &str, configured: f32) -> f32 {
     let p = family_path.to_ascii_lowercase();
-    if p.contains("qwen") && !p.contains("qwen3.5") && (configured - 10_000.0).abs() < 0.5 {
+    if (configured - 10_000.0).abs() >= 0.5 {
+        return configured;
+    }
+    if p.contains("qwen3.5") {
+        10_000_000.0
+    } else if p.contains("qwen") {
         1_000_000.0
     } else {
         configured
@@ -479,6 +485,7 @@ mod tests {
         assert!((effective_rope_theta("qwen/qwen3-0.6b", 10_000.0) - 1_000_000.0).abs() < 1.0);
         assert!((effective_rope_theta("qwen/qwen3-0.6b", 1_000_000.0) - 1_000_000.0).abs() < 1.0);
         assert!((effective_rope_theta("gemma/gemma-4-e2b-it", 10_000.0) - 10_000.0).abs() < 1.0);
-        assert!((effective_rope_theta("qwen/qwen3.5-2b", 10_000.0) - 10_000.0).abs() < 1.0);
+        assert!((effective_rope_theta("qwen/qwen3.5-2b", 10_000.0) - 10_000_000.0).abs() < 1.0);
+        assert!((effective_rope_theta("qwen/qwen3.5-0.8b", 10_000_000.0) - 10_000_000.0).abs() < 1.0);
     }
 }

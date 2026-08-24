@@ -64,6 +64,9 @@ fn qwen_chatml(messages: &[ChatTurn], empty_think: bool) -> String {
 }
 
 /// Drop Qwen3 thinking and ChatML specials from decoded assistant text.
+///
+/// If the model closes `</think>` but `max_tokens` runs out before the answer,
+/// keep the think body instead of returning an empty chat `content`.
 pub fn strip_assistant_visible(raw: &str) -> String {
     let mut s = raw
         .replace("<|im_end|>", "")
@@ -71,7 +74,18 @@ pub fn strip_assistant_visible(raw: &str) -> String {
         .replace("<turn|>", "")
         .replace("<|turn>", "");
     if let Some(idx) = s.rfind("</think>") {
-        s = s[idx + "</think>".len()..].to_string();
+        let after = s[idx + "</think>".len()..].trim().to_string();
+        if !after.is_empty() {
+            return after;
+        }
+        let before = &s[..idx];
+        if let Some(start) = before.rfind("<think>") {
+            let body = before[start + "<think>".len()..].trim().to_string();
+            if !body.is_empty() {
+                return body;
+            }
+        }
+        return String::new();
     } else if let Some(idx) = s.find("<think>") {
         s = s[idx + "<think>".len()..].to_string();
     }
@@ -185,5 +199,11 @@ mod tests {
     fn strip_think_keeps_answer() {
         let raw = "<think>\nreason\n</think>\n\nHello there<|im_end|>";
         assert_eq!(strip_assistant_visible(raw), "Hello there");
+    }
+
+    #[test]
+    fn strip_closed_think_without_answer_keeps_body() {
+        let raw = "<think>\nI should greet the user.\n</think>\n\n";
+        assert_eq!(strip_assistant_visible(raw), "I should greet the user.");
     }
 }

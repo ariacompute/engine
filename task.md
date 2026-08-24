@@ -181,6 +181,7 @@
 - [x] 单测：linear_attention + full_attention generate
 - [x] 加载 HF Qwen3.5 拆分 `in_proj_qkv`/`z`、`in_proj_b`/`a`（兼容融合 qkvz/ba）
 - [x] 全注意力 `attn_output_gate`：`q_proj` 融 query+gate，与 `o_proj` 几何对齐后再 `sigmoid`
+- [x] 全注意力 **partial RoPE**（`partial_rotary_factor=0.25`，θ=1e7；hub 缺字段补齐）；`strip_assistant_visible` 在 `</think>` 后无回答时保留 think 正文
 - [ ] DeltaNet GQA（`n_v_heads != n_k_heads`）/ chunked prefill
 
 ### T68 — VL / VLA

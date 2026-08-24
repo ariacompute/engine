@@ -23,7 +23,8 @@ use crate::tokenizer::{decode_placeholders, encode_naive, BundleTokenizer};
 use aria_kernel::{
     attention_causal_with_scale, attention_with_scale, gated_delta_step, geglu, gelu_pytorch_tanh,
     hdm_linear, kv_sliding_view, linear_cpu, moe_topk_route, resolve_compute, rms_norm,
-    rms_norm_gemma, rope_half, rope_half_proportional, short_conv_step, silu_vec, softplus, swiglu,
+    rms_norm_gemma, rope_half, rope_half_partial, rope_half_proportional, short_conv_step, silu_vec,
+    softplus, swiglu,
     ComputeBackend, ComputePref, CudaContext, EngineError, GatedDeltaStep,
 };
 use std::cell::RefCell;
@@ -91,6 +92,15 @@ enum GemmAcct {
 enum AttnKind {
     Sliding,
     Full,
+}
+
+/// How to apply RoPE on a head: full `rotate_half`, Qwen3.5 partial (inv_freq on
+/// `factor*head_dim`), or Gemma-4 proportional (inv_freq on full `head_dim`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum RopeMode {
+    Full,
+    Partial(f32),
+    Proportional(f32),
 }
 
 /// Persistent caches for autoregressive decode (KV / short-conv / DeltaNet).
@@ -290,9 +300,10 @@ impl SessionBuilder {
         load_profile_set_mmap(elapsed_ms(t_mmap));
         let mut conf = bundle.model.clone();
         conf.rope_theta = effective_rope_theta(family.path(), conf.rope_theta);
-        // Hub/q4 artifacts may still omit Gemma-4 geometry; fill from HF architecture
-        // then validate. Bundle values always win when present.
+        // Hub/q4 artifacts may still omit Gemma-4 / Qwen3.5 geometry; fill from HF
+        // architecture then validate. Bundle values always win when present.
         fill_gemma4_architecture_defaults(&mut conf, family.path());
+        fill_qwen35_architecture_defaults(&mut conf, family.path());
         require_gemma4_config(&conf, family.path())?;
         reject_unsupported_geometry(&conf, family)?;
         let tokenizer = BundleTokenizer::try_load(&path)?;
@@ -435,6 +446,18 @@ fn default_gemma4_layer_types(n: usize) -> Vec<String> {
             }
         })
         .collect()
+}
+
+/// Hub q4 often omits nested `rope_parameters.partial_rotary_factor` (0.25).
+/// Without it Session applies full-head RoPE and Qwen3.5 Hello completions
+/// decode to empty `content` after 32 greedy steps.
+fn fill_qwen35_architecture_defaults(conf: &mut crate::bundle::ModelConfig, family_path: &str) {
+    if !family_path.contains("qwen3.5") {
+        return;
+    }
+    if conf.partial_rotary_factor.is_none() {
+        conf.partial_rotary_factor = Some(0.25);
+    }
 }
 
 /// Fill Gemma-4 geometry omitted by published hub q4 (base fields only) or
@@ -1459,23 +1482,33 @@ impl Session {
         self.conf.sliding_window.filter(|w| *w > 0)
     }
 
-    fn layer_rope_params(&self, kind: AttnKind) -> (f32, Option<f32>) {
+    fn layer_rope_params(&self, kind: AttnKind) -> (f32, RopeMode) {
         if self.use_gemma4 {
             match kind {
-                AttnKind::Sliding => (10_000.0, None),
+                AttnKind::Sliding => (10_000.0, RopeMode::Full),
                 AttnKind::Full => {
                     // Validated by require_gemma4_config; 1.0 means full RoPE.
                     let factor = self.conf.partial_rotary_factor.unwrap_or(1.0);
-                    let partial = if factor > 0.0 && factor < 1.0 {
-                        Some(factor)
+                    let mode = if factor > 0.0 && factor < 1.0 {
+                        RopeMode::Proportional(factor)
                     } else {
-                        None
+                        RopeMode::Full
                     };
-                    (1_000_000.0, partial)
+                    (1_000_000.0, mode)
                 }
             }
+        } else if self.family.path().contains("qwen3.5") {
+            // HF: dim = head_dim * partial_rotary_factor; inv_freq uses that dim
+            // (not Gemma-4 proportional frequencies on the full head).
+            let factor = self.conf.partial_rotary_factor.unwrap_or(0.25);
+            let mode = if factor > 0.0 && factor < 1.0 {
+                RopeMode::Partial(factor)
+            } else {
+                RopeMode::Full
+            };
+            (self.conf.rope_theta, mode)
         } else {
-            (self.conf.rope_theta, None)
+            (self.conf.rope_theta, RopeMode::Full)
         }
     }
 
@@ -1504,14 +1537,25 @@ impl Session {
         head_dim: usize,
         pos: usize,
         theta: f32,
-        proportional: Option<f32>,
+        mode: RopeMode,
     ) -> Result<(), EngineError> {
-        if let Some(factor) = proportional {
-            // HF `_compute_proportional_rope_parameters`: rotate leading
-            // factor*head_dim/2 pairs; inv_freq denominator is full head_dim.
-            rope_half_proportional(x, head_dim, factor, pos, theta)
-        } else {
-            rope_half(x, head_dim, pos, theta)
+        match mode {
+            RopeMode::Full => rope_half(x, head_dim, pos, theta),
+            RopeMode::Proportional(factor) => {
+                // HF `_compute_proportional_rope_parameters`: rotate leading
+                // factor*head_dim/2 pairs; inv_freq denominator is full head_dim.
+                rope_half_proportional(x, head_dim, factor, pos, theta)
+            }
+            RopeMode::Partial(factor) => {
+                // Qwen3.5: rotate the leading rotary_dim = factor*head_dim;
+                // inv_freq denominator is rotary_dim (HF `compute_default_rope_parameters`).
+                let rotary_dim = (factor * head_dim as f32) as usize & !1;
+                if rotary_dim < 2 || rotary_dim >= head_dim {
+                    rope_half(x, head_dim, pos, theta)
+                } else {
+                    rope_half_partial(x, head_dim, rotary_dim, pos, theta)
+                }
+            }
         }
     }
 
@@ -1751,7 +1795,7 @@ impl Session {
         head_dim: usize,
         pos0: usize,
         theta: f32,
-        proportional: Option<f32>,
+        mode: RopeMode,
     ) -> Result<(), EngineError> {
         if x.len() != seq * tok_dim {
             return Err(EngineError::ShapeMismatch(
@@ -1764,7 +1808,7 @@ impl Session {
                 head_dim,
                 pos0 + t,
                 theta,
-                proportional,
+                mode,
             )?;
         }
         Ok(())
@@ -1841,16 +1885,8 @@ impl Session {
                         }
                         q = rms_norm(&q, qn, 1e-6)?;
                     }
-                    let (theta, proportional) = self.layer_rope_params(attn.kind);
-                    Self::apply_rope_seq(
-                        &mut q,
-                        seq,
-                        q_dim,
-                        head_dim,
-                        pos0,
-                        theta,
-                        proportional,
-                    )?;
+                    let (theta, rope) = self.layer_rope_params(attn.kind);
+                    Self::apply_rope_seq(&mut q, seq, q_dim, head_dim, pos0, theta, rope)?;
 
                     let (k_src, v_src) = if let (Some(wk), Some(wv)) = (&attn.wk, &attn.wv) {
                         if wk.data.len() % hidden != 0 || wv.data.len() % hidden != 0 {
@@ -1884,7 +1920,7 @@ impl Session {
                             head_dim,
                             pos0,
                             theta,
-                            proportional,
+                            rope,
                         )?;
                         v = self.apply_v_norm(v, attn.v_norm.as_deref(), head_dim)?;
                         state.k_caches[li] = k;
@@ -2023,8 +2059,8 @@ impl Session {
                         }
                         q = rms_norm(&q, qn, 1e-6)?;
                     }
-                    let (theta, proportional) = self.layer_rope_params(attn.kind);
-                    Self::apply_rope(&mut q, head_dim, pos, theta, proportional)?;
+                    let (theta, rope) = self.layer_rope_params(attn.kind);
+                    Self::apply_rope(&mut q, head_dim, pos, theta, rope)?;
 
                     let (k_src, v_src) = if let (Some(wk), Some(wv)) = (&attn.wk, &attn.wv) {
                         if wk.data.len() % hidden != 0 || wv.data.len() % hidden != 0 {
@@ -2051,7 +2087,7 @@ impl Session {
                             }
                             k = rms_norm(&k, kn, 1e-6)?;
                         }
-                        Self::apply_rope(&mut k, head_dim, pos, theta, proportional)?;
+                        Self::apply_rope(&mut k, head_dim, pos, theta, rope)?;
                         v = self.apply_v_norm(v, attn.v_norm.as_deref(), head_dim)?;
                         state.k_caches[li].extend_from_slice(&k);
                         state.v_caches[li].extend_from_slice(&v);
@@ -2303,9 +2339,12 @@ mod tests {
         );
         assert_eq!(
             s.layer_rope_params(AttnKind::Full),
-            (1_000_000.0, Some(0.25))
+            (1_000_000.0, RopeMode::Proportional(0.25))
         );
-        assert_eq!(s.layer_rope_params(AttnKind::Sliding), (10_000.0, None));
+        assert_eq!(
+            s.layer_rope_params(AttnKind::Sliding),
+            (10_000.0, RopeMode::Full)
+        );
         assert_eq!(s.attn_window(AttnKind::Sliding), Some(512));
         assert_eq!(s.attn_window(AttnKind::Full), None);
         let prompt = s.encode_text("hi");
@@ -3762,6 +3801,12 @@ mod tests {
             .family("qwen/qwen3.5-2b")
             .build()
             .unwrap();
+        assert_eq!(s.config().partial_rotary_factor, Some(0.25));
+        assert!(
+            (s.config().rope_theta - 10_000_000.0).abs() < 1.0,
+            "Qwen3.5 Llama-default rope_theta must become 1e7, got {}",
+            s.config().rope_theta
+        );
         let gen = s
             .generate(
                 &[1, 2, 3],
