@@ -152,14 +152,14 @@ embed 缩放 `sqrt(hidden)`；`final_logit_softcapping` 默认 30。chat 模板�
 - **CLI（`aria-engine`）**
   - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。
   - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`upgrade [version]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution] [--hybrid-semantic on|off] [--compute] [--profile]`；`-h` / `-v`。
-  - `list`：`GET {site_url}/api/dashboard/models`（Bearer `cloud_api_key`）展开为可下载 bundle（`_q4`/`_q8`/`_q326`），对照本地缓存标记 `downloaded` / `not downloaded` / `incomplete`；另附 catalog 外本地项。
+  - `list`：`GET {site_url}/api/dashboard/models`（Bearer `cloud_api_key`）展开为可下载 bundle（`_q4`/`_q8`/`_q326`），对照本地缓存标记 `downloaded` / `not downloaded` / `incomplete`；另附 catalog 外本地项。catalog `*_q326` 与本地 `*_q326_channel` / `*_q326_group`（及 `*_q3.26*`）视为同一 int326 缓存，禁止把已下载的 channel 配方标成 `not downloaded`。
   - `upgrade [version]`：按 `upgrade_url`（组织根）拼 `{upgrade_url}/engine`，调 GitHub/Gitee Releases API；默认最新**正式** Release（忽略 prerelease/draft），可选 `0.7.2` / `v0.7.2`；下载本机平台 `engine_*` + `libaria_ffi_*`，原地原子替换当前 CLI，并将 FFI 装入 `~/.ariacompute/lib/`（提示 `ARIA_FFI_LIB`）。未配置 `upgrade_url` 时报错并提示先 `auth`；下载/解压失败不得损坏现有 CLI。
   - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。`--compute auto|cpu|cuda` 覆盖本机算力（默认 config / `auto`）。`--profile` 启用加载/生成分段计时，经 `GET /v1/engine/profile` 读出。`--hybrid-semantic on|off` 覆盖语义路由层开关（默认 config / `on`）。
   - **禁止** `ARIA_HYBRID_*` 环境变量；仅保留编译期 `ARIA_ENGINE_VERSION`。
   - **下载源**（恰三）：Dashboard 认证 API、Hugging Face、ModelScope；**禁止**引擎直连公开 S3/COS registry URL。模型 `download` 与 CLI `upgrade` 宿主（GitHub/Gitee）分离。
   - 每次 `download` 探测连通性 + 短速率采样，选最优可达源；中途失败回退次优已探测源；不持久化强制源。
   - HF/MS 布局对齐 `serve/scripts/upload-model-hub.sh`：`{sdk}/{bundle}/{file}`，默认 `sdk=v1.0`。
-  - Bundle 名解析：`*_q4`→int4、`*_q8`→int8、`*_q326`/`*_q3.26`→int326；否则整名 + 默认 int4。
+  - Bundle 名解析：`*_q4`→int4、`*_q8`→int8、`*_q326`/`*_q3.26`→int326；可选 `_channel` / `_group`（如 `*_q326_channel`）仍映射同一 quant。`serve` / `download` 已存在检查亦走该别名。否则整名 + 默认 int4。
 
 ### 3.4.1 Config（`~/.ariacompute/config.yml`）
 

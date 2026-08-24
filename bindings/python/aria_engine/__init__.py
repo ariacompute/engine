@@ -59,6 +59,8 @@ def _parse_bundle_name(model: str):
     idx = model.rfind("_q")
     if idx != -1:
         slug, suffix = model[:idx], model[idx + 2:]
+        if suffix.endswith("_channel") or suffix.endswith("_group"):
+            suffix = suffix.rsplit("_", 1)[0]
         quant = {
             "4": "int4",
             "8": "int8",

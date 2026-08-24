@@ -18,6 +18,9 @@ class ParseTests(unittest.TestCase):
     def test_q326_suffix(self):
         self.assertEqual(_parse_bundle_name("foo_q326"), ("foo", "int326"))
 
+    def test_q326_channel_suffix(self):
+        self.assertEqual(_parse_bundle_name("foo_q326_channel"), ("foo", "int326"))
+
     def test_q3dot26_suffix(self):
         self.assertEqual(_parse_bundle_name("foo_q3.26"), ("foo", "int326"))
 

@@ -104,6 +104,47 @@ pub fn model_dir(model: &str) -> io::Result<PathBuf> {
     Ok(models_dir()?.join(model))
 }
 
+/// Catalog / CLI names omit codebook-share. Local dirs may be `*_q326_channel`.
+pub(crate) fn bundle_cache_aliases(model: &str) -> Vec<String> {
+    let name = model.trim().trim_end_matches('/');
+    if name.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    for stem in quant_stems(name) {
+        for share in ["", "_channel", "_group"] {
+            let candidate = format!("{stem}{share}");
+            if candidate != name {
+                out.push(candidate);
+            }
+        }
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn quant_stems(name: &str) -> Vec<String> {
+    let lower = name.to_ascii_lowercase();
+    let core = if let Some(base) = lower.strip_suffix("_channel") {
+        &name[..base.len()]
+    } else if let Some(base) = lower.strip_suffix("_group") {
+        &name[..base.len()]
+    } else {
+        name
+    };
+    let core_lower = core.to_ascii_lowercase();
+    let mut stems = vec![core.to_string()];
+    if let Some(base) = core_lower.strip_suffix("_q326") {
+        stems.push(format!("{}_q3.26", &core[..base.len()]));
+    } else if let Some(base) = core_lower.strip_suffix("_q3.26") {
+        stems.push(format!("{}_q326", &core[..base.len()]));
+    }
+    stems.sort();
+    stems.dedup();
+    stems
+}
+
 pub fn ensure_aria_home() -> io::Result<PathBuf> {
     let root = aria_home()?;
     fs::create_dir_all(root.join("models"))?;
@@ -150,15 +191,21 @@ pub fn resolve_model_path(model: &str) -> io::Result<PathBuf> {
     if as_path.exists() {
         return Ok(as_path.to_path_buf());
     }
-    let cached = model_dir(model)?;
-    if cached.exists() {
-        return Ok(cached);
+    let mut names = vec![model.to_string()];
+    names.extend(bundle_cache_aliases(model));
+    let mut last = model_dir(model)?;
+    for name in names {
+        let cached = model_dir(&name)?;
+        last = cached.clone();
+        if cached.exists() {
+            return Ok(cached);
+        }
     }
     Err(io::Error::new(
         io::ErrorKind::NotFound,
         format!(
             "model not found: {model} (tried path and {})",
-            cached.display()
+            last.display()
         ),
     ))
 }
@@ -212,5 +259,14 @@ mod tests {
         assert!(!cfg.hybrid_semantic);
         assert_eq!(cfg.hybrid_semantic_timeout_ms, 250);
         assert_eq!(cfg.hybrid_semantic_cache_size, 16);
+    }
+
+    #[test]
+    fn q326_aliases_include_channel() {
+        let aliases = bundle_cache_aliases("gemma-3-1b-it_q326");
+        assert!(aliases.contains(&"gemma-3-1b-it_q326_channel".into()));
+        assert!(aliases.contains(&"gemma-3-1b-it_q3.26".into()));
+        let back = bundle_cache_aliases("gemma-3-1b-it_q326_channel");
+        assert!(back.contains(&"gemma-3-1b-it_q326".into()));
     }
 }

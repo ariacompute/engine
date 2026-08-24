@@ -59,13 +59,19 @@ fn models_dir() -> Result<PathBuf, DownloadError> {
 
 /// Parse a model name such as `gemma-4-e2b-it_q4` into `(slug, quant)`.
 /// Quant follows the `_q4`/`_q8`/`_q326`/`_q3.26` suffix; defaults to `int4`.
+/// Optional codebook-share `_channel` / `_group` (e.g. `*_q326_channel`) is ignored.
 fn parse_bundle_name(model: &str) -> Result<(String, String), DownloadError> {
     if model.is_empty() || model.contains('/') || model.contains('\\') {
         return Err(DownloadError::InvalidModelName(model.to_string()));
     }
     let (slug, quant) = if let Some(idx) = model.rfind("_q") {
         let (slug, suffix) = model.split_at(idx);
-        let suffix = &suffix[2..];
+        let mut suffix = &suffix[2..];
+        if let Some(core) = suffix.strip_suffix("_channel") {
+            suffix = core;
+        } else if let Some(core) = suffix.strip_suffix("_group") {
+            suffix = core;
+        }
         let quant = match suffix {
             "4" => "int4",
             "8" => "int8",

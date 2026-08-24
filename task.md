@@ -91,6 +91,7 @@
 ### T32 — download / list / clean
 - [x] 探针 + 自动选 Dashboard / HF / ModelScope；失败回退
 - [x] `list` / `clean [model]`；bundle 校验
+- [x] `list` / `serve` / `download` 将 catalog `*_q326` 与本地 `*_q326_channel` 视为同一缓存
 
 ### T33 — serve CLI + CloudClient
 - [x] `serve <model> [--bind] [--hybrid-mode] [--hybrid-execution]`

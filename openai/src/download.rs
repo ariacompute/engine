@@ -39,21 +39,34 @@ pub struct BundleRef {
     pub sdk: String,
 }
 
-/// Parse `<model>` → slug + quant. `*_q4`→int4, `*_q8`→int8, `*_q326`/`*_q3.26`→int326.
+/// Parse `<model>` → slug + quant.
+/// `*_q4`→int4, `*_q8`→int8, `*_q326`/`*_q3.26`→int326.
+/// Optional codebook-share suffix `_channel` / `_group` (e.g. `*_q326_channel`).
 pub fn parse_bundle_name(model: &str) -> BundleRef {
     let model = model.trim().trim_end_matches('/').to_string();
     let lower = model.to_ascii_lowercase();
-    let (slug, quant) = if let Some(base) = lower.strip_suffix("_q3.26") {
-        (model[..base.len()].to_string(), "int326".into())
-    } else if let Some(base) = lower.strip_suffix("_q326") {
-        (model[..base.len()].to_string(), "int326".into())
-    } else if let Some(base) = lower.strip_suffix("_q8") {
-        (model[..base.len()].to_string(), "int8".into())
-    } else if let Some(base) = lower.strip_suffix("_q4") {
-        (model[..base.len()].to_string(), "int4".into())
-    } else {
-        (model.clone(), "int4".into())
-    };
+    let suffixes = [
+        ("_q3.26_channel", "int326"),
+        ("_q326_channel", "int326"),
+        ("_q8_channel", "int8"),
+        ("_q4_channel", "int4"),
+        ("_q3.26_group", "int326"),
+        ("_q326_group", "int326"),
+        ("_q8_group", "int8"),
+        ("_q4_group", "int4"),
+        ("_q3.26", "int326"),
+        ("_q326", "int326"),
+        ("_q8", "int8"),
+        ("_q4", "int4"),
+    ];
+    let (slug, quant) = suffixes
+        .iter()
+        .find_map(|(suf, quant)| {
+            lower
+                .strip_suffix(suf)
+                .map(|base| (model[..base.len()].to_string(), (*quant).to_string()))
+        })
+        .unwrap_or_else(|| (model.clone(), "int4".into()));
     BundleRef {
         model,
         slug,
@@ -85,6 +98,13 @@ pub async fn download_model(model: &str, cfg: &AriaConfig) -> io::Result<PathBuf
     if is_valid_bundle(&dest) {
         eprintln!("download: already present at {}", dest.display());
         return Ok(dest);
+    }
+    for alias in config::bundle_cache_aliases(&bundle.model) {
+        let cached = config::model_dir(&alias)?;
+        if is_valid_bundle(&cached) {
+            eprintln!("download: already present at {}", cached.display());
+            return Ok(cached);
+        }
     }
 
     let ranked = probe_and_rank(&bundle, cfg).await;
@@ -393,37 +413,41 @@ fn hub_config_urls(source: DownloadSource, bundle: &BundleRef) -> Vec<String> {
 }
 
 fn hub_file_urls(source: DownloadSource, bundle: &BundleRef, file: &str) -> Vec<String> {
-    let repos = match source {
-        DownloadSource::HuggingFace => vec![
-            format!("ariacompute/{}", bundle.model),
-            "ariacompute/model".into(),
-        ],
-        DownloadSource::ModelScope => vec![
-            format!("AriaCompute/{}", bundle.model),
-            "AriaCompute/model".into(),
-        ],
-        DownloadSource::Dashboard => return vec![],
-    };
+    let mut names = vec![bundle.model.clone()];
+    names.extend(config::bundle_cache_aliases(&bundle.model));
     let mut urls = Vec::new();
-    for repo in repos {
-        match source {
-            DownloadSource::HuggingFace => {
-                urls.push(format!(
-                    "https://huggingface.co/{repo}/resolve/main/{}/{}/{}",
-                    bundle.sdk, bundle.model, file
-                ));
+    for name in names {
+        let repos = match source {
+            DownloadSource::HuggingFace => vec![
+                format!("ariacompute/{name}"),
+                "ariacompute/model".into(),
+            ],
+            DownloadSource::ModelScope => vec![
+                format!("AriaCompute/{name}"),
+                "AriaCompute/model".into(),
+            ],
+            DownloadSource::Dashboard => return vec![],
+        };
+        for repo in repos {
+            match source {
+                DownloadSource::HuggingFace => {
+                    urls.push(format!(
+                        "https://huggingface.co/{repo}/resolve/main/{}/{}/{}",
+                        bundle.sdk, name, file
+                    ));
+                }
+                DownloadSource::ModelScope => {
+                    urls.push(format!(
+                        "https://www.modelscope.cn/models/{repo}/resolve/master/{}/{}/{}",
+                        bundle.sdk, name, file
+                    ));
+                    urls.push(format!(
+                        "https://modelscope.cn/models/{repo}/resolve/master/{}/{}/{}",
+                        bundle.sdk, name, file
+                    ));
+                }
+                DownloadSource::Dashboard => {}
             }
-            DownloadSource::ModelScope => {
-                urls.push(format!(
-                    "https://www.modelscope.cn/models/{repo}/resolve/master/{}/{}/{}",
-                    bundle.sdk, bundle.model, file
-                ));
-                urls.push(format!(
-                    "https://modelscope.cn/models/{repo}/resolve/master/{}/{}/{}",
-                    bundle.sdk, bundle.model, file
-                ));
-            }
-            DownloadSource::Dashboard => {}
         }
     }
     urls
@@ -614,12 +638,19 @@ pub async fn list_models_with_catalog(cfg: &AriaConfig) -> io::Result<Vec<Listed
     }
     let catalog = fetch_dashboard_catalog(cfg).await?;
     let local = local_model_status()?;
+    Ok(merge_catalog_and_local(expand_catalog_bundles(&catalog), local))
+}
+
+fn merge_catalog_and_local(
+    catalog_bundles: Vec<String>,
+    local: std::collections::HashMap<String, LocalStatus>,
+) -> Vec<ListedModel> {
     let mut seen = std::collections::HashSet::new();
     let mut rows = Vec::new();
 
-    for bundle in expand_catalog_bundles(&catalog) {
+    for bundle in catalog_bundles {
         seen.insert(bundle.clone());
-        let status = match local.get(&bundle) {
+        let status = match lookup_local_status(&local, &bundle) {
             Some(LocalStatus::Valid) => "downloaded",
             Some(LocalStatus::Incomplete) => "incomplete",
             None => "not downloaded",
@@ -632,7 +663,7 @@ pub async fn list_models_with_catalog(cfg: &AriaConfig) -> io::Result<Vec<Listed
 
     let mut orphans: Vec<_> = local
         .into_iter()
-        .filter(|(name, _)| !seen.contains(name))
+        .filter(|(name, _)| !covered_by_catalog(name, &seen))
         .collect();
     orphans.sort_by(|a, b| a.0.cmp(&b.0));
     for (name, st) in orphans {
@@ -644,7 +675,32 @@ pub async fn list_models_with_catalog(cfg: &AriaConfig) -> io::Result<Vec<Listed
             },
         });
     }
-    Ok(rows)
+    rows
+}
+
+fn lookup_local_status(
+    local: &std::collections::HashMap<String, LocalStatus>,
+    catalog_name: &str,
+) -> Option<LocalStatus> {
+    if let Some(&st) = local.get(catalog_name) {
+        return Some(st);
+    }
+    let mut incomplete = None;
+    for alias in config::bundle_cache_aliases(catalog_name) {
+        match local.get(&alias) {
+            Some(LocalStatus::Valid) => return Some(LocalStatus::Valid),
+            Some(LocalStatus::Incomplete) => incomplete = Some(LocalStatus::Incomplete),
+            None => {}
+        }
+    }
+    incomplete
+}
+
+fn covered_by_catalog(name: &str, seen: &std::collections::HashSet<String>) -> bool {
+    seen.contains(name)
+        || config::bundle_cache_aliases(name)
+            .iter()
+            .any(|alias| seen.contains(alias))
 }
 
 fn expand_catalog_bundles(catalog: &[CatalogModel]) -> Vec<String> {
@@ -788,6 +844,13 @@ mod tests {
         let e = parse_bundle_name("plain-slug");
         assert_eq!(e.slug, "plain-slug");
         assert_eq!(e.quant, "int4");
+        let f = parse_bundle_name("gemma-3-1b-it_q326_channel");
+        assert_eq!(f.slug, "gemma-3-1b-it");
+        assert_eq!(f.quant, "int326");
+        assert_eq!(f.model, "gemma-3-1b-it_q326_channel");
+        let g = parse_bundle_name("model_q4_channel");
+        assert_eq!(g.slug, "model");
+        assert_eq!(g.quant, "int4");
     }
 
     #[test]
@@ -796,6 +859,9 @@ mod tests {
         let hf = hub_file_urls(DownloadSource::HuggingFace, &b, "config.json");
         assert!(hf[0].contains("/ariacompute/gemma-4-e2b-it_q4/resolve/main/v1.0/gemma-4-e2b-it_q4/config.json"));
         assert!(hf[1].contains("/ariacompute/model/resolve/main/v1.0/gemma-4-e2b-it_q4/config.json"));
+        let q326 = parse_bundle_name("gemma-3-1b-it_q326");
+        let q326_hf = hub_file_urls(DownloadSource::HuggingFace, &q326, "config.json");
+        assert!(q326_hf.iter().any(|u| u.contains("/v1.0/gemma-3-1b-it_q326_channel/config.json")));
         let ms = hub_file_urls(DownloadSource::ModelScope, &b, "weight.bin");
         assert!(ms[0].contains("AriaCompute/gemma-4-e2b-it_q4"));
         assert!(ms[0].contains("/v1.0/gemma-4-e2b-it_q4/weight.bin"));
@@ -868,5 +934,47 @@ mod tests {
         });
         assert_eq!(sorted[0].source, DownloadSource::ModelScope);
         assert!(sorted[2].source == DownloadSource::Dashboard);
+    }
+
+    #[test]
+    fn list_maps_q326_channel_to_catalog_q326() {
+        let local = std::collections::HashMap::from([(
+            "gemma-3-1b-it_q326_channel".to_string(),
+            LocalStatus::Valid,
+        )]);
+        let rows = merge_catalog_and_local(
+            vec![
+                "gemma-3-1b-it_q4".into(),
+                "gemma-3-1b-it_q326".into(),
+            ],
+            local,
+        );
+        assert_eq!(
+            rows,
+            vec![
+                ListedModel {
+                    name: "gemma-3-1b-it_q4".into(),
+                    status: "not downloaded".into(),
+                },
+                ListedModel {
+                    name: "gemma-3-1b-it_q326".into(),
+                    status: "downloaded".into(),
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn list_does_not_orphan_q326_channel_when_catalog_has_q326() {
+        let local = std::collections::HashMap::from([
+            ("gemma-3-1b-it_q326_channel".to_string(), LocalStatus::Valid),
+            ("local-only_q4".to_string(), LocalStatus::Valid),
+        ]);
+        let rows = merge_catalog_and_local(vec!["gemma-3-1b-it_q326".into()], local);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].name, "gemma-3-1b-it_q326");
+        assert_eq!(rows[0].status, "downloaded");
+        assert_eq!(rows[1].name, "local-only_q4");
+        assert_eq!(rows[1].status, "downloaded");
     }
 }
