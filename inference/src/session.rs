@@ -2113,11 +2113,11 @@ impl Session {
         predictions: &[Vec<f32>],
         laurel: &[f32],
         ao: &[f32],
-        layer: &LayerWeights,
         li: usize,
         ple_tok: Option<&[f32]>,
-        hidden: usize,
     ) -> Result<(), EngineError> {
+        let layer = &self.weights.layers[li];
+        let hidden = self.conf.hidden_size;
         let mut active = predictions[0].clone();
         self.add_normed_residual(&mut active, ao, layer.post_attn_norm.as_deref())?;
         let inv_sqrt2 = std::f32::consts::FRAC_1_SQRT_2;
@@ -2129,7 +2129,7 @@ impl Session {
         let down = self.apply_ffn(layer, &xn2, hidden)?;
         self.add_normed_residual(&mut mix, &down, layer.post_ffn_norm.as_deref())?;
         let corrected = self.altup_correct(layer, predictions, &mix, hidden)?;
-        for (dst, src) in streams.iter_mut().zip(corrected.into_iter()) {
+        for (dst, src) in streams.iter_mut().zip(corrected) {
             *dst = src;
         }
         let mut first = streams[0].clone();
@@ -2544,10 +2544,8 @@ impl Session {
                             &preds,
                             &laurel,
                             &ao,
-                            layer,
                             li,
                             ple_tok.as_deref(),
-                            hidden,
                         )?;
                         continue;
                     }
@@ -2748,10 +2746,8 @@ impl Session {
                             &preds,
                             &laurel,
                             &ao,
-                            layer,
                             li,
                             ple_tok.as_deref(),
-                            hidden,
                         )?;
                         continue;
                     }
