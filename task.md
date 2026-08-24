@@ -163,6 +163,7 @@
 - [x] Gemma-4 双 RoPE（sliding θ=1e4 / full p-RoPE θ=1e6）+ 四 norm + PLE + embed `sqrt(H)` + attn scale `1.0`
 - [x] 滑动窗口 mask（Gemma-4 `sliding_window=512`；只裁 attention，不裁共享 KV cache）
 - [x] Gemma-4 `layer_scalar`（HF/JAX `skip_scale`）：无 `.weight` 的 raw 标量，层末乘残差；缺省 1.0；hub q4 Hello 依赖此项
+- [x] Gemma-3 文本（270m/1b）：5×sliding+1×full、sliding θ=1e4 / full θ=1e6、hub 缺 `layer_types` 时补齐；GeGLU 不依赖 bundle `hidden_act`
 
 ### T64 — QK-Norm
 - [x] 别名 + op；Qwen3 / Gemma / LFM attn 路径

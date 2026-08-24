@@ -302,9 +302,10 @@ impl SessionBuilder {
         load_profile_set_mmap(elapsed_ms(t_mmap));
         let mut conf = bundle.model.clone();
         conf.rope_theta = effective_rope_theta(family.path(), conf.rope_theta);
-        // Hub/q4 artifacts may still omit Gemma-4 / Qwen3.5 geometry; fill from HF
-        // architecture then validate. Bundle values always win when present.
+        // Hub artifacts may still omit Gemma-4 / Gemma-3 / Qwen3.5 geometry; fill
+        // from HF architecture then validate. Bundle values always win when present.
         fill_gemma4_architecture_defaults(&mut conf, family.path());
+        fill_gemma3_architecture_defaults(&mut conf, family.path());
         fill_qwen35_architecture_defaults(&mut conf, family.path());
         require_gemma4_config(&conf, family.path())?;
         reject_unsupported_geometry(&conf, family)?;
@@ -332,7 +333,7 @@ impl SessionBuilder {
         // Qwen3.5 `Qwen3_5RMSNorm` is Gemma-style *(1+w) with zeros init (not Qwen3 *w).
         let use_gemma_norm = (family.path().contains("gemma") && !use_gemma4)
             || family.path().contains("qwen3.5");
-        let use_geglu = act.contains("gelu") || use_gemma4;
+        let use_geglu = act.contains("gelu") || family.path().contains("gemma");
         // Real Gemma-4 E2B/E4B checkpoints always ship PLE. Tiny/unit fixtures may
         // omit it; materialize already errors if model-level PLE is partial.
         let embed_scale = if family.path().contains("gemma") {
@@ -450,6 +451,42 @@ fn default_gemma4_layer_types(n: usize) -> Vec<String> {
             }
         })
         .collect()
+}
+
+fn is_gemma3_text(path: &str) -> bool {
+    // `gemma-3-270m-it` / `gemma-3-1b-it`, not `gemma-3n-*` or Gemma-4.
+    path.to_ascii_lowercase().contains("gemma-3-")
+}
+
+/// HF Gemma-3: `_sliding_window_pattern=6` → 5×sliding + 1×full.
+fn default_gemma3_layer_types(n: usize) -> Vec<String> {
+    (0..n)
+        .map(|i| {
+            if (i + 1) % 6 == 0 {
+                "full_attention".into()
+            } else {
+                "sliding_attention".into()
+            }
+        })
+        .collect()
+}
+
+/// Hub q326/q4 may omit `layer_types` / `sliding_window` / `hidden_act`.
+/// Treating every layer as full attention with a single RoPE θ makes
+/// Gemma-3-270M Hello collapse into a Hindi token loop.
+fn fill_gemma3_architecture_defaults(conf: &mut crate::bundle::ModelConfig, family_path: &str) {
+    if !is_gemma3_text(family_path) {
+        return;
+    }
+    if conf.layer_types.as_ref().map(|t| t.len()) != Some(conf.num_layers) {
+        conf.layer_types = Some(default_gemma3_layer_types(conf.num_layers));
+    }
+    if conf.sliding_window.unwrap_or(0) == 0 {
+        conf.sliding_window = Some(512);
+    }
+    if conf.hidden_act.as_ref().map(|s| s.is_empty()).unwrap_or(true) {
+        conf.hidden_act = Some("gelu_pytorch_tanh".into());
+    }
 }
 
 /// Hub q4 often omits nested `rope_parameters.partial_rotary_factor` (0.25).
@@ -1510,6 +1547,20 @@ impl Session {
                     (1_000_000.0, mode)
                 }
             }
+        } else if is_gemma3_text(self.family.path()) {
+            // HF: sliding `rope_local_base_freq=1e4`, global `rope_theta=1e6`.
+            // Not Gemma-4 p-RoPE (proportional / partial factor).
+            match kind {
+                AttnKind::Sliding => (10_000.0, RopeMode::Full),
+                AttnKind::Full => {
+                    let theta = if (self.conf.rope_theta - 10_000.0).abs() < 0.5 {
+                        1_000_000.0
+                    } else {
+                        self.conf.rope_theta
+                    };
+                    (theta, RopeMode::Full)
+                }
+            }
         } else if self.family.path().contains("qwen3.5") {
             // HF: dim = head_dim * partial_rotary_factor; inv_freq uses that dim
             // (not Gemma-4 proportional frequencies on the full head).
@@ -2330,6 +2381,64 @@ mod tests {
             s.config().layer_types.as_ref().map(|t| t.len()),
             Some(s.config().num_layers)
         );
+    }
+
+    #[test]
+    fn gemma3_text_not_gemma3n() {
+        assert!(is_gemma3_text("gemma/gemma-3-270m-it"));
+        assert!(is_gemma3_text("gemma/gemma-3-1b-it"));
+        assert!(!is_gemma3_text("gemma/gemma-3n-e2b-it"));
+        assert!(!is_gemma3_text("gemma/gemma-4-e2b-it"));
+        let t = default_gemma3_layer_types(18);
+        assert_eq!(t[5], "full_attention");
+        assert_eq!(t[11], "full_attention");
+        assert_eq!(t[17], "full_attention");
+        assert_eq!(
+            t.iter().filter(|s| *s == "sliding_attention").count(),
+            15
+        );
+    }
+
+    #[test]
+    fn gemma3_fills_hub_bundle_and_dual_rope() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let cfg_path = dir.path().join("config.json");
+        let raw = std::fs::read_to_string(&cfg_path).unwrap();
+        let mut cfg: Value = serde_json::from_str(&raw).unwrap();
+        let model = cfg["model"].as_object_mut().unwrap();
+        for key in ["layer_types", "sliding_window", "hidden_act"] {
+            model.remove(key);
+        }
+        std::fs::write(&cfg_path, cfg.to_string()).unwrap();
+        let mut s = SessionBuilder::new()
+            .model(dir.path())
+            .family("gemma/gemma-3-270m-it")
+            .build()
+            .unwrap();
+        assert_eq!(s.config().sliding_window, Some(512));
+        assert_eq!(s.config().hidden_act.as_deref(), Some("gelu_pytorch_tanh"));
+        let types = s.config().layer_types.as_ref().expect("layer_types");
+        assert_eq!(types.len(), s.config().num_layers);
+        assert!(types.iter().all(|t| t == "sliding_attention"));
+        assert_eq!(
+            s.layer_rope_params(AttnKind::Sliding),
+            (10_000.0, RopeMode::Full)
+        );
+        assert_eq!(
+            s.layer_rope_params(AttnKind::Full),
+            (1_000_000.0, RopeMode::Full)
+        );
+        let gen = s
+            .generate(
+                &[1, 2],
+                &GenerateOpts {
+                    max_tokens: 2,
+                    temperature: 0.0,
+                },
+            )
+            .unwrap();
+        assert_eq!(gen.tokens.len(), 2);
     }
 
     #[test]
