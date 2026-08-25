@@ -111,6 +111,9 @@ pub struct CloudChatRequest {
     pub messages: Vec<CloudMessage>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
+    /// Semantic classifier must not spend the 800ms budget on thinking.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enable_thinking: Option<bool>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -190,6 +193,7 @@ mod tests {
             model: CLOUD_GATEWAY_MODEL.to_string(),
             messages: vec![],
             max_tokens: Some(8),
+            enable_thinking: None,
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["model"], "ariacompute/ariamodel");
@@ -197,9 +201,18 @@ mod tests {
             model: CLOUD_GATEWAY_MODEL.to_string(),
             messages: vec![],
             max_tokens: None,
+            enable_thinking: None,
         };
         let v = serde_json::to_value(&omit).unwrap();
         assert!(v.get("max_tokens").is_none());
+        let classifier = CloudChatRequest {
+            model: CLOUD_GATEWAY_MODEL.to_string(),
+            messages: vec![],
+            max_tokens: Some(128),
+            enable_thinking: Some(false),
+        };
+        let v = serde_json::to_value(&classifier).unwrap();
+        assert_eq!(v["enable_thinking"], false);
     }
 
     #[test]
@@ -468,6 +481,7 @@ mod tests {
                     content: "a".into(),
                 }],
                 max_tokens: Some(8),
+                enable_thinking: None,
             })
             .await
             .unwrap();
@@ -479,6 +493,7 @@ mod tests {
                 model: "x".into(),
                 messages: vec![],
                 max_tokens: None,
+                enable_thinking: None,
             })
             .await
             .unwrap_err();
@@ -490,6 +505,7 @@ mod tests {
                 model: "x".into(),
                 messages: vec![],
                 max_tokens: None,
+                enable_thinking: None,
             })
             .await
             .unwrap_err();
@@ -665,6 +681,7 @@ mod tests {
                 model: "x".into(),
                 messages: vec![],
                 max_tokens: None,
+                enable_thinking: None,
             })
             .await
             .unwrap_err();

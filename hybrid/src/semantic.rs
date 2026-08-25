@@ -32,7 +32,7 @@ const PROMPT_KEY_CHARS: usize = 256;
 
 const SEMANTIC_SYSTEM_PROMPT: &str = "You are a routing classifier for a hybrid local/cloud inference engine. \
 Decide whether the user request should run on the small on-device model (\"local\") or be handed off to the \
-cloud flagship model (\"cloud\"). Answer with STRICT JSON only, no markdown, no prose: \
+cloud flagship model (\"cloud\"). Do not think step by step. Answer with STRICT JSON only, no markdown, no prose: \
 {\"action\":\"local\"|\"cloud\",\"confidence\":0.0-1.0,\"intent\":\"short intent label\",\"reason\":\"short reason\"}.";
 
 /// Structured slow-path routing decision.
@@ -92,10 +92,15 @@ impl CloudSemanticClient {
                 },
             ],
             max_tokens: Some(128),
+            enable_thinking: Some(false),
         };
         let v = self.cloud.chat(&req).await?;
-        let content = v["choices"][0]["message"]["content"]
+        let msg = &v["choices"][0]["message"];
+        let content = msg["content"]
             .as_str()
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .or_else(|| msg["reasoning"].as_str())
             .ok_or_else(|| EngineError::Cloud("semantic response missing content".into()))?;
         parse_semantic_decision(content)
     }
@@ -161,6 +166,11 @@ fn parse_semantic_decision(content: &str) -> Result<SemanticDecision, EngineErro
     if let Some(rest) = raw.strip_prefix("```") {
         raw = rest.strip_prefix("json").unwrap_or(rest);
         raw = raw.strip_suffix("```").unwrap_or(raw).trim();
+    }
+    if let (Some(start), Some(end)) = (raw.find('{'), raw.rfind('}')) {
+        if end > start {
+            raw = &raw[start..=end];
+        }
     }
     let v: Value = serde_json::from_str(raw)
         .map_err(|e| EngineError::Cloud(format!("invalid semantic JSON: {e}")))?;
@@ -423,6 +433,10 @@ mod tests {
         let d = parse_semantic_decision(fenced).unwrap();
         assert_eq!(d.action, RouteAction::Local);
         assert_eq!(d.intent, "unknown");
+
+        let mixed = "noise {\"action\":\"cloud\",\"confidence\":0.8} trailing";
+        let d = parse_semantic_decision(mixed).unwrap();
+        assert_eq!(d.action, RouteAction::CloudHandoff);
     }
 
     #[test]

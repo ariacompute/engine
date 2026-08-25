@@ -229,8 +229,8 @@
 ## Hybrid P2：规则路由层 + 语义路由层（requirements §3.5 P2，2026-08-21 审核通过）
 
 ### T76 — 规则路由层 `hybrid/src/rules.rs`
-- [x] `RequestKind`（Inline/Chat/Agent/LongContext/Media）分类（`classify`，含 Agent 中英关键词、上下文 ≥0.8 阈值）
-- [x] `RuleEngine` 有序规则链：硬约束（execution/privacy/force/modality/overflow/failures）高置信直决；Agent/长上下文/复杂度邻域（cutoff×[0.9,1.1)）→ `need_semantic`；其余按模式阈值定 Local/Cloud；与 `project()` 硬约束语义一致
+- [x] `RequestKind`（Inline/Chat/Agent/LongContext/Media）分类（`classify`：Agent 词、Chat 语义提示词覆盖知识/推理/代码/数学/翻译摘要/创作/对比/格式/专业咨询、短祈使句不漏 Inline、上下文 ≥0.8 阈值）
+- [x] `RuleEngine` 有序规则链：硬约束（execution/privacy/force/modality/overflow/failures）高置信直决；Agent/Chat/长上下文/复杂度邻域（cutoff×[0.9,1.1)）→ `need_semantic`；仅 Inline 问候本地快路径；与 `project()` 硬约束语义一致
 - [x] 单测：分类矩阵、硬约束/不可用回退、邻域触发、模式 cutoff、默认回退
 
 ### T77 — 语义路由层 `hybrid/src/semantic.rs`

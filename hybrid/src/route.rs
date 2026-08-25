@@ -587,6 +587,22 @@ mod tests {
         assert_eq!(d.action, r.route(&sig).action);
     }
 
+    /// Knowledge / intro prompts are Chat → semantic (not the Inline local fast path).
+    #[tokio::test]
+    async fn hybrid_knowledge_prompt_consults_semantic() {
+        let r = Router::new().unwrap();
+        let sem = semantic_with(Some(sd(RouteAction::CloudHandoff, 0.9)));
+        let health = HealthTracker::new();
+        let sig = RouteSignal::from_confidence(0.95);
+        let d = r
+            .route_hybrid(&sig, "Introduce Rust/C/C++ languages", &sem, &health)
+            .await;
+        assert_eq!(d.action, RouteAction::CloudHandoff);
+        assert_eq!(d.layer, RouteLayer::Semantic);
+        assert!(d.semantic_consulted);
+        assert!(d.reason.starts_with("semantic:"));
+    }
+
     /// Undecided rules → semantic adopted (high confidence).
     #[tokio::test]
     async fn hybrid_semantic_adopted_on_uncertain_rules() {

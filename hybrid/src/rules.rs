@@ -30,7 +30,7 @@ pub enum RequestKind {
 }
 
 /// Agentic / cross-domain keywords (EN + ZH).
-const AGENT_KEYWORDS: [&str; 14] = [
+const AGENT_KEYWORDS: &[&str] = &[
     "refactor",
     "architecture",
     "multi-step",
@@ -38,6 +38,8 @@ const AGENT_KEYWORDS: [&str; 14] = [
     "agent",
     "debug",
     "plan",
+    "implement",
+    "code review",
     "重构",
     "架构",
     "规划",
@@ -45,7 +47,88 @@ const AGENT_KEYWORDS: [&str; 14] = [
     "多步",
     "智能体",
     "跨域",
+    "实现",
+    "帮我写",
 ];
+
+/// Short non-greeting prompts that still need the semantic layer.
+/// Intent labels stay in the semantic JSON; rules only decide whether to ask.
+const SEMANTIC_HINT_KEYWORDS: &[&str] = &[
+    // Knowledge / explanatory
+    "introduce",
+    "explain",
+    "describe",
+    "compare",
+    "overview",
+    "tutorial",
+    "what is",
+    "what are",
+    "how to",
+    "why ",
+    "介绍",
+    "解释",
+    "讲解",
+    "说明",
+    "什么是",
+    "如何",
+    // Reasoning / multi-step
+    "prove",
+    "derive",
+    "theorem",
+    "证明",
+    "推导",
+    // Code generation (agent words live in AGENT_KEYWORDS)
+    "write a",
+    "写一个",
+    "写函数",
+    // Math / STEM
+    "solve",
+    "equation",
+    "calculate",
+    "解方程",
+    "计算",
+    // Translate / rewrite / summarize
+    "translate",
+    "paraphrase",
+    "summarize",
+    "summary",
+    "翻译",
+    "总结",
+    "摘要",
+    "改写",
+    // Creative
+    "poem",
+    "write a story",
+    "roleplay",
+    "role-play",
+    "role play",
+    "诗",
+    "小说",
+    "角色扮演",
+    "写一封",
+    // Compare / recommend
+    "recommend",
+    "which is",
+    "哪个好",
+    "选型",
+    // Constrained format
+    "as json",
+    "in json",
+    "json only",
+    "schema",
+    "markdown table",
+    "只输出",
+    // Professional advice (privacy_sensitive still hard-local)
+    "medical advice",
+    "legal advice",
+    "诊断",
+    "律师",
+    "投资建议",
+];
+
+fn prompt_has_any(prompt: &str, lower: &str, keys: &[&str]) -> bool {
+    keys.iter().any(|k| lower.contains(k) || prompt.contains(k))
+}
 
 /// Classify the request from prompt + signals (pure, O(len(prompt))).
 pub fn classify(signal: &RouteSignal, prompt: &str) -> RequestKind {
@@ -59,16 +142,16 @@ pub fn classify(signal: &RouteSignal, prompt: &str) -> RequestKind {
         return RequestKind::LongContext;
     }
     let lower = prompt.to_ascii_lowercase();
-    if AGENT_KEYWORDS
-        .iter()
-        .any(|k| lower.contains(k) || prompt.contains(k))
-    {
+    if prompt_has_any(prompt, &lower, AGENT_KEYWORDS) {
         return RequestKind::Agent;
     }
-    if prompt.chars().count() < 80 {
-        RequestKind::Inline
-    } else {
+    let chat_hint = prompt.contains('?')
+        || prompt.contains('？')
+        || prompt_has_any(prompt, &lower, SEMANTIC_HINT_KEYWORDS);
+    if chat_hint || prompt.chars().count() >= 80 {
         RequestKind::Chat
+    } else {
+        RequestKind::Inline
     }
 }
 
@@ -181,6 +264,9 @@ impl RuleEngine {
         if kind == RequestKind::Agent {
             return RuleDecision::undecided("rule:agent_task");
         }
+        if kind == RequestKind::Chat {
+            return RuleDecision::undecided("rule:chat_task");
+        }
 
         // R10/R11: complexity neighborhood → semantic; clearly above → cloud.
         let cutoff = self.complexity_cutoff();
@@ -193,13 +279,8 @@ impl RuleEngine {
             return RuleDecision::undecided("rule:complexity_near_cutoff");
         }
 
-        // R12: default local by kind.
-        let (conf, reason) = match kind {
-            RequestKind::Inline => (0.9, "rule:inline_local"),
-            RequestKind::Chat => (0.75, "rule:chat_local"),
-            _ => (0.7, "rule:default_local"),
-        };
-        RuleDecision::decided(RouteAction::Local, conf, reason)
+        // R12: greetings / tiny prompts stay local (semantic skipped).
+        RuleDecision::decided(RouteAction::Local, 0.9, "rule:inline_local")
     }
 }
 
@@ -275,6 +356,33 @@ mod tests {
         assert_eq!(classify(&s, "hi"), RequestKind::Inline);
         assert_eq!(classify(&s, &"x".repeat(200)), RequestKind::Chat);
         assert_eq!(
+            classify(&s, "Introduce Rust/C/C++ languages"),
+            RequestKind::Chat
+        );
+        assert_eq!(classify(&s, "什么是 Rust？"), RequestKind::Chat);
+        assert_eq!(
+            classify(&s, "Prove sqrt(2) is irrational"),
+            RequestKind::Chat
+        );
+        assert_eq!(
+            classify(&s, "Write a Rust mutex wrapper"),
+            RequestKind::Chat
+        );
+        assert_eq!(classify(&s, "Solve x^2+1=0"), RequestKind::Chat);
+        assert_eq!(classify(&s, "Translate this to French"), RequestKind::Chat);
+        assert_eq!(classify(&s, "写一首关于秋天的诗"), RequestKind::Chat);
+        assert_eq!(classify(&s, "recommend a laptop"), RequestKind::Chat);
+        assert_eq!(classify(&s, "Reply as JSON only"), RequestKind::Chat);
+        assert_eq!(
+            classify(&s, "legal advice on a contract"),
+            RequestKind::Chat
+        );
+        assert_eq!(
+            classify(&s, "implement binary search in Rust"),
+            RequestKind::Agent
+        );
+        assert_eq!(classify(&s, "帮我写一个排序函数"), RequestKind::Agent);
+        assert_eq!(
             classify(&s, "please refactor this architecture"),
             RequestKind::Agent
         );
@@ -294,6 +402,11 @@ mod tests {
         assert_eq!(d.action, None);
         assert!(d.need_semantic);
         assert_eq!(d.reason, "rule:agent_task");
+
+        let d = e.evaluate(&sig(), "Introduce Rust/C/C++ languages");
+        assert_eq!(d.action, None);
+        assert!(d.need_semantic);
+        assert_eq!(d.reason, "rule:chat_task");
 
         let mut s = sig();
         s.context_tokens = 90;
@@ -357,9 +470,49 @@ mod tests {
         assert_eq!(d.action, Some(RouteAction::Local));
         assert_eq!(d.reason, "rule:inline_local");
         assert!((d.confidence - 0.9).abs() < 1e-6);
+        assert!(!d.need_semantic);
 
         let d = e.evaluate(&sig(), &"plain chat ".repeat(20));
+        assert_eq!(d.action, None);
+        assert!(d.need_semantic);
+        assert_eq!(d.reason, "rule:chat_task");
+    }
+
+    #[test]
+    fn semantic_hint_categories_need_semantic() {
+        let e = engine();
+        let cases: &[(&str, &str)] = &[
+            ("Prove sqrt(2) is irrational", "rule:chat_task"),
+            ("Write a Rust mutex wrapper", "rule:chat_task"),
+            ("Solve x^2+1=0", "rule:chat_task"),
+            ("summarize this paragraph", "rule:chat_task"),
+            ("写一首关于秋天的诗", "rule:chat_task"),
+            ("recommend a laptop", "rule:chat_task"),
+            ("Reply as JSON only", "rule:chat_task"),
+            ("legal advice on a contract", "rule:chat_task"),
+            ("implement binary search", "rule:agent_task"),
+        ];
+        for (prompt, reason) in cases {
+            let d = e.evaluate(&sig(), prompt);
+            assert!(d.need_semantic, "prompt {prompt:?} should consult semantic");
+            assert_eq!(d.action, None, "prompt {prompt:?}");
+            assert_eq!(d.reason, *reason, "prompt {prompt:?}");
+        }
+        for greet in ["hi", "Hello", "ok", "thanks", "谢谢"] {
+            let d = e.evaluate(&sig(), greet);
+            assert!(
+                !d.need_semantic,
+                "greeting {greet:?} must stay inline local"
+            );
+            assert_eq!(d.action, Some(RouteAction::Local));
+            assert_eq!(d.reason, "rule:inline_local");
+        }
+
+        let mut s = sig();
+        s.privacy_sensitive = true;
+        let d = e.evaluate(&s, "legal advice on a contract");
+        assert!(!d.need_semantic);
         assert_eq!(d.action, Some(RouteAction::Local));
-        assert_eq!(d.reason, "rule:chat_local");
+        assert_eq!(d.reason, "rule:privacy_sensitive");
     }
 }

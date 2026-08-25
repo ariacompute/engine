@@ -348,6 +348,7 @@ fn cloud_handoff_request(messages: &[ChatMessage], max_tokens: Option<u32>) -> C
             })
             .collect(),
         max_tokens,
+        enable_thinking: None,
     }
 }
 
@@ -451,7 +452,7 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
     match decision.action {
         RouteAction::CloudHandoff => {
             let cloud_req = cloud_handoff_request(&req.messages, req.max_tokens);
-            let v = match st.cloud.chat(&cloud_req).await {
+            let mut v = match st.cloud.chat(&cloud_req).await {
                 Ok(v) => {
                     st.health.record(BackendKind::Cloud, HealthEvent::Success);
                     v
@@ -462,6 +463,12 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                     return Err(e);
                 }
             };
+            if let Some(obj) = v.as_object_mut() {
+                obj.insert(
+                    "model".into(),
+                    serde_json::Value::String(CLOUD_GATEWAY_MODEL.to_string()),
+                );
+            }
             st.router.record_outcome(RouteOutcome {
                 task_id: format!("chat-{}", now_secs()),
                 session_id: signal.session_id.clone(),
@@ -1721,6 +1728,7 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let v = body_json(res).await;
         assert_eq!(v["choices"][0]["message"]["content"], "semantic-cloud");
+        assert_eq!(v["model"], CLOUD_GATEWAY_MODEL);
 
         let outcome = &router.outcomes.recent(1)[0];
         assert_eq!(outcome.layer, aria_hybrid::RouteLayer::Semantic);
