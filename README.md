@@ -52,7 +52,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 ```
 
-`download` probes Serve (if keyed) / HuggingFace / ModelScope each run and picks the fastest reachable source. On a TTY it shows a green progress bar for the transfer.
+`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). It does not try Dashboard or the other hub. On a TTY it shows a green progress bar for the transfer.
 
 `list` queries `{site_url}/api/dashboard/models` (requires `aria-engine auth`) and prints each downloadable bundle as `downloaded` / `not downloaded` (plus local-only caches).
 

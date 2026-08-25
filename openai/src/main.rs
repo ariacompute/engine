@@ -219,7 +219,10 @@ fn cmd_clean(model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     download::clean_models(model)?;
     match model {
         Some(m) => println!("cleaned {m}"),
-        None => println!("cleaned all models under {}", config::models_dir()?.display()),
+        None => println!(
+            "cleaned all models under {}",
+            config::models_dir()?.display()
+        ),
     }
     Ok(())
 }
@@ -237,10 +240,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         match args[i].as_str() {
             "--bind" => {
                 i += 1;
-                bind = args
-                    .get(i)
-                    .cloned()
-                    .ok_or("--bind requires host:port")?;
+                bind = args.get(i).cloned().ok_or("--bind requires host:port")?;
             }
             "--hybrid-mode" => {
                 i += 1;
@@ -293,21 +293,13 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let model_path = config::resolve_model_path(&model)?;
 
     let cfg = load_config_reconciled().await.unwrap_or_default();
-    let mode = parse_mode(
-        mode_override
-            .as_deref()
-            .unwrap_or(cfg.hybrid_mode.as_str()),
-    )?;
+    let mode = parse_mode(mode_override.as_deref().unwrap_or(cfg.hybrid_mode.as_str()))?;
     let execution = ExecutionMode::parse(
         exec_override
             .as_deref()
             .unwrap_or(cfg.hybrid_execution.as_str()),
     )?;
-    let compute = ComputePref::parse(
-        compute_override
-            .as_deref()
-            .unwrap_or(cfg.compute.as_str()),
-    )?;
+    let compute = ComputePref::parse(compute_override.as_deref().unwrap_or(cfg.compute.as_str()))?;
     let semantic_enabled = match semantic_override.as_deref() {
         Some("on") => true,
         Some("off") => false,
@@ -321,9 +313,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         cfg.cloud_url.clone()
     };
-    let router = Router::new()?
-        .with_mode(mode)
-        .with_execution(execution);
+    let router = Router::new()?.with_mode(mode).with_execution(execution);
     let state = build_state_with_hybrid_opts(
         model_path.to_str().ok_or("invalid model path")?,
         router,

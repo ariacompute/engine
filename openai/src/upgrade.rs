@@ -81,8 +81,18 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
 
     let engine_archive = staging.join(&engine_name);
     let ffi_archive = staging.join(&ffi_name);
-    download_url(&engine_asset.download_url, &engine_archive, &format!("engine {ver}")).await?;
-    download_url(&ffi_asset.download_url, &ffi_archive, &format!("libaria_ffi {ver}")).await?;
+    download_url(
+        &engine_asset.download_url,
+        &engine_archive,
+        &format!("engine {ver}"),
+    )
+    .await?;
+    download_url(
+        &ffi_asset.download_url,
+        &ffi_archive,
+        &format!("libaria_ffi {ver}"),
+    )
+    .await?;
 
     let engine_extract = staging.join("engine");
     let ffi_extract = staging.join("ffi");
@@ -134,7 +144,10 @@ async fn fetch_releases(host: ReleaseHost, org: &str) -> io::Result<Vec<ReleaseI
     let url = releases_api_url(host, org);
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
-        .user_agent(format!("aria-engine-upgrade/{}", env!("ARIA_ENGINE_VERSION")))
+        .user_agent(format!(
+            "aria-engine-upgrade/{}",
+            env!("ARIA_ENGINE_VERSION")
+        ))
         .build()
         .map_err(io_err)?;
     let resp = client.get(&url).send().await.map_err(io_err)?;
@@ -177,9 +190,7 @@ pub fn select_release<'a>(
                 .filter(|r| !r.draft && !r.prerelease)
                 .filter(|r| parse_semver(&r.tag).is_some())
                 .max_by_key(|r| parse_semver(&r.tag).unwrap_or((0, 0, 0)))
-                .ok_or_else(|| {
-                    io::Error::new(io::ErrorKind::NotFound, "no stable release found")
-                })
+                .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no stable release found"))
         }
         Some(v) => {
             let want = normalize_tag(v);
@@ -187,10 +198,7 @@ pub fn select_release<'a>(
                 .iter()
                 .find(|r| !r.draft && (normalize_tag(&r.tag) == want || r.tag == v))
                 .ok_or_else(|| {
-                    io::Error::new(
-                        io::ErrorKind::NotFound,
-                        format!("release {v} not found"),
-                    )
+                    io::Error::new(io::ErrorKind::NotFound, format!("release {v} not found"))
                 })
         }
     }
@@ -251,22 +259,22 @@ pub fn engine_asset_name(version: &str, asset_os: &str) -> String {
 }
 
 fn find_asset<'a>(assets: &'a [ReleaseAsset], name: &str) -> io::Result<&'a ReleaseAsset> {
-    assets
-        .iter()
-        .find(|a| a.name == name)
-        .ok_or_else(|| {
-            io::Error::new(
-                io::ErrorKind::NotFound,
-                format!("release asset not found: {name}"),
-            )
-        })
+    assets.iter().find(|a| a.name == name).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("release asset not found: {name}"),
+        )
+    })
 }
 
 async fn download_url(url: &str, path: &Path, label: &str) -> io::Result<()> {
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(600))
         .redirect(reqwest::redirect::Policy::limited(10))
-        .user_agent(format!("aria-engine-upgrade/{}", env!("ARIA_ENGINE_VERSION")))
+        .user_agent(format!(
+            "aria-engine-upgrade/{}",
+            env!("ARIA_ENGINE_VERSION")
+        ))
         .build()
         .map_err(io_err)?;
     let resp = client.get(url).send().await.map_err(io_err)?;
@@ -301,8 +309,8 @@ fn extract_archive(archive: &Path, dest: &Path) -> io::Result<()> {
 
 fn extract_zip(archive: &Path, dest: &Path) -> io::Result<()> {
     let file = fs::File::open(archive)?;
-    let mut zip = zip::ZipArchive::new(file)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     for i in 0..zip.len() {
         let mut entry = zip
             .by_index(i)
@@ -338,16 +346,17 @@ fn install_cli(extract_dir: &Path) -> io::Result<()> {
     } else {
         "aria-engine"
     };
-    let src = find_named_file(extract_dir, bin_name)?
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{bin_name} not in archive")))?;
+    let src = find_named_file(extract_dir, bin_name)?.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{bin_name} not in archive"),
+        )
+    })?;
     let dest = std::env::current_exe()?;
     let dest_dir = dest
         .parent()
         .ok_or_else(|| io::Error::other("current_exe has no parent"))?;
-    let tmp = dest_dir.join(format!(
-        ".aria-engine-upgrade-{}.tmp",
-        std::process::id()
-    ));
+    let tmp = dest_dir.join(format!(".aria-engine-upgrade-{}.tmp", std::process::id()));
     fs::copy(&src, &tmp)?;
     #[cfg(unix)]
     {
@@ -566,10 +575,14 @@ mod tests {
 
     #[test]
     fn github_and_gitee_api_paths() {
-        assert!(releases_api_url(ReleaseHost::GitHub, "https://github.com/ariacompute")
-            .contains("api.github.com/repos/ariacompute/engine/releases"));
-        assert!(releases_api_url(ReleaseHost::Gitee, "https://gitee.com/ariacompute")
-            .contains("gitee.com/api/v5/repos/ariacompute/engine/releases"));
+        assert!(
+            releases_api_url(ReleaseHost::GitHub, "https://github.com/ariacompute")
+                .contains("api.github.com/repos/ariacompute/engine/releases")
+        );
+        assert!(
+            releases_api_url(ReleaseHost::Gitee, "https://gitee.com/ariacompute")
+                .contains("gitee.com/api/v5/repos/ariacompute/engine/releases")
+        );
     }
 
     #[test]

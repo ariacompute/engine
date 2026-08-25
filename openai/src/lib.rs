@@ -902,9 +902,7 @@ mod tests {
                     .method("POST")
                     .uri("/v1/embeddings")
                     .header("content-type", "application/json")
-                    .body(Body::from(
-                        json!({"input":"hello embedding"}).to_string(),
-                    ))
+                    .body(Body::from(json!({"input":"hello embedding"}).to_string()))
                     .unwrap(),
             )
             .await
@@ -1103,14 +1101,18 @@ mod tests {
     async fn models_lists_cloud_gateway_id_not_family_path() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
-        let local_name = dir.path().file_name().unwrap().to_str().unwrap().to_string();
+        let local_name = dir
+            .path()
+            .file_name()
+            .unwrap()
+            .to_str()
+            .unwrap()
+            .to_string();
 
         // cloud execution → only ariacompute/ariamodel (never gemma family path)
         let cloud_state = build_state(
             dir.path(),
-            Router::new()
-                .unwrap()
-                .with_execution(ExecutionMode::Cloud),
+            Router::new().unwrap().with_execution(ExecutionMode::Cloud),
             CloudClient::new("http://127.0.0.1:9", "sk-test").with_mock(MockMode::Success(
                 json!({"choices":[{"message":{"content":"c"}}]}),
             )),
@@ -1119,7 +1121,12 @@ mod tests {
         assert_eq!(cloud_state.model_id, CLOUD_GATEWAY_MODEL);
         let models = body_json(
             app(cloud_state)
-                .oneshot(Request::builder().uri("/v1/models").body(Body::empty()).unwrap())
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/models")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
                 .await
                 .unwrap(),
         )
@@ -1138,7 +1145,12 @@ mod tests {
         assert_eq!(hybrid_state.model_id, local_name);
         let models = body_json(
             app(hybrid_state)
-                .oneshot(Request::builder().uri("/v1/models").body(Body::empty()).unwrap())
+                .oneshot(
+                    Request::builder()
+                        .uri("/v1/models")
+                        .body(Body::empty())
+                        .unwrap(),
+                )
                 .await
                 .unwrap(),
         )
@@ -1368,9 +1380,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
         // Keyword boost → complexity ≥ Intelligence cutoff (0.40), still < Balance (0.75).
-        let router = Router::new()
-            .unwrap()
-            .with_mode(ParetoMode::Intelligence);
+        let router = Router::new().unwrap().with_mode(ParetoMode::Intelligence);
         let state = build_state(
             dir.path(),
             router,
@@ -1576,8 +1586,13 @@ mod tests {
                 &'a self,
                 _signal: &'a RouteSignal,
                 _prompt: &'a str,
-            ) -> Pin<Box<dyn Future<Output = Result<aria_hybrid::SemanticDecision, EngineError>> + Send + 'a>>
-            {
+            ) -> Pin<
+                Box<
+                    dyn Future<Output = Result<aria_hybrid::SemanticDecision, EngineError>>
+                        + Send
+                        + 'a,
+                >,
+            > {
                 Box::pin(async move {
                     Ok(aria_hybrid::SemanticDecision {
                         action: RouteAction::CloudHandoff,
@@ -1599,11 +1614,8 @@ mod tests {
             }))),
         )
         .unwrap();
-        state.semantic = SemanticRouter::new(
-            Some(SemanticClient::Fake(Arc::new(FakeSemantic))),
-            100,
-            8,
-        );
+        state.semantic =
+            SemanticRouter::new(Some(SemanticClient::Fake(Arc::new(FakeSemantic))), 100, 8);
         let router = state.router.clone();
         let svc = app(state);
 

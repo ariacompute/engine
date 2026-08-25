@@ -158,16 +158,16 @@ pub fn load_config() -> io::Result<AriaConfig> {
         return Ok(AriaConfig::default());
     }
     let raw = fs::read_to_string(&path)?;
-    let cfg: AriaConfig = serde_yaml::from_str(&raw)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let cfg: AriaConfig =
+        serde_yaml::from_str(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     Ok(cfg)
 }
 
 pub fn save_config(cfg: &AriaConfig) -> io::Result<()> {
     ensure_aria_home()?;
     let path = config_path()?;
-    let raw = serde_yaml::to_string(cfg)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let raw =
+        serde_yaml::to_string(cfg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     let tmp = path.with_extension("yml.tmp");
     {
         let mut f = fs::File::create(&tmp)?;

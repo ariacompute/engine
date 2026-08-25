@@ -1,14 +1,14 @@
-//! Probe Dashboard / Hugging Face / ModelScope and download Aria bundles.
+//! Probe the regional public hub (Hugging Face or ModelScope) and download Aria bundles.
 
 use crate::config::{self, AriaConfig};
+use crate::gateway_detect::GatewayPair;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
 use serde::Deserialize;
 use std::fs;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
-use zip::ZipArchive;
 
 const DEFAULT_SDK: &str = "v1.0";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
@@ -83,14 +83,6 @@ pub struct ProbeResult {
     pub detail: String,
 }
 
-#[derive(Debug, Deserialize)]
-struct DashboardJsonMeta {
-    mode: String,
-    url: String,
-    #[serde(default)]
-    filename: String,
-}
-
 pub async fn download_model(model: &str, cfg: &AriaConfig) -> io::Result<PathBuf> {
     let bundle = parse_bundle_name(model);
     config::ensure_aria_home()?;
@@ -107,107 +99,50 @@ pub async fn download_model(model: &str, cfg: &AriaConfig) -> io::Result<PathBuf
         }
     }
 
-    let ranked = probe_and_rank(&bundle, cfg).await;
-    let usable: Vec<_> = ranked.into_iter().filter(|p| p.reachable).collect();
-    if usable.is_empty() {
+    let source = preferred_public_hub(&cfg.site_url);
+    let probe = probe_hub(source, &bundle).await;
+    if !probe.reachable {
         return Err(io::Error::new(
             io::ErrorKind::NotConnected,
-            "no download source reachable (dashboard / huggingface / modelscope)",
+            format!(
+                "no download source reachable ({}: {})",
+                source.as_str(),
+                probe.detail
+            ),
         ));
     }
 
-    let mut last_err = None;
-    for probe in &usable {
-        eprintln!(
-            "download: using {} ({})",
-            probe.source.as_str(),
-            probe.detail
-        );
-        match fetch_into(&bundle, cfg, probe.source, &dest).await {
-            Ok(()) => {
-                if is_valid_bundle(&dest) {
-                    return Ok(dest);
-                }
-                let _ = fs::remove_dir_all(&dest);
-                last_err = Some(io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!(
-                        "{} fetch completed but bundle invalid (need weight.bin + aria-quant-bundle config.json)",
-                        probe.source.as_str()
-                    ),
-                ));
+    eprintln!(
+        "download: using {} ({})",
+        probe.source.as_str(),
+        probe.detail
+    );
+    match fetch_hub(source, &bundle, &dest).await {
+        Ok(()) => {
+            if is_valid_bundle(&dest) {
+                return Ok(dest);
             }
-            Err(e) => {
-                let _ = fs::remove_dir_all(&dest);
-                last_err = Some(e);
-            }
+            let _ = fs::remove_dir_all(&dest);
+            Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!(
+                    "{} fetch completed but bundle invalid (need weight.bin + aria-quant-bundle config.json)",
+                    source.as_str()
+                ),
+            ))
         }
-    }
-    Err(last_err.unwrap_or_else(|| io::Error::other("download failed for all sources")))
-}
-
-pub async fn probe_and_rank(bundle: &BundleRef, cfg: &AriaConfig) -> Vec<ProbeResult> {
-    let mut results = Vec::new();
-    if !cfg.cloud_api_key.is_empty() && !cfg.site_url.is_empty() {
-        results.push(probe_dashboard(bundle, cfg).await);
-    }
-    results.push(probe_hub(DownloadSource::HuggingFace, bundle).await);
-    results.push(probe_hub(DownloadSource::ModelScope, bundle).await);
-
-    results.sort_by(|a, b| {
-        b.reachable.cmp(&a.reachable).then(
-            b.bytes_per_sec
-                .partial_cmp(&a.bytes_per_sec)
-                .unwrap_or(std::cmp::Ordering::Equal),
-        )
-    });
-    results
-}
-
-async fn probe_dashboard(bundle: &BundleRef, cfg: &AriaConfig) -> ProbeResult {
-    let url = dashboard_meta_url(cfg, bundle);
-    let client = match http_client(PROBE_TIMEOUT) {
-        Ok(c) => c,
         Err(e) => {
-            return ProbeResult {
-                source: DownloadSource::Dashboard,
-                reachable: false,
-                bytes_per_sec: 0.0,
-                detail: e.to_string(),
-            }
+            let _ = fs::remove_dir_all(&dest);
+            Err(e)
         }
-    };
-    let start = Instant::now();
-    let resp = client
-        .get(&url)
-        .bearer_auth(&cfg.cloud_api_key)
-        .header("Accept", "application/json")
-        .send()
-        .await;
-    match resp {
-        Ok(r) if r.status().is_success() => {
-            let elapsed = start.elapsed().as_secs_f64().max(1e-3);
-            let bytes = r.content_length().unwrap_or(256) as f64;
-            let bps = bytes / elapsed;
-            ProbeResult {
-                source: DownloadSource::Dashboard,
-                reachable: true,
-                bytes_per_sec: bps,
-                detail: format!("{:.2} MB/s", bps / (1024.0 * 1024.0)),
-            }
-        }
-        Ok(r) => ProbeResult {
-            source: DownloadSource::Dashboard,
-            reachable: false,
-            bytes_per_sec: 0.0,
-            detail: format!("HTTP {}", r.status()),
-        },
-        Err(e) => ProbeResult {
-            source: DownloadSource::Dashboard,
-            reachable: false,
-            bytes_per_sec: 0.0,
-            detail: e.to_string(),
-        },
+    }
+}
+
+/// Public hub paired with `site_url` (`.com` → Hugging Face, `.cn` → ModelScope).
+fn preferred_public_hub(site_url: &str) -> DownloadSource {
+    match GatewayPair::from_url(site_url) {
+        Some(GatewayPair::CN) => DownloadSource::ModelScope,
+        _ => DownloadSource::HuggingFace,
     }
 }
 
@@ -231,7 +166,10 @@ async fn probe_hub(source: DownloadSource, bundle: &BundleRef) -> ProbeResult {
             req = req.bearer_auth(token);
         }
         // Prefer Range to cap probe size.
-        req = req.header("Range", format!("bytes=0-{}", PROBE_BYTES.saturating_sub(1)));
+        req = req.header(
+            "Range",
+            format!("bytes=0-{}", PROBE_BYTES.saturating_sub(1)),
+        );
         match req.send().await {
             Ok(r) if r.status().is_success() || r.status().as_u16() == 206 => {
                 let bytes = match r.bytes().await {
@@ -267,75 +205,6 @@ async fn probe_hub(source: DownloadSource, bundle: &BundleRef) -> ProbeResult {
         bytes_per_sec: 0.0,
         detail: "unreachable".into(),
     }
-}
-
-async fn fetch_into(
-    bundle: &BundleRef,
-    cfg: &AriaConfig,
-    source: DownloadSource,
-    dest: &Path,
-) -> io::Result<()> {
-    match source {
-        DownloadSource::Dashboard => fetch_dashboard(bundle, cfg, dest).await,
-        DownloadSource::HuggingFace | DownloadSource::ModelScope => {
-            fetch_hub(source, bundle, dest).await
-        }
-    }
-}
-
-async fn fetch_dashboard(bundle: &BundleRef, cfg: &AriaConfig, dest: &Path) -> io::Result<()> {
-    let meta_url = dashboard_meta_url(cfg, bundle);
-    let client = http_client(Duration::from_secs(600)).map_err(io_err)?;
-    let meta_resp = client
-        .get(&meta_url)
-        .bearer_auth(&cfg.cloud_api_key)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(io_err)?;
-    if !meta_resp.status().is_success() {
-        return Err(io::Error::other(format!(
-            "dashboard metadata HTTP {}",
-            meta_resp.status()
-        )));
-    }
-    let meta: DashboardJsonMeta = meta_resp.json().await.map_err(io_err)?;
-
-    let staging = dest.with_extension("partial");
-    let _ = fs::remove_dir_all(&staging);
-    fs::create_dir_all(&staging)?;
-    let zip_path = staging.join("bundle.zip");
-
-    let resp = client
-        .get(&meta.url)
-        .bearer_auth(&cfg.cloud_api_key)
-        .send()
-        .await
-        .map_err(io_err)?
-        .error_for_status()
-        .map_err(io_err)?;
-    stream_response_to_file(resp, &zip_path, &format!("download {}", bundle.model)).await?;
-
-    // Confirm zip magic after stream (redirect/zip modes both deliver a zip body).
-    let mut magic = [0u8; 4];
-    {
-        let mut f = fs::File::open(&zip_path)?;
-        let n = f.read(&mut magic)?;
-        if n < 4 || !looks_like_zip(&magic) {
-            let _ = fs::remove_dir_all(&staging);
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "dashboard returned mode={} (expected zip for Aria bundle); filename={}",
-                    meta.mode, meta.filename
-                ),
-            ));
-        }
-    }
-    extract_zip_path(&zip_path, &staging)?;
-    let _ = fs::remove_file(&zip_path);
-    atomic_replace(&staging, dest)?;
-    Ok(())
 }
 
 async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> io::Result<()> {
@@ -398,16 +267,6 @@ async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> i
     Ok(())
 }
 
-fn dashboard_meta_url(cfg: &AriaConfig, bundle: &BundleRef) -> String {
-    let base = cfg.site_url.trim_end_matches('/');
-    format!(
-        "{base}/api/dashboard/models/{}/download?quant={}&sdk={}&format=json",
-        urlencoding::encode(&bundle.slug),
-        urlencoding::encode(&bundle.quant),
-        urlencoding::encode(&bundle.sdk),
-    )
-}
-
 fn hub_config_urls(source: DownloadSource, bundle: &BundleRef) -> Vec<String> {
     hub_file_urls(source, bundle, "config.json")
 }
@@ -418,14 +277,12 @@ fn hub_file_urls(source: DownloadSource, bundle: &BundleRef, file: &str) -> Vec<
     let mut urls = Vec::new();
     for name in names {
         let repos = match source {
-            DownloadSource::HuggingFace => vec![
-                format!("ariacompute/{name}"),
-                "ariacompute/model".into(),
-            ],
-            DownloadSource::ModelScope => vec![
-                format!("AriaCompute/{name}"),
-                "AriaCompute/model".into(),
-            ],
+            DownloadSource::HuggingFace => {
+                vec![format!("ariacompute/{name}"), "ariacompute/model".into()]
+            }
+            DownloadSource::ModelScope => {
+                vec![format!("AriaCompute/{name}"), "AriaCompute/model".into()]
+            }
             DownloadSource::Dashboard => return vec![],
         };
         for repo in repos {
@@ -478,10 +335,6 @@ fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::other(e.to_string())
 }
 
-fn looks_like_zip(bytes: &[u8]) -> bool {
-    bytes.len() >= 4 && bytes[0] == 0x50 && bytes[1] == 0x4b
-}
-
 /// Stream an HTTP body to `path`, showing a green progress bar when stderr is a TTY
 /// and `label` is non-empty.
 pub(crate) async fn stream_response_to_file(
@@ -527,58 +380,6 @@ pub(crate) async fn stream_response_to_file(
     file.flush()?;
     pb.finish_and_clear();
     Ok(downloaded)
-}
-
-fn extract_zip_path(zip_path: &Path, dest: &Path) -> io::Result<()> {
-    let file = fs::File::open(zip_path)?;
-    let mut archive =
-        ZipArchive::new(file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-        let name = file
-            .enclosed_name()
-            .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "unsafe zip path"))?
-            .to_owned();
-        let out_path = dest.join(&name);
-        if file.is_dir() {
-            fs::create_dir_all(&out_path)?;
-            continue;
-        }
-        if let Some(parent) = out_path.parent() {
-            fs::create_dir_all(parent)?;
-        }
-        let mut out = fs::File::create(&out_path)?;
-        io::copy(&mut file, &mut out)?;
-    }
-    flatten_single_subdir(dest)?;
-    Ok(())
-}
-
-fn flatten_single_subdir(dest: &Path) -> io::Result<()> {
-    let mut entries: Vec<_> = fs::read_dir(dest)?
-        .filter_map(|e| e.ok())
-        .collect();
-    if entries.len() != 1 {
-        return Ok(());
-    }
-    let only = entries.pop().unwrap();
-    if !only.file_type()?.is_dir() {
-        return Ok(());
-    }
-    let sub = only.path();
-    // Only flatten if config.json lives inside.
-    if !sub.join("config.json").exists() {
-        return Ok(());
-    }
-    for entry in fs::read_dir(&sub)? {
-        let entry = entry?;
-        let target = dest.join(entry.file_name());
-        fs::rename(entry.path(), target)?;
-    }
-    fs::remove_dir_all(sub)?;
-    Ok(())
 }
 
 fn atomic_replace(staging: &Path, dest: &Path) -> io::Result<()> {
@@ -638,7 +439,10 @@ pub async fn list_models_with_catalog(cfg: &AriaConfig) -> io::Result<Vec<Listed
     }
     let catalog = fetch_dashboard_catalog(cfg).await?;
     let local = local_model_status()?;
-    Ok(merge_catalog_and_local(expand_catalog_bundles(&catalog), local))
+    Ok(merge_catalog_and_local(
+        expand_catalog_bundles(&catalog),
+        local,
+    ))
 }
 
 fn merge_catalog_and_local(
@@ -857,11 +661,17 @@ mod tests {
     fn hub_urls_follow_upload_layout() {
         let b = parse_bundle_name("gemma-4-e2b-it_q4");
         let hf = hub_file_urls(DownloadSource::HuggingFace, &b, "config.json");
-        assert!(hf[0].contains("/ariacompute/gemma-4-e2b-it_q4/resolve/main/v1.0/gemma-4-e2b-it_q4/config.json"));
-        assert!(hf[1].contains("/ariacompute/model/resolve/main/v1.0/gemma-4-e2b-it_q4/config.json"));
+        assert!(hf[0].contains(
+            "/ariacompute/gemma-4-e2b-it_q4/resolve/main/v1.0/gemma-4-e2b-it_q4/config.json"
+        ));
+        assert!(
+            hf[1].contains("/ariacompute/model/resolve/main/v1.0/gemma-4-e2b-it_q4/config.json")
+        );
         let q326 = parse_bundle_name("gemma-3-1b-it_q326");
         let q326_hf = hub_file_urls(DownloadSource::HuggingFace, &q326, "config.json");
-        assert!(q326_hf.iter().any(|u| u.contains("/v1.0/gemma-3-1b-it_q326_channel/config.json")));
+        assert!(q326_hf
+            .iter()
+            .any(|u| u.contains("/v1.0/gemma-3-1b-it_q326_channel/config.json")));
         let ms = hub_file_urls(DownloadSource::ModelScope, &b, "weight.bin");
         assert!(ms[0].contains("AriaCompute/gemma-4-e2b-it_q4"));
         assert!(ms[0].contains("/v1.0/gemma-4-e2b-it_q4/weight.bin"));
@@ -903,37 +713,28 @@ mod tests {
     }
 
     #[test]
-    fn select_highest_score() {
-        let ranked = vec![
-            ProbeResult {
-                source: DownloadSource::HuggingFace,
-                reachable: true,
-                bytes_per_sec: 1e6,
-                detail: "1".into(),
-            },
-            ProbeResult {
-                source: DownloadSource::ModelScope,
-                reachable: true,
-                bytes_per_sec: 5e6,
-                detail: "5".into(),
-            },
-            ProbeResult {
-                source: DownloadSource::Dashboard,
-                reachable: false,
-                bytes_per_sec: 0.0,
-                detail: "x".into(),
-            },
-        ];
-        let mut sorted = ranked;
-        sorted.sort_by(|a, b| {
-            b.reachable.cmp(&a.reachable).then(
-                b.bytes_per_sec
-                    .partial_cmp(&a.bytes_per_sec)
-                    .unwrap_or(std::cmp::Ordering::Equal),
-            )
-        });
-        assert_eq!(sorted[0].source, DownloadSource::ModelScope);
-        assert!(sorted[2].source == DownloadSource::Dashboard);
+    fn preferred_hub_follows_site_tld() {
+        assert_eq!(
+            preferred_public_hub("https://ariacompute.com"),
+            DownloadSource::HuggingFace
+        );
+        assert_eq!(
+            preferred_public_hub("https://ariacompute.cn"),
+            DownloadSource::ModelScope
+        );
+        assert_eq!(preferred_public_hub(""), DownloadSource::HuggingFace);
+    }
+
+    #[test]
+    fn download_never_selects_dashboard() {
+        assert_ne!(
+            preferred_public_hub("https://ariacompute.com"),
+            DownloadSource::Dashboard
+        );
+        assert_ne!(
+            preferred_public_hub("https://ariacompute.cn"),
+            DownloadSource::Dashboard
+        );
     }
 
     #[test]
@@ -943,10 +744,7 @@ mod tests {
             LocalStatus::Valid,
         )]);
         let rows = merge_catalog_and_local(
-            vec![
-                "gemma-3-1b-it_q4".into(),
-                "gemma-3-1b-it_q326".into(),
-            ],
+            vec!["gemma-3-1b-it_q4".into(), "gemma-3-1b-it_q326".into()],
             local,
         );
         assert_eq!(

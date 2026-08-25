@@ -186,10 +186,7 @@ async fn probe_key_on_site(site_url: &str, api_key: &str) -> (bool, u128) {
         Ok(c) => c,
         Err(_) => return (false, u128::MAX),
     };
-    let url = format!(
-        "{}/api/dashboard/models",
-        site_url.trim_end_matches('/')
-    );
+    let url = format!("{}/api/dashboard/models", site_url.trim_end_matches('/'));
     let start = Instant::now();
     let accepted = match client
         .get(&url)

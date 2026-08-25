@@ -89,7 +89,7 @@
 - [x] `auth` / `--status` / `--clear`
 
 ### T32 — download / list / clean
-- [x] 探针 + 自动选 Dashboard / HF / ModelScope；失败回退
+- [x] `download` 仅本区 hub（`.com`→HF，`.cn`→ModelScope）；禁止 Dashboard 竞速/互退与对区 hub 回退
 - [x] `list` / `clean [model]`；bundle 校验
 - [x] `list` / `serve` / `download` 将 catalog `*_q326` 与本地 `*_q326_channel` 视为同一缓存
 
