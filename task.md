@@ -230,7 +230,7 @@
 
 ### T76 — 规则路由层 `hybrid/src/rules.rs`
 - [x] `RequestKind`（Inline/Chat/Agent/LongContext/Media）分类（`classify`：Agent 词、Chat 语义提示词覆盖知识/推理/代码/数学/翻译摘要/创作/对比/格式/专业咨询、短祈使句不漏 Inline、上下文 ≥0.8 阈值）
-- [x] `RuleEngine` 有序规则链：硬约束（execution/privacy/force/modality/overflow/failures）高置信直决；Agent/Chat/长上下文/复杂度邻域（cutoff×[0.9,1.1)）→ `need_semantic`；仅 Inline 问候本地快路径；与 `project()` 硬约束语义一致
+- [x] `RuleEngine` 有序规则链：硬约束高置信直决；Balance/Intelligence 的 Chat 直接云 handoff（`rule:chat_prefer_cloud`）；Cost 的 Chat 与 Agent/长上下文/复杂度邻域 → `need_semantic`；仅 Inline 问候本地快路径
 - [x] 单测：分类矩阵、硬约束/不可用回退、邻域触发、模式 cutoff、默认回退
 
 ### T77 — 语义路由层 `hybrid/src/semantic.rs`
@@ -252,5 +252,6 @@
 - [x] `AriaConfig` 增 `hybrid_semantic`(true)/`hybrid_semantic_timeout_ms`(800)/`hybrid_semantic_cache_size`(512)（全带 default）；serve `--hybrid-semantic on|off`；auth 默认写回；status 打印
 - [x] `AppState` 增 `semantic`/`health`；`build_state_with_hybrid_opts`；chat 改调 `route_hybrid`；执行结果回写 `HealthTracker`（超时/失败分类）
 - [x] `GET /v1/engine/routes`：`?n=`（默认 20，上限 100）返回 recent outcomes + health snapshot + semantic 状态
+- [x] 四轴合成：`EffectiveRouting` / `chat_policy`；serve 与 `/v1/engine/routes` 打印生效 `execution` / `mode` / `semantic` / `cloud` / `compute`（`semantic.applicable` 与配置 `enabled` 区分）
 - [x] 单测：routes 端点字段、fake 语义层采纳 E2E（`semantic-cloud` + outcome layer=semantic）
 - [x] `max_tokens` 设置则本地/云端原样使用；未设置则本地至 stop 或剩余 context（不默认 16），云端省略；`CloudClient` 超时 60s

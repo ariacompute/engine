@@ -7,6 +7,7 @@
 //! off to the semantic routing layer. Rule outcomes stay consistent with
 //! `Router::project()` for every hard constraint.
 
+use crate::policy::{chat_policy, ChatPolicy};
 use crate::route::{ExecutionMode, ParetoMode, RouteAction, RouteSignal};
 
 /// Fraction of the context limit at/above which a prompt counts as long-context.
@@ -237,6 +238,7 @@ impl RuleEngine {
                         "rule:force_cloud" => "rule:force_cloud_but_unavailable",
                         "rule:modality_unsupported" => "rule:modality_but_unavailable",
                         "rule:context_overflow" => "rule:context_overflow_but_unavailable",
+                        "rule:chat_prefer_cloud" => "rule:chat_prefer_cloud_but_unavailable",
                         _ => "rule:failures_upgrade_but_unavailable",
                     },
                 )
@@ -265,7 +267,17 @@ impl RuleEngine {
             return RuleDecision::undecided("rule:agent_task");
         }
         if kind == RequestKind::Chat {
-            return RuleDecision::undecided("rule:chat_task");
+            // Chat policy is mode-driven (see §3.4.2): Cost asks the semantic
+            // layer; Balance/Intelligence prefer cloud without the 800ms
+            // classifier (timeout or action=local would keep a 1B device model).
+            match chat_policy(self.mode) {
+                ChatPolicy::NeedSemantic => {
+                    return RuleDecision::undecided("rule:chat_task");
+                }
+                ChatPolicy::PreferCloud => {
+                    return hard_cloud(signal.cloud_available, "rule:chat_prefer_cloud", 0.75);
+                }
+            }
         }
 
         // R10/R11: complexity neighborhood → semantic; clearly above → cloud.
@@ -404,9 +416,9 @@ mod tests {
         assert_eq!(d.reason, "rule:agent_task");
 
         let d = e.evaluate(&sig(), "Introduce Rust/C/C++ languages");
-        assert_eq!(d.action, None);
-        assert!(d.need_semantic);
-        assert_eq!(d.reason, "rule:chat_task");
+        assert_eq!(d.action, Some(RouteAction::CloudHandoff));
+        assert!(!d.need_semantic);
+        assert_eq!(d.reason, "rule:chat_prefer_cloud");
 
         let mut s = sig();
         s.context_tokens = 90;
@@ -473,6 +485,12 @@ mod tests {
         assert!(!d.need_semantic);
 
         let d = e.evaluate(&sig(), &"plain chat ".repeat(20));
+        assert_eq!(d.action, Some(RouteAction::CloudHandoff));
+        assert!(!d.need_semantic);
+        assert_eq!(d.reason, "rule:chat_prefer_cloud");
+
+        let cost = RuleEngine::new(ExecutionMode::Hybrid, ParetoMode::Cost, 2);
+        let d = cost.evaluate(&sig(), "Introduce Rust/C/C++ languages");
         assert_eq!(d.action, None);
         assert!(d.need_semantic);
         assert_eq!(d.reason, "rule:chat_task");
@@ -481,23 +499,69 @@ mod tests {
     #[test]
     fn semantic_hint_categories_need_semantic() {
         let e = engine();
-        let cases: &[(&str, &str)] = &[
-            ("Prove sqrt(2) is irrational", "rule:chat_task"),
-            ("Write a Rust mutex wrapper", "rule:chat_task"),
-            ("Solve x^2+1=0", "rule:chat_task"),
-            ("summarize this paragraph", "rule:chat_task"),
-            ("写一首关于秋天的诗", "rule:chat_task"),
-            ("recommend a laptop", "rule:chat_task"),
-            ("Reply as JSON only", "rule:chat_task"),
-            ("legal advice on a contract", "rule:chat_task"),
-            ("implement binary search", "rule:agent_task"),
+        let cases: &[(&str, Option<RouteAction>, &str, bool)] = &[
+            (
+                "Prove sqrt(2) is irrational",
+                Some(RouteAction::CloudHandoff),
+                "rule:chat_prefer_cloud",
+                false,
+            ),
+            (
+                "Write a Rust mutex wrapper",
+                Some(RouteAction::CloudHandoff),
+                "rule:chat_prefer_cloud",
+                false,
+            ),
+            (
+                "Solve x^2+1=0",
+                Some(RouteAction::CloudHandoff),
+                "rule:chat_prefer_cloud",
+                false,
+            ),
+            (
+                "summarize this paragraph",
+                Some(RouteAction::CloudHandoff),
+                "rule:chat_prefer_cloud",
+                false,
+            ),
+            (
+                "写一首关于秋天的诗",
+                Some(RouteAction::CloudHandoff),
+                "rule:chat_prefer_cloud",
+                false,
+            ),
+            (
+                "recommend a laptop",
+                Some(RouteAction::CloudHandoff),
+                "rule:chat_prefer_cloud",
+                false,
+            ),
+            (
+                "Reply as JSON only",
+                Some(RouteAction::CloudHandoff),
+                "rule:chat_prefer_cloud",
+                false,
+            ),
+            (
+                "legal advice on a contract",
+                Some(RouteAction::CloudHandoff),
+                "rule:chat_prefer_cloud",
+                false,
+            ),
+            ("implement binary search", None, "rule:agent_task", true),
         ];
-        for (prompt, reason) in cases {
+        for (prompt, action, reason, need_sem) in cases {
             let d = e.evaluate(&sig(), prompt);
-            assert!(d.need_semantic, "prompt {prompt:?} should consult semantic");
-            assert_eq!(d.action, None, "prompt {prompt:?}");
+            assert_eq!(d.need_semantic, *need_sem, "prompt {prompt:?}");
+            assert_eq!(d.action, *action, "prompt {prompt:?}");
             assert_eq!(d.reason, *reason, "prompt {prompt:?}");
         }
+
+        let mut no_cloud = sig();
+        no_cloud.cloud_available = false;
+        let d = e.evaluate(&no_cloud, "Introduce Rust/C/C++ languages");
+        assert_eq!(d.action, Some(RouteAction::Local));
+        assert_eq!(d.reason, "rule:chat_prefer_cloud_but_unavailable");
         for greet in ["hi", "Hello", "ok", "thanks", "谢谢"] {
             let d = e.evaluate(&sig(), greet);
             assert!(

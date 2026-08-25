@@ -73,9 +73,32 @@ aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profi
 python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engine_profile_qwen3.json
 ```
 
-In `--hybrid-execution hybrid`, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `--hybrid-execution device` never handoffs; `--hybrid-execution cloud` always handoffs (privacy-sensitive requests still stay local). Short greetings stay on-device (`model` is the local bundle name). Uncertain tasks consult the semantic layer and may hand off (knowledge, reasoning, code, math, translate/summarize, creative, compare/recommend, constrained format); a cloud reply uses `model: "ariacompute/ariamodel"`. Client `max_tokens` is used as-is when set (local decode and cloud handoff). If omitted, local decode runs until stop or remaining context and cloud omits the field. Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway. HTTP wait cap is `DEFAULT_CLOUD_CHAT_TIMEOUT_MS` (**60s**, compile-time; not `hybrid_semantic_timeout_ms`). A full `ariamodel` reply with reasoning can take >25s.
+Routing is two orthogonal layers (local compute vs edge/cloud routing):
 
-Routing is two-layer (rule layer fast path + semantic layer slow path). Deterministic rules decide greetings in <5ms; uncertain ones (complexity near the mode cutoff, agentic/long-context, knowledge/reasoning/code/math/translate/creative/compare/format chat) consult the **semantic layer**, which asks the cloud gateway for a structured JSON intent decision (`enable_thinking=false`, cached 60s, ≤800ms). Semantic disabled / timeout / failure silently falls back to the rule layer — never errors. Backend health scores (success/failure/timeout) feed a fallback flip; hard constraints (device/privacy) are never flipped. Inspect recent decisions and health via `GET /v1/engine/routes?n=20`; disable the semantic layer per process with `--hybrid-semantic off`.
+```mermaid
+flowchart TD
+  req[ChatRequest]
+  exec{execution}
+  compute[compute auto cpu cuda]
+  local[Local decode]
+  cloud[Cloud handoff]
+  req --> exec
+  exec -->|device| local
+  exec -->|cloud| cloud
+  exec -->|hybrid| modeSem[mode plus semantic]
+  modeSem -->|Local| local
+  modeSem -->|CloudHandoff| cloud
+  local --> compute
+  cloud --> gw[gateway ariamodel]
+```
+
+**`compute` (`auto|cpu|cuda`) is not a hybrid switch** — it only selects GEMM for **local decode**. `execution=cloud` still loads the local bundle (privacy can fall back on-device), but a successful handoff does not use CUDA.
+
+**`execution` (`device|hybrid|cloud`)** chooses allowed backends: `device` never leaves the machine; `cloud` always handoffs (errors if unavailable; no silent local); `hybrid` picks Local vs Cloud using mode + semantic. **`mode` (`cost|balance|intelligence`) applies only under `hybrid`**: it sets the complexity cutoff and Chat policy. Cost consults the semantic layer for knowledge Chat; Balance/Intelligence send Chat straight to cloud (`rule:chat_prefer_cloud`, `model: "ariacompute/ariamodel"`). **`semantic` applies only when `execution=hybrid`, cloud credentials are present, and the switch is on.** Rules ask it for Agent / LongContext / complexity neighborhood / Cost Chat. Greetings, hard constraints, and Balance Chat-to-cloud skip it. `cloud_available=false` keeps hybrid traffic local (including Chat) and short-circuits semantic.
+
+Serve logs and `GET /v1/engine/routes` print the **effective** policy (`mode=unused` when not hybrid; `semantic=on|off|n/a` — `n/a` when the switch cannot fire). Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). Client `max_tokens` is used as-is when set (local decode and cloud handoff). If omitted, local decode runs until stop or remaining context and cloud omits the field. Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway. HTTP wait cap is `DEFAULT_CLOUD_CHAT_TIMEOUT_MS` (**60s**, compile-time; not `hybrid_semantic_timeout_ms`). A full `ariamodel` reply with reasoning can take >25s.
+
+The slow path asks the cloud gateway for a structured JSON intent decision (`enable_thinking=false`, cached 60s, ≤800ms). Semantic disabled / timeout / failure silently falls back to the rule layer — never errors. Backend health scores (success/failure/timeout) feed a fallback flip; hard constraints (device/privacy) are never flipped. Inspect recent decisions and health via `GET /v1/engine/routes?n=20`; disable the semantic layer per process with `--hybrid-semantic off`.
 
 ## OpenAI API
 

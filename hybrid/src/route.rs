@@ -36,6 +36,14 @@ impl ExecutionMode {
             ))),
         }
     }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Hybrid => "hybrid",
+            Self::Device => "device",
+            Self::Cloud => "cloud",
+        }
+    }
 }
 
 /// Pareto position on the cost–intelligence frontier.
@@ -49,6 +57,16 @@ pub enum ParetoMode {
     Balance,
     /// Prefer cloud; lower complexity cutoff before handoff.
     Intelligence,
+}
+
+impl ParetoMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Cost => "cost",
+            Self::Balance => "balance",
+            Self::Intelligence => "intelligence",
+        }
+    }
 }
 
 /// Final dispatch target.
@@ -244,6 +262,20 @@ impl Router {
     pub fn with_execution(mut self, execution: ExecutionMode) -> Self {
         self.execution = execution;
         self
+    }
+
+    /// Effective routing axes (mode/semantic unused unless `execution=hybrid`).
+    pub fn effective_routing(
+        &self,
+        semantic_enabled: bool,
+        cloud_available: bool,
+    ) -> crate::policy::EffectiveRouting {
+        crate::policy::EffectiveRouting::new(
+            self.execution,
+            self.mode,
+            semantic_enabled,
+            cloud_available,
+        )
     }
 
     /// Complexity at/above which hybrid mode prefers cloud.
@@ -587,20 +619,20 @@ mod tests {
         assert_eq!(d.action, r.route(&sig).action);
     }
 
-    /// Knowledge / intro prompts are Chat → semantic (not the Inline local fast path).
+    /// Knowledge / intro Chat prefers cloud on Balance (no 800ms classifier).
     #[tokio::test]
-    async fn hybrid_knowledge_prompt_consults_semantic() {
+    async fn hybrid_knowledge_prompt_prefers_cloud() {
         let r = Router::new().unwrap();
-        let sem = semantic_with(Some(sd(RouteAction::CloudHandoff, 0.9)));
+        let sem = semantic_with(Some(sd(RouteAction::Local, 0.99)));
         let health = HealthTracker::new();
         let sig = RouteSignal::from_confidence(0.95);
         let d = r
             .route_hybrid(&sig, "Introduce Rust/C/C++ languages", &sem, &health)
             .await;
         assert_eq!(d.action, RouteAction::CloudHandoff);
-        assert_eq!(d.layer, RouteLayer::Semantic);
-        assert!(d.semantic_consulted);
-        assert!(d.reason.starts_with("semantic:"));
+        assert_eq!(d.layer, RouteLayer::Rules);
+        assert!(!d.semantic_consulted);
+        assert_eq!(d.reason, "rule:chat_prefer_cloud");
     }
 
     /// Undecided rules → semantic adopted (high confidence).

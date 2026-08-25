@@ -73,9 +73,32 @@ aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profi
 python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engine_profile_qwen3.json
 ```
 
-在 `--hybrid-execution hybrid` 下，路由依据提示复杂度 / 上下文溢出 / modality / 本地失败 / `FORCE_CLOUD`。`cost` 更偏端侧；`intelligence` 更偏云端；`balance` 为中性自动。用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。`--hybrid-execution device` 永不切换云端；`--hybrid-execution cloud` 始终云端推理（隐私敏感请求仍留本地）。短问候留在端侧（`model` 为本地 bundle 名）。不确定任务会咨询语义层，可能 handoff（知识、推理、代码、数学、翻译/摘要、创作、对比/建议、约束格式）；云端回复的 `model` 为 `ariacompute/ariamodel`。客户端设置了 `max_tokens` 则本地 decode 与云端 handoff 都原样使用；未设置时本地跑到 stop 或剩余 context，云端省略该字段。云端 handoff 的 `model` 固定为 `ariacompute/ariamodel`。HTTP 等待上限为 `DEFAULT_CLOUD_CHAT_TIMEOUT_MS`（**60s**，编译期常量；不是 `hybrid_semantic_timeout_ms`）。带 reasoning 的完整 `ariamodel` 回复可能超过 25s。
+路由是两层正交轴（本机算力 vs 端云路由）：
 
-路由为两层结构（规则路由层快路径 + 语义路由层慢路径）：问候类请求在 <5ms 内由规则决定；「不确定」请求（复杂度落在模式阈值邻域、agent 类 / 长上下文、知识/推理/代码/数学/翻译/创作/对比/格式类 Chat）才咨询**语义层**——经云网关获取结构化 JSON 意图决策（`enable_thinking=false`、缓存 60s、单次 ≤800ms）。语义层关闭 / 超时 / 失败时静默回退规则层，不报错。后端健康分（成功 / 失败 / 超时）驱动回退翻转；硬约束（device / 隐私）永不翻转。经 `GET /v1/engine/routes?n=20` 查看最近决策与健康分；`--hybrid-semantic off` 可按进程关闭语义层。
+```mermaid
+flowchart TD
+  req[聊天请求]
+  exec{execution}
+  compute[compute auto cpu cuda]
+  local[本地 decode]
+  cloud[云端 handoff]
+  req --> exec
+  exec -->|device| local
+  exec -->|cloud| cloud
+  exec -->|hybrid| modeSem[mode plus semantic]
+  modeSem -->|Local| local
+  modeSem -->|CloudHandoff| cloud
+  local --> compute
+  cloud --> gw[gateway ariamodel]
+```
+
+**`compute`（`auto|cpu|cuda`）不是 hybrid 开关**——只决定 **本地 decode** 的 GEMM。`execution=cloud` 时仍加载本地 bundle（隐私硬约束会回本地），成功 handoff 不走 CUDA。
+
+**`execution`（`device|hybrid|cloud`）** 决定允许的后端：`device` 永不离机；`cloud` 始终 handoff（不可用则报错，不静默本地）；`hybrid` 按 mode + semantic 在 Local / Cloud 之间选择。**`mode`（`cost|balance|intelligence`）仅在 `hybrid` 下生效**：调节复杂度 cutoff 与 Chat 策略。Cost 的知识类 Chat 咨询语义层；Balance/Intelligence 的 Chat 规则直云（`rule:chat_prefer_cloud`，`model: "ariacompute/ariamodel"`）。**`semantic` 仅在 `execution=hybrid`、有云凭证且开关 on 时生效。** 规则只对 Agent / 长上下文 / 复杂度邻域 / Cost 的 Chat 提问。问候、硬约束、Balance Chat 直云都不问。`cloud_available=false` 时 hybrid 全部留本地（含 Chat），semantic 短路。
+
+serve 日志与 `GET /v1/engine/routes` 打印**生效**策略（非 hybrid 时 `mode=unused`；`semantic=on|off|n/a`——开关无法开火时为 `n/a`）。用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。客户端设置了 `max_tokens` 则本地 decode 与云端 handoff 都原样使用；未设置时本地跑到 stop 或剩余 context，云端省略该字段。云端 handoff 的 `model` 固定为 `ariacompute/ariamodel`。HTTP 等待上限为 `DEFAULT_CLOUD_CHAT_TIMEOUT_MS`（**60s**，编译期常量；不是 `hybrid_semantic_timeout_ms`）。带 reasoning 的完整 `ariamodel` 回复可能超过 25s。
+
+语义慢路径经云网关获取结构化 JSON 意图决策（`enable_thinking=false`、缓存 60s、单次 ≤800ms）。语义层关闭 / 超时 / 失败时静默回退规则层，不报错。后端健康分（成功 / 失败 / 超时）驱动回退翻转；硬约束（device / 隐私）永不翻转。经 `GET /v1/engine/routes?n=20` 查看最近决策与健康分；`--hybrid-semantic off` 可按进程关闭语义层。
 
 ## OpenAI API
 

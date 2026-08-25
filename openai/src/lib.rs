@@ -36,6 +36,8 @@ pub struct AppState {
     pub model_id: String,
     /// P2 semantic routing layer (slow path).
     pub semantic: SemanticRouter,
+    /// Config/CLI semantic switch (may be unused; see `semantic.applicable`).
+    pub semantic_configured: bool,
     /// P2 backend health scores (fallback chain).
     pub health: HealthTracker,
 }
@@ -153,11 +155,25 @@ struct RoutesQuery {
 
 async fn engine_routes(State(st): State<AppState>, Query(q): Query<RoutesQuery>) -> Response {
     let n = q.n.unwrap_or(20).min(100);
+    let cloud_available = st.cloud.is_available();
+    let effective = st
+        .router
+        .effective_routing(st.semantic_configured, cloud_available);
+    let compute = st
+        .session
+        .lock()
+        .map(|s| s.compute_label().to_string())
+        .unwrap_or_else(|_| "unknown".into());
     Json(json!({
         "policy_version": st.router.policy_version,
+        "execution": effective.execution.as_str(),
+        "mode": effective.mode_label(),
+        "compute": compute,
+        "cloud_available": cloud_available,
         "health": st.health.snapshot(),
         "semantic": {
-            "enabled": st.semantic.is_enabled(),
+            "enabled": st.semantic_configured,
+            "applicable": effective.semantic_applicable(),
             "cache_len": st.semantic.cache_len(),
         },
         "recent": st.router.outcomes.recent(n),
@@ -447,6 +463,14 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
         .router
         .route_hybrid(&signal, &prompt_text, &st.semantic, &st.health)
         .await;
+    eprintln!(
+        "hybrid route action={:?} reason={} layer={:?} semantic_consulted={} cloud={}",
+        decision.action,
+        decision.reason,
+        decision.layer,
+        decision.semantic_consulted,
+        signal.cloud_available
+    );
     let started = std::time::Instant::now();
 
     match decision.action {
@@ -729,12 +753,13 @@ fn build_state_with_family_opts(
     } else {
         local_id
     };
-    // P2: semantic layer reuses the cloud gateway client; without credentials
-    // (or when disabled) it short-circuits and routing is pure rule-based.
+    // Attach a Cloud semantic client only when the slow path can actually fire
+    // (hybrid + credentials + switch). Same observable behavior as is_enabled()==false.
+    let attach_semantic = hybrid.semantic_enabled
+        && router.execution == ExecutionMode::Hybrid
+        && cloud.is_available();
     let semantic = SemanticRouter::new(
-        hybrid
-            .semantic_enabled
-            .then(|| SemanticClient::Cloud(CloudSemanticClient::from_client(&cloud))),
+        attach_semantic.then(|| SemanticClient::Cloud(CloudSemanticClient::from_client(&cloud))),
         hybrid.semantic_timeout_ms,
         hybrid.semantic_cache_size,
     );
@@ -744,6 +769,7 @@ fn build_state_with_family_opts(
         cloud,
         model_id,
         semantic,
+        semantic_configured: hybrid.semantic_enabled,
         health: HealthTracker::new(),
     })
 }
@@ -917,6 +943,41 @@ mod tests {
         let bytes = res.into_body().collect().await.unwrap().to_bytes();
         let s = String::from_utf8_lossy(&bytes);
         assert!(s.contains("data:"));
+    }
+
+    #[tokio::test]
+    async fn knowledge_intro_balance_returns_gateway_model() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let state = build_state(
+            dir.path(),
+            Router::new().unwrap(),
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"from-cloud"}}]
+            }))),
+        )
+        .unwrap();
+        let app = app(state);
+        let res = app
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"Introduce Rust/C/C++ languages"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["choices"][0]["message"]["content"], "from-cloud");
+        assert_eq!(v["model"], CLOUD_GATEWAY_MODEL);
     }
 
     #[tokio::test]
@@ -1650,14 +1711,49 @@ mod tests {
         assert_eq!(res.status(), StatusCode::OK);
         let v = body_json(res).await;
         assert_eq!(v["policy_version"], POLICY_VERSION);
+        assert_eq!(v["execution"], "hybrid");
+        assert_eq!(v["mode"], "balance");
+        assert!(v["compute"].as_str().is_some());
+        assert_eq!(v["cloud_available"], true);
         assert!(v["health"]["local"].as_f64().unwrap() >= 0.5);
         assert!(v["health"]["cloud"].as_f64().unwrap() >= 0.0);
-        assert!(v["semantic"]["enabled"].is_boolean());
+        assert_eq!(v["semantic"]["enabled"], true);
+        assert_eq!(v["semantic"]["applicable"], true);
         let recent = v["recent"].as_array().unwrap();
         assert_eq!(recent.len(), 1);
         assert_eq!(recent[0]["layer"], "rules");
         assert_eq!(recent[0]["semantic_consulted"], false);
         assert_eq!(recent[0]["cloud_handoff"], false);
+    }
+
+    #[tokio::test]
+    async fn engine_routes_device_execution_marks_mode_and_semantic_unused() {
+        let dir = tempfile::tempdir().unwrap();
+        write_tiny_q4_bundle(dir.path()).unwrap();
+        let state = build_state(
+            dir.path(),
+            Router::new().unwrap().with_execution(ExecutionMode::Device),
+            CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(json!({
+                "choices":[{"message":{"content":"x"}}]
+            }))),
+        )
+        .unwrap();
+        let res = app(state)
+            .oneshot(
+                Request::builder()
+                    .uri("/v1/engine/routes")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let v = body_json(res).await;
+        assert_eq!(v["execution"], "device");
+        assert_eq!(v["mode"], "unused");
+        assert_eq!(v["cloud_available"], true);
+        assert_eq!(v["semantic"]["enabled"], true);
+        assert_eq!(v["semantic"]["applicable"], false);
     }
 
     /// P2: semantic layer adopted via injected fake (rules undecided band).
@@ -1706,8 +1802,7 @@ mod tests {
         let router = state.router.clone();
         let svc = app(state);
 
-        // 83 chars + analyze/reason keywords → complexity ≈ 0.71, inside the
-        // Balance neighborhood [0.675, 0.825) → rules undecided → semantic.
+        // Agent keyword → rules undecided → fake semantic adopted.
         let res = svc
             .oneshot(
                 Request::builder()
@@ -1716,7 +1811,7 @@ mod tests {
                     .header("content-type", "application/json")
                     .body(Body::from(
                         json!({
-                            "messages":[{"role":"user","content":"Please analyze and reason about this topic carefully xxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"}],
+                            "messages":[{"role":"user","content":"please refactor this module"}],
                             "max_tokens": 2
                         })
                         .to_string(),

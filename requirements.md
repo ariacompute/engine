@@ -167,7 +167,7 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 - `POST /v1/chat/completions`：非流式 JSON + `stream: true` 时 SSE。
 - `GET /v1/models`：按 `hybrid_execution` 列出模型 id——`cloud` 仅 `ariacompute/ariamodel`；`device` 为本地 bundle 目录名；`hybrid` 为本地目录名，若已配置 cloud 凭证则另附 `ariacompute/ariamodel`（不再用内部家族 path 如 `gemma/gemma-4-e2b-it` 冒充云端 id）。
 - 请求/响应字段对齐 OpenAI Chat Completions 常用子集（`messages`、`temperature`、`max_tokens`、`stream`）。`max_tokens` 可选：设置则本地 decode / 云 handoff 原样使用；未设置时本地不填默认 16（decode 至 stop 或剩余 context），云端省略该字段。
-- `GET /v1/engine/routes`（P2 观测端点，只读）：返回最近 N 条路由 `RouteOutcome`（含 `layer` / `confidence` / `semantic_consulted`）+ Local/Cloud 健康分快照 + `policy_version`；`?n=` 可选（默认 20，上限 100）。
+- `GET /v1/engine/routes`（P2 观测端点，只读）：返回最近 N 条路由 `RouteOutcome`（含 `layer` / `confidence` / `semantic_consulted`）+ Local/Cloud 健康分快照 + `policy_version` + **生效** `execution` / `mode`（非 hybrid 为 `unused`）/ `compute` / `cloud_available` / `semantic.enabled`（配置开关）/ `semantic.applicable`（真正会咨询）；`?n=` 可选（默认 20，上限 100）。
 - **CLI（`aria-engine`）**
   - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。
   - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`upgrade [version]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution] [--hybrid-semantic on|off] [--compute] [--profile]`；`-h` / `-v`。
@@ -198,6 +198,26 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 - `auth`：提示 API key → **用 key 探测** Dashboard（`GET /api/dashboard/models`）判定 `.com` / `.cn`，写入匹配的 `cloud_url`/`site_url`/`upgrade_url`（同 TLD）；两端均失败时回退 locale + 连通性。`list`/`download` 启动时若 URL 不一致或 key 被当前 site 拒绝会自动纠偏并回写 config（含刷新 `upgrade_url`）。
 - Gateway / site / upgrade 组织根始终成对（同为 `.com` 或同为 `.cn`）；`download` 公开 hub 与 site 同区且不交叉（`.com`→HF，`.cn`→ModelScope），不与 Dashboard 竞速或互退。
 
+### 3.4.2 四轴合成（compute ⊥ execution）
+
+两层正交，互不覆盖：
+
+- **compute**（`auto` \| `cpu` \| `cuda`）：只作用于 **Local decode** 的 GEMM。**不是** hybrid 开关。`execution=cloud` 时仍加载本地 bundle（隐私硬约束会回本地），成功 handoff 不走 CUDA。
+- **execution**（`device` \| `hybrid` \| `cloud`）：允许的后端。`device` = 永不离机；`cloud` = 始终 handoff（不可用则报错，不静默本地）；`hybrid` = 按 mode/semantic 二选一。
+- **mode**（`cost` \| `balance` \| `intelligence`）：**仅 `execution=hybrid` 有效**。调节复杂度 cutoff，以及 Chat 策略（Cost 问语义层；Balance/Intelligence 知识类 Chat 直接云）。
+- **semantic**：**仅 `execution=hybrid` 且 `cloud_available` 且开关 on 才生效**。只处理规则 `need_semantic` 的请求（Agent / LongContext / 复杂度邻域 / Cost 的 Chat）。问候、硬约束、Balance Chat 直云都不问。
+
+合成后的有效路由（`cloud_available=true`，semantic on）：
+
+| execution | mode | Hello | Introduce/Chat | Agent |
+|-----------|------|-------|----------------|-------|
+| `device` | 忽略 | Local | Local | Local |
+| `cloud` | 忽略 | CloudHandoff | CloudHandoff | CloudHandoff |
+| `hybrid` | `cost` | Local | 语义层 | 语义层 |
+| `hybrid` | `balance` \| `intelligence` | Local | 规则直云 `rule:chat_prefer_cloud` | 语义层 |
+
+`cloud_available=false` 且 hybrid：全部留本地（含 Chat）；semantic 短路。serve listen 与 `GET /v1/engine/routes` 打印**生效**策略：`semantic=on\|off\|n/a`（配置开但非 hybrid / 无凭证时为 `n/a`，避免误导）。
+
 ### 3.5 `aria-hybrid`
 
 - **P0**
@@ -211,13 +231,13 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
   - `ProjectionBand::{MustLocal, LocalOk, PreferCloud}`；决策由投影 + 模式复杂度阈值合成。
   - chat 路径用 `estimate_route_signals(prompt, context_limit)` 填充 `complexity` / `context_tokens`。
 - **P2（规则路由层 + 语义路由层，`route_hybrid`）**
-  - **规则路由层（快路径，`rules.rs`）**：`RuleEngine` 确定性规则链，零 LLM 调用；输入 `RequestKind`（由 prompt 分类：`Inline` / `Chat` / `Agent` / `LongContext` / `Media`）+ `RouteSignal` + Pareto 阈值；输出 `RuleDecision{action: Option<RouteAction>, confidence, reason, need_semantic}`。硬约束（`execution` / privacy / `force_cloud` / modality / context_overflow / failures ≥ upgrade）→ 高置信直接决策，**不走语义层**。复杂度落在 `cutoff × [0.9, 1.1]` 邻域、`Agent`、`LongContext`、或 **Chat** → `action=None` 且 `need_semantic=true`。仅 Inline 问候（`hi` / `Hello` / `ok` / `谢谢`，无任务词、<80 字）直接 Local。
-  - **应交语义层的问句类别**（规则只判「要不要问」，`intent` 由语义 JSON 填写；短祈使句也须命中，禁止漏成 Inline）：知识/讲解（introduce / explain / `?` / 介绍）；推理/多步（prove / 证明 / 推导）；代码生成或审查（`write a` / implement / 写一个 / 实现）；数学/STEM（solve / 计算 / 解方程）；翻译/改写/摘要（translate / summarize / 翻译 / 总结）；创作（poem / 诗 / 写一封 / 角色扮演）；对比/建议（recommend / 哪个好 / 选型）；约束格式（as json / schema / 只输出）；专业咨询词（legal advice / 投资建议）——若 `privacy_sensitive` 则硬留本地。≥80 字普通对话同样 `Chat`。
+  - **规则路由层（快路径，`rules.rs`）**：`RuleEngine` 确定性规则链，零 LLM 调用；输入 `RequestKind`（由 prompt 分类：`Inline` / `Chat` / `Agent` / `LongContext` / `Media`）+ `RouteSignal` + Pareto 阈值；输出 `RuleDecision{action: Option<RouteAction>, confidence, reason, need_semantic}`。硬约束（`execution` / privacy / `force_cloud` / modality / context_overflow / failures ≥ upgrade）→ 高置信直接决策，**不走语义层**。Chat 策略由 `chat_policy(mode)` 给出（§3.4.2）：Cost → `need_semantic`（`rule:chat_task`）；Balance/Intelligence → 云可用时直接 `CloudHandoff`（`rule:chat_prefer_cloud`）。`Agent` / `LongContext` / 复杂度邻域 → `need_semantic`。仅 Inline 问候（`hi` / `Hello` / `ok` / `谢谢`，无任务词、<80 字）直接 Local。云不可用时 PreferCloud Chat → `rule:chat_prefer_cloud_but_unavailable` 留本地。
+  - **Chat / Agent 分类词**（规则只判种类，是否咨询语义层见 §3.4.2；短祈使句也须命中，禁止漏成 Inline）：知识/讲解（introduce / explain / `?` / 介绍）；推理/多步（prove / 证明 / 推导）；代码生成或审查（`write a` / implement / 写一个 / 实现）；数学/STEM（solve / 计算 / 解方程）；翻译/改写/摘要（translate / summarize / 翻译 / 总结）；创作（poem / 诗 / 写一封 / 角色扮演）；对比/建议（recommend / 哪个好 / 选型）；约束格式（as json / schema / 只输出）；专业咨询词（legal advice / 投资建议）——若 `privacy_sensitive` 则硬留本地。≥80 字普通对话同样 `Chat`。
   - **语义路由层（慢路径，`semantic.rs`）**：`SemanticClient` 抽象（生产 `CloudSemanticClient` 复用 `CloudClient::chat`，system prompt 强约束输出严格 JSON `{"action":"local"|"cloud","confidence":0..1,"intent":"…","reason":"…"}`，请求带 `enable_thinking=false` 以免 thinking 网关撑破 800ms；测试注入 fake）；`SemanticRouter` 负责决策缓存（归一化 prompt 哈希 key + TTL 60s + 容量上限淘汰）、同 key 单飞去重、`tokio::time::timeout` 包裹。未启用 / 无云凭证 / 超时 / 非 2xx / JSON 非法或字段越界 → 返回 `None` **静默回退规则层**（禁止报错、禁止 panic、禁止吞错后产生误导性决策）。云端 chat 响应 `model` 写为 `ariacompute/ariamodel`（禁止沿用本地 bundle 名）。
   - **健康度回退链（`health.rs`）**：`HealthTracker` 维护 Local/Cloud 双后端分数（初值 1.0；成功 +0.05 封顶 1.0；失败 −0.20；超时 −0.10；底线 0.0；`healthy` = 分数 ≥ 0.5）；`snapshot()` 供观测端点。仅软决策可翻转：选定后端不健康且备选健康时翻转，Cloud 翻转另须 `cloud_available`；硬约束（`ProjectionBand::MustLocal`）永不翻转。
   - `Router::route_hybrid(&self, signal, prompt, semantic, health).await -> RouteDecision`：规则快路径 →（`need_semantic`）语义慢路径（采纳阈值 `confidence ≥ 0.6` 且不与硬约束冲突）→ 健康翻转 → 复用既有 `apply_stickiness` 粘性。**`route()` / `route_confidence()` 及全部 P0/P1 行为零变化**（既有单测原样通过）。
   - `RouteDecision` 增 `layer`（`rules` \| `semantic`）/ `confidence` / `semantic_consulted`；`RouteOutcome` 增同三字段 + `semantic_latency_ms`；一律 `#[serde(default)]`，既有 serde roundtrip 与对外 JSON 兼容。语义层采纳的决策 `policy_version` 追加 `+semantic`。
-  - 观测：复用 `OutcomeStore.recent(n)` + `HealthTracker::snapshot()`，经 `GET /v1/engine/routes` 暴露（§3.4）。
+  - 观测：复用 `OutcomeStore.recent(n)` + `HealthTracker::snapshot()` + 生效轴（§3.4.2），经 `GET /v1/engine/routes` 暴露（§3.4）。
   - 配置：§3.4.1 三字段 + CLI `--hybrid-semantic on|off`（仅覆盖本进程）；**禁止**新增任何环境变量。
   - 单测：规则链各规则命中 / 邻域触发语义 / 默认回退；语义 JSON 合法·非法·缺字段·越界 / 缓存命中·TTL 过期·容量淘汰·单飞 / 超时与未启用降级；健康分增减·阈值·翻转·MustLocal 不翻转；`route_hybrid` 快路径命中 / 语义采纳 / 语义失败回退 / 健康翻转；`route()` 回归零变化。
 - `Router::new() -> Result<Self, EngineError>`；`route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。

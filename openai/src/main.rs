@@ -326,20 +326,25 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             semantic_cache_size: cfg.hybrid_semantic_cache_size,
         },
     )?;
+    let cloud_available = state.cloud.is_available();
     let compute_label = state
         .session
         .lock()
         .map(|s| s.compute_label().to_string())
         .unwrap_or_else(|_| "unknown".into());
+    let effective = state
+        .router
+        .effective_routing(state.semantic_configured, cloud_available);
     let app = app(state);
     let addr: SocketAddr = bind.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
     eprintln!(
-        "aria-openai listening on http://{addr} (model={} execution={:?} mode={:?} semantic={} compute={})",
+        "aria-openai listening on http://{addr} (model={} execution={} mode={} semantic={} cloud={} compute={})",
         model_path.display(),
-        execution,
-        mode,
-        semantic_enabled,
+        effective.execution.as_str(),
+        effective.mode_label(),
+        effective.semantic_label(),
+        cloud_available,
         compute_label
     );
     axum::serve(listener, app).await?;

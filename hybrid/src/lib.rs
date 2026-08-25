@@ -4,11 +4,13 @@
 //! rule layer (fast path) + semantic layer (slow path) + health fallback.
 
 mod health;
+mod policy;
 mod route;
 mod rules;
 mod semantic;
 
 pub use health::{BackendKind, HealthEvent, HealthSnapshot, HealthTracker, HEALTHY_THRESHOLD};
+pub use policy::{chat_policy, ChatPolicy, EffectiveRouting};
 pub use route::{
     ExecutionMode, OutcomeStore, ParetoMode, ProjectionBand, RouteAction, RouteDecision,
     RouteLayer, RouteOutcome, RouteSignal, Router, POLICY_VERSION,
