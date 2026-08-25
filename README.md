@@ -34,6 +34,8 @@ aria-engine auth
 aria-engine auth --status
 
 # Download models
+# .com → Hugging Face (export HF_TOKEN)
+# .cn  → ModelScope (export MODELSCOPE_API_TOKEN)
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
 aria-engine clean gemma-4-e2b-it_q4
@@ -52,7 +54,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 ```
 
-`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). It does not try Dashboard or the other hub. On a TTY it shows a green progress bar for the transfer.
+`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless a token is set: `HF_TOKEN` for Hugging Face, `MODELSCOPE_API_TOKEN` for ModelScope.
 
 `list` queries `{site_url}/api/dashboard/models` (requires `aria-engine auth`) and prints each downloadable bundle as `downloaded` / `not downloaded` (plus local-only caches).
 

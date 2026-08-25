@@ -34,6 +34,8 @@ aria-engine auth
 aria-engine auth --status
 
 # 下载模型
+# .com → Hugging Face（需 export HF_TOKEN）
+# .cn  → ModelScope（需 export MODELSCOPE_API_TOKEN）
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
 aria-engine clean gemma-4-e2b-it_q4
@@ -52,7 +54,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 ```
 
-`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope），不走 Dashboard，也不回退对区 hub。在 TTY 下会显示绿色下载进度条。
+`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：Hugging Face 使用环境变量 `HF_TOKEN`，ModelScope 使用 `MODELSCOPE_API_TOKEN`。
 
 `list` 查询 `{site_url}/api/dashboard/models`（需先 `aria-engine auth`），按可下载 bundle 列出并标记 `downloaded` / `not downloaded`（另附仅本地缓存项）。
 
