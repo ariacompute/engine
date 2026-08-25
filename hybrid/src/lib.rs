@@ -143,9 +143,9 @@ impl CloudClient {
         if let Some(mock) = &self.mock {
             return match mock {
                 MockMode::Success(v) => Ok(v.clone()),
-                MockMode::FailStatus(code) => Err(EngineError::Cloud(format!(
-                    "mock non-2xx status {code}"
-                ))),
+                MockMode::FailStatus(code) => {
+                    Err(EngineError::Cloud(format!("mock non-2xx status {code}")))
+                }
                 MockMode::Timeout => Err(EngineError::Cloud("mock timeout".into())),
             };
         }
@@ -216,14 +216,18 @@ mod tests {
     #[test]
     fn execution_mode_device_and_cloud() {
         assert_eq!(ExecutionMode::parse("").unwrap(), ExecutionMode::Hybrid);
-        assert_eq!(ExecutionMode::parse("hybrid").unwrap(), ExecutionMode::Hybrid);
-        assert_eq!(ExecutionMode::parse("DEVICE").unwrap(), ExecutionMode::Device);
+        assert_eq!(
+            ExecutionMode::parse("hybrid").unwrap(),
+            ExecutionMode::Hybrid
+        );
+        assert_eq!(
+            ExecutionMode::parse("DEVICE").unwrap(),
+            ExecutionMode::Device
+        );
         assert_eq!(ExecutionMode::parse("cloud").unwrap(), ExecutionMode::Cloud);
         assert!(ExecutionMode::parse("gpu").is_err());
 
-        let device = Router::new()
-            .unwrap()
-            .with_execution(ExecutionMode::Device);
+        let device = Router::new().unwrap().with_execution(ExecutionMode::Device);
         let d = device.route(&RouteSignal {
             force_cloud: true,
             confidence: 0.0,
@@ -232,9 +236,7 @@ mod tests {
         assert_eq!(d.action, RouteAction::Local);
         assert_eq!(d.reason, "execution_device");
 
-        let cloud = Router::new()
-            .unwrap()
-            .with_execution(ExecutionMode::Cloud);
+        let cloud = Router::new().unwrap().with_execution(ExecutionMode::Cloud);
         let c = cloud.route(&RouteSignal::from_confidence(0.99));
         assert_eq!(c.action, RouteAction::CloudHandoff);
         assert_eq!(c.reason, "execution_cloud");
@@ -258,9 +260,7 @@ mod tests {
     fn pareto_modes_complexity_cutoffs() {
         let base = Router::new().unwrap();
         let cost = Router::new().unwrap().with_mode(ParetoMode::Cost);
-        let intel = Router::new()
-            .unwrap()
-            .with_mode(ParetoMode::Intelligence);
+        let intel = Router::new().unwrap().with_mode(ParetoMode::Intelligence);
         assert!((base.complexity_cutoff() - 0.75).abs() < 1e-6);
         assert!((cost.complexity_cutoff() - 0.90).abs() < 1e-6);
         assert!((intel.complexity_cutoff() - 0.40).abs() < 1e-6);
@@ -323,7 +323,11 @@ mod tests {
 
     #[test]
     fn context_overflow_and_force_cloud_all_modes() {
-        for mode in [ParetoMode::Cost, ParetoMode::Balance, ParetoMode::Intelligence] {
+        for mode in [
+            ParetoMode::Cost,
+            ParetoMode::Balance,
+            ParetoMode::Intelligence,
+        ] {
             let r = Router::new().unwrap().with_mode(mode);
             let mut overflow = RouteSignal::from_confidence(0.95);
             overflow.complexity = 0.0;
@@ -498,9 +502,7 @@ mod tests {
         assert!(Router::new().is_ok());
         let r = Router::new().unwrap();
         assert_eq!(r.route_confidence(0.0).action, RouteAction::Local);
-        let intel = Router::new()
-            .unwrap()
-            .with_mode(ParetoMode::Intelligence);
+        let intel = Router::new().unwrap().with_mode(ParetoMode::Intelligence);
         let mut sig = RouteSignal::from_confidence(0.95);
         sig.complexity = 0.5;
         assert_eq!(intel.route(&sig).action, RouteAction::CloudHandoff);
@@ -615,9 +617,7 @@ mod tests {
 
     #[test]
     fn decision_and_outcome_serde_roundtrip() {
-        let r = Router::new()
-            .unwrap()
-            .with_mode(ParetoMode::Intelligence);
+        let r = Router::new().unwrap().with_mode(ParetoMode::Intelligence);
         let mut sig = RouteSignal::from_confidence(0.95);
         sig.complexity = 0.5;
         let d = r.route(&sig);

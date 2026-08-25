@@ -166,7 +166,7 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 - `serve(bind, model_dir, hybrid_opts)`（axum）。
 - `POST /v1/chat/completions`：非流式 JSON + `stream: true` 时 SSE。
 - `GET /v1/models`：按 `hybrid_execution` 列出模型 id——`cloud` 仅 `ariacompute/ariamodel`；`device` 为本地 bundle 目录名；`hybrid` 为本地目录名，若已配置 cloud 凭证则另附 `ariacompute/ariamodel`（不再用内部家族 path 如 `gemma/gemma-4-e2b-it` 冒充云端 id）。
-- 请求/响应字段对齐 OpenAI Chat Completions 常用子集（`messages`、`temperature`、`max_tokens`、`stream`）。
+- 请求/响应字段对齐 OpenAI Chat Completions 常用子集（`messages`、`temperature`、`max_tokens`、`stream`）。`max_tokens` 可选：设置则本地 decode / 云 handoff 原样使用；未设置时本地不填默认 16（decode 至 stop 或剩余 context），云端省略该字段。
 - `GET /v1/engine/routes`（P2 观测端点，只读）：返回最近 N 条路由 `RouteOutcome`（含 `layer` / `confidence` / `semantic_consulted`）+ Local/Cloud 健康分快照 + `policy_version`；`?n=` 可选（默认 20，上限 100）。
 - **CLI（`aria-engine`）**
   - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。
@@ -220,7 +220,7 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
   - 配置：§3.4.1 三字段 + CLI `--hybrid-semantic on|off`（仅覆盖本进程）；**禁止**新增任何环境变量。
   - 单测：规则链各规则命中 / 邻域触发语义 / 默认回退；语义 JSON 合法·非法·缺字段·越界 / 缓存命中·TTL 过期·容量淘汰·单飞 / 超时与未启用降级；健康分增减·阈值·翻转·MustLocal 不翻转；`route_hybrid` 快路径命中 / 语义采纳 / 语义失败回退 / 健康翻转；`route()` 回归零变化。
 - `Router::new() -> Result<Self, EngineError>`；`route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。
-- `CloudClient::new(base_url, api_key)`：OpenAI 兼容 HTTP；超时默认 **60s**（`DEFAULT_CLOUD_CHAT_TIMEOUT_MS`；完整 ariamodel 含 thinking 可 >25s）与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。**不转发**本地 `max_tokens`（gateway 把 reasoning 计入该预算；16/32 会 `finish_reason=length` 且 `content=""`）。**无** `from_env` / `ARIA_HYBRID_*`。
+- `CloudClient::new(base_url, api_key)`：OpenAI 兼容 HTTP；超时默认 **60s**（`DEFAULT_CLOUD_CHAT_TIMEOUT_MS`；完整 ariamodel 含 thinking 可 >25s）与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。客户端设置了 `max_tokens` 则原样转发；未设置则省略该字段（禁止填入默认 16：gateway 把 reasoning 计入该预算，会被截成 `finish_reason=length` 且 `content=""`）。**无** `from_env` / `ARIA_HYBRID_*`。
 - 单测：模式复杂度阈值、硬约束、粘性升级、投影、Outcome、Cloud mock 成功/失败。
 
 ### 3.6 错误类型

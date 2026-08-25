@@ -253,4 +253,4 @@
 - [x] `AppState` 增 `semantic`/`health`；`build_state_with_hybrid_opts`；chat 改调 `route_hybrid`；执行结果回写 `HealthTracker`（超时/失败分类）
 - [x] `GET /v1/engine/routes`：`?n=`（默认 20，上限 100）返回 recent outcomes + health snapshot + semantic 状态
 - [x] 单测：routes 端点字段、fake 语义层采纳 E2E（`semantic-cloud` + outcome layer=semantic）
-- [x] Cloud handoff 不转发本地 `max_tokens`；`CloudClient` 超时 60s（thinking 模型完整 content）
+- [x] `max_tokens` 设置则本地/云端原样使用；未设置则本地至 stop 或剩余 context（不默认 16），云端省略；`CloudClient` 超时 60s

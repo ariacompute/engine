@@ -335,10 +335,9 @@ fn decode_b64(s: &str) -> Result<Vec<u8>, EngineError> {
     Ok(out)
 }
 
-/// Cloud `ariamodel` counts thinking tokens against `max_tokens`. Forwarding the
-/// local decode budget (often 16/32) finishes in `reasoning` with empty `content`.
-/// Omit it so handoff matches a direct gateway curl.
-fn cloud_handoff_request(messages: &[ChatMessage]) -> CloudChatRequest {
+/// Forward the client's `max_tokens` when set. If omitted, do not fill a default
+/// of 16: gateway thinking models count reasoning against that budget.
+fn cloud_handoff_request(messages: &[ChatMessage], max_tokens: Option<u32>) -> CloudChatRequest {
     CloudChatRequest {
         model: CLOUD_GATEWAY_MODEL.to_string(),
         messages: messages
@@ -348,13 +347,26 @@ fn cloud_handoff_request(messages: &[ChatMessage]) -> CloudChatRequest {
                 content: m.content.clone(),
             })
             .collect(),
-        max_tokens: None,
+        max_tokens,
+    }
+}
+
+/// Client `max_tokens` as-is when set. If omitted, decode until stop or remaining
+/// context — never the old default of 16.
+fn resolve_local_max_tokens(
+    requested: Option<u32>,
+    prompt_len: usize,
+    context_length: usize,
+) -> Result<usize, EngineError> {
+    match requested {
+        Some(0) => Err(EngineError::InvalidParam("max_tokens must be > 0".into())),
+        Some(n) => Ok(n as usize),
+        None => Ok(context_length.saturating_sub(prompt_len).max(1)),
     }
 }
 
 async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Response, EngineError> {
-    let max_tokens = req.max_tokens.unwrap_or(16) as usize;
-    if max_tokens == 0 {
+    if req.max_tokens == Some(0) {
         return Err(EngineError::InvalidParam("max_tokens must be > 0".into()));
     }
     let user_text = req
@@ -438,7 +450,7 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
 
     match decision.action {
         RouteAction::CloudHandoff => {
-            let cloud_req = cloud_handoff_request(&req.messages);
+            let cloud_req = cloud_handoff_request(&req.messages, req.max_tokens);
             let v = match st.cloud.chat(&cloud_req).await {
                 Ok(v) => {
                     st.health.record(BackendKind::Cloud, HealthEvent::Success);
@@ -489,6 +501,11 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
                 last.content = prompt_text.clone();
             }
             let prompt = sess.encode_chat(&turns);
+            let max_tokens = resolve_local_max_tokens(
+                req.max_tokens,
+                prompt.len(),
+                sess.config().context_length,
+            )?;
             let gen = match sess.generate(
                 &prompt,
                 &GenerateOpts {
@@ -736,17 +753,33 @@ mod tests {
     use tower::ServiceExt;
 
     #[test]
-    fn cloud_handoff_omits_local_max_tokens() {
-        let req = cloud_handoff_request(&[ChatMessage {
+    fn local_max_tokens_forwards_or_uses_remaining_context() {
+        assert_eq!(resolve_local_max_tokens(Some(32), 10, 64).unwrap(), 32);
+        assert_eq!(resolve_local_max_tokens(None, 10, 64).unwrap(), 54);
+        assert_eq!(resolve_local_max_tokens(None, 0, 64).unwrap(), 64);
+        assert_eq!(resolve_local_max_tokens(None, 64, 64).unwrap(), 1);
+        assert_ne!(resolve_local_max_tokens(None, 0, 64).unwrap(), 16);
+        assert!(resolve_local_max_tokens(Some(0), 10, 64).is_err());
+    }
+
+    #[test]
+    fn cloud_handoff_forwards_client_max_tokens_or_omits() {
+        let messages = [ChatMessage {
             role: "user".into(),
             content: "Introduce Rust/C/C++ languages".into(),
-        }]);
-        assert_eq!(req.max_tokens, None);
-        assert_eq!(req.model, CLOUD_GATEWAY_MODEL);
-        let v = serde_json::to_value(&req).unwrap();
+        }];
+        let forwarded = cloud_handoff_request(&messages, Some(32));
+        assert_eq!(forwarded.max_tokens, Some(32));
+        assert_eq!(forwarded.model, CLOUD_GATEWAY_MODEL);
+        let v = serde_json::to_value(&forwarded).unwrap();
+        assert_eq!(v["max_tokens"], 32);
+
+        let omitted = cloud_handoff_request(&messages, None);
+        assert_eq!(omitted.max_tokens, None);
+        let v = serde_json::to_value(&omitted).unwrap();
         assert!(
             v.get("max_tokens").is_none(),
-            "gateway thinking models spend max_tokens on reasoning first"
+            "unset local max_tokens must not become the decode default of 16"
         );
     }
 
@@ -827,6 +860,32 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(res.status(), StatusCode::OK);
+        let capped = body_json(res).await;
+        assert!(capped["usage"]["completion_tokens"].as_u64().unwrap() <= 2);
+
+        let res = app
+            .clone()
+            .oneshot(
+                Request::builder()
+                    .method("POST")
+                    .uri("/v1/chat/completions")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({
+                            "messages":[{"role":"user","content":"hi"}]
+                        })
+                        .to_string(),
+                    ))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(res.status(), StatusCode::OK);
+        let omit = body_json(res).await;
+        assert!(
+            omit["usage"]["completion_tokens"].as_u64().unwrap() > 0,
+            "omitted max_tokens must still generate"
+        );
 
         let res = app
             .clone()
