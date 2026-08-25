@@ -73,7 +73,7 @@ aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profi
 python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engine_profile_qwen3.json
 ```
 
-In `--hybrid-execution hybrid`, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `--hybrid-execution device` never handoffs; `--hybrid-execution cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway.
+In `--hybrid-execution hybrid`, routing uses prompt complexity / context overflow / modality / local failures / `FORCE_CLOUD`. `cost` prefers on-device; `intelligence` prefers cloud; `balance` is neutral auto. Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). `--hybrid-execution device` never handoffs; `--hybrid-execution cloud` always handoffs (privacy-sensitive requests still stay local). Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway, omits local `max_tokens` (gateway thinking counts against that budget), and waits up to `DEFAULT_CLOUD_CHAT_TIMEOUT_MS` (**60s**, compile-time; not `hybrid_semantic_timeout_ms`). A full `ariamodel` reply with reasoning can take >25s.
 
 Routing is two-layer (rule layer fast path + semantic layer slow path). Deterministic rules decide most requests in <5ms; only uncertain ones (complexity near the mode cutoff, agentic/long-context prompts) consult the **semantic layer**, which asks the cloud gateway for a structured JSON intent decision (cached 60s, ≤800ms). Semantic disabled / timeout / failure silently falls back to the rule layer — never errors. Backend health scores (success/failure/timeout) feed a fallback flip; hard constraints (device/privacy) are never flipped. Inspect recent decisions and health via `GET /v1/engine/routes?n=20`; disable the semantic layer per process with `--hybrid-semantic off`.
 
@@ -93,7 +93,6 @@ curl -s http://127.0.0.1:8080/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
     "messages":[{"role":"user","content":"Hello"}],
-    "max_tokens": 32,
     "temperature": 0
   }' | jq .
 
@@ -102,7 +101,6 @@ curl -sN http://127.0.0.1:8080/v1/chat/completions \
   -H 'content-type: application/json' \
   -d '{
     "messages":[{"role":"user","content":"Hello"}],
-    "max_tokens": 32,
     "stream": true
   }'
 

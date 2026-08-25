@@ -261,10 +261,7 @@ impl Router {
             return (ProjectionBand::MustLocal, "execution_device".into());
         }
         if signal.privacy_sensitive {
-            return (
-                ProjectionBand::MustLocal,
-                "privacy_sensitive".into(),
-            );
+            return (ProjectionBand::MustLocal, "privacy_sensitive".into());
         }
         if self.execution == ExecutionMode::Cloud {
             // Force handoff; unavailable cloud still PreferCloud so chat errors
@@ -535,9 +532,7 @@ impl Router {
 mod tests {
     use super::*;
     use crate::health::{HealthEvent, HealthTracker};
-    use crate::semantic::{
-        FakeSemanticClient, SemanticClient, SemanticDecision, SemanticRouter,
-    };
+    use crate::semantic::{FakeSemanticClient, SemanticClient, SemanticDecision, SemanticRouter};
     use std::future::Future;
     use std::pin::Pin;
 
@@ -712,22 +707,34 @@ mod tests {
         let health = HealthTracker::new();
         let cases: Vec<(RouteSignal, &str)> = vec![
             (RouteSignal::from_confidence(0.95), "hi"),
-            (RouteSignal::from_confidence(0.95), "please refactor this module"),
-            ({
-                let mut s = RouteSignal::from_confidence(0.95);
-                s.complexity = 0.7;
-                s
-            }, "hi"),
-            ({
-                let mut s = RouteSignal::from_confidence(0.95);
-                s.complexity = 0.9;
-                s
-            }, "hi"),
-            ({
-                let mut s = RouteSignal::from_confidence(0.95);
-                s.force_cloud = true;
-                s
-            }, "hi"),
+            (
+                RouteSignal::from_confidence(0.95),
+                "please refactor this module",
+            ),
+            (
+                {
+                    let mut s = RouteSignal::from_confidence(0.95);
+                    s.complexity = 0.7;
+                    s
+                },
+                "hi",
+            ),
+            (
+                {
+                    let mut s = RouteSignal::from_confidence(0.95);
+                    s.complexity = 0.9;
+                    s
+                },
+                "hi",
+            ),
+            (
+                {
+                    let mut s = RouteSignal::from_confidence(0.95);
+                    s.force_cloud = true;
+                    s
+                },
+                "hi",
+            ),
         ];
         for (sig, prompt) in cases {
             let hybrid = r.route_hybrid(&sig, prompt, &sem, &health).await;

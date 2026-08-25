@@ -263,7 +263,12 @@ impl SemanticRouter {
 
     /// Disabled router: `consult` always returns `None` (pure rule path).
     pub fn disabled() -> Self {
-        Self::new(None, DEFAULT_SEMANTIC_TIMEOUT_MS, DEFAULT_SEMANTIC_CACHE_SIZE).with_enabled(false)
+        Self::new(
+            None,
+            DEFAULT_SEMANTIC_TIMEOUT_MS,
+            DEFAULT_SEMANTIC_CACHE_SIZE,
+        )
+        .with_enabled(false)
     }
 
     pub fn with_enabled(mut self, enabled: bool) -> Self {
@@ -276,11 +281,19 @@ impl SemanticRouter {
     }
 
     pub fn is_enabled(&self) -> bool {
-        self.enabled && self.client.as_ref().is_some_and(SemanticClient::is_available)
+        self.enabled
+            && self
+                .client
+                .as_ref()
+                .is_some_and(SemanticClient::is_available)
     }
 
     pub fn cache_len(&self) -> usize {
-        self.cache.lock().expect("semantic cache poisoned").entries.len()
+        self.cache
+            .lock()
+            .expect("semantic cache poisoned")
+            .entries
+            .len()
     }
 
     /// Consult the semantic layer. Any failure / disabled / timeout → `None`.
@@ -448,7 +461,11 @@ mod tests {
     #[tokio::test]
     async fn consult_success_and_cache_hit() {
         let calls = Arc::new(AtomicUsize::new(0));
-        let r = fake_router(Ok(decision(RouteAction::CloudHandoff, 0.9)), calls.clone(), 0);
+        let r = fake_router(
+            Ok(decision(RouteAction::CloudHandoff, 0.9)),
+            calls.clone(),
+            0,
+        );
         let d = r.consult(&sig(), "hello").await.unwrap();
         assert_eq!(d.action, RouteAction::CloudHandoff);
         let d2 = r.consult(&sig(), "hello").await.unwrap();
@@ -528,19 +545,30 @@ mod tests {
         let cloud = CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::Success(
             json!({"choices":[{"message":{"content":"plain chat answer"}}]}),
         ));
-        let r = SemanticRouter::new(Some(SemanticClient::Cloud(CloudSemanticClient::new(cloud))), 100, 8);
+        let r = SemanticRouter::new(
+            Some(SemanticClient::Cloud(CloudSemanticClient::new(cloud))),
+            100,
+            8,
+        );
         assert!(r.consult(&sig(), "hi").await.is_none());
 
         // Gateway failure → None.
         let cloud = CloudClient::new("http://127.0.0.1:9", "").with_mock(MockMode::FailStatus(503));
-        let r = SemanticRouter::new(Some(SemanticClient::Cloud(CloudSemanticClient::new(cloud))), 100, 8);
+        let r = SemanticRouter::new(
+            Some(SemanticClient::Cloud(CloudSemanticClient::new(cloud))),
+            100,
+            8,
+        );
         assert!(r.consult(&sig(), "hi").await.is_none());
     }
 
     #[test]
     fn cache_key_normalizes_prompt() {
         let s = sig();
-        assert_eq!(cache_key(&s, "  Hello   world "), cache_key(&s, "hello world"));
+        assert_eq!(
+            cache_key(&s, "  Hello   world "),
+            cache_key(&s, "hello world")
+        );
         let long = "x".repeat(400);
         assert_eq!(cache_key(&s, &long), cache_key(&s, &long[..256]));
         assert_ne!(cache_key(&s, "alpha"), cache_key(&s, "beta"));

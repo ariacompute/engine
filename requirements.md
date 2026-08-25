@@ -220,7 +220,7 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
   - 配置：§3.4.1 三字段 + CLI `--hybrid-semantic on|off`（仅覆盖本进程）；**禁止**新增任何环境变量。
   - 单测：规则链各规则命中 / 邻域触发语义 / 默认回退；语义 JSON 合法·非法·缺字段·越界 / 缓存命中·TTL 过期·容量淘汰·单飞 / 超时与未启用降级；健康分增减·阈值·翻转·MustLocal 不翻转；`route_hybrid` 快路径命中 / 语义采纳 / 语义失败回退 / 健康翻转；`route()` 回归零变化。
 - `Router::new() -> Result<Self, EngineError>`；`route(&self, &RouteSignal) -> RouteDecision`（兼容 `route_confidence(f32)`）。
-- `CloudClient::new(base_url, api_key)`：OpenAI 兼容 HTTP；超时与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。**无** `from_env` / `ARIA_HYBRID_*`。
+- `CloudClient::new(base_url, api_key)`：OpenAI 兼容 HTTP；超时默认 **60s**（`DEFAULT_CLOUD_CHAT_TIMEOUT_MS`；完整 ariamodel 含 thinking 可 >25s）与非 2xx → `EngineError::Cloud`；handoff 请求 `model` 固定为 `ariacompute/ariamodel`（`CLOUD_GATEWAY_MODEL`）。**不转发**本地 `max_tokens`（gateway 把 reasoning 计入该预算；16/32 会 `finish_reason=length` 且 `content=""`）。**无** `from_env` / `ARIA_HYBRID_*`。
 - 单测：模式复杂度阈值、硬约束、粘性升级、投影、Outcome、Cloud mock 成功/失败。
 
 ### 3.6 错误类型

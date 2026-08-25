@@ -335,6 +335,23 @@ fn decode_b64(s: &str) -> Result<Vec<u8>, EngineError> {
     Ok(out)
 }
 
+/// Cloud `ariamodel` counts thinking tokens against `max_tokens`. Forwarding the
+/// local decode budget (often 16/32) finishes in `reasoning` with empty `content`.
+/// Omit it so handoff matches a direct gateway curl.
+fn cloud_handoff_request(messages: &[ChatMessage]) -> CloudChatRequest {
+    CloudChatRequest {
+        model: CLOUD_GATEWAY_MODEL.to_string(),
+        messages: messages
+            .iter()
+            .map(|m| CloudMessage {
+                role: m.role.clone(),
+                content: m.content.clone(),
+            })
+            .collect(),
+        max_tokens: None,
+    }
+}
+
 async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Response, EngineError> {
     let max_tokens = req.max_tokens.unwrap_or(16) as usize;
     if max_tokens == 0 {
@@ -421,18 +438,7 @@ async fn handle_chat(st: &AppState, req: ChatCompletionRequest) -> Result<Respon
 
     match decision.action {
         RouteAction::CloudHandoff => {
-            let cloud_req = CloudChatRequest {
-                model: CLOUD_GATEWAY_MODEL.to_string(),
-                messages: req
-                    .messages
-                    .iter()
-                    .map(|m| CloudMessage {
-                        role: m.role.clone(),
-                        content: m.content.clone(),
-                    })
-                    .collect(),
-                max_tokens: Some(max_tokens as u32),
-            };
+            let cloud_req = cloud_handoff_request(&req.messages);
             let v = match st.cloud.chat(&cloud_req).await {
                 Ok(v) => {
                     st.health.record(BackendKind::Cloud, HealthEvent::Success);
@@ -728,6 +734,21 @@ mod tests {
     use axum::http::{Request, StatusCode};
     use http_body_util::BodyExt;
     use tower::ServiceExt;
+
+    #[test]
+    fn cloud_handoff_omits_local_max_tokens() {
+        let req = cloud_handoff_request(&[ChatMessage {
+            role: "user".into(),
+            content: "Introduce Rust/C/C++ languages".into(),
+        }]);
+        assert_eq!(req.max_tokens, None);
+        assert_eq!(req.model, CLOUD_GATEWAY_MODEL);
+        let v = serde_json::to_value(&req).unwrap();
+        assert!(
+            v.get("max_tokens").is_none(),
+            "gateway thinking models spend max_tokens on reasoning first"
+        );
+    }
 
     async fn body_json(res: Response) -> Value {
         let bytes = res.into_body().collect().await.unwrap().to_bytes();

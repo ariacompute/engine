@@ -27,6 +27,9 @@ use serde_json::Value;
 /// Model id posted to Aria gateway on cloud handoff.
 pub const CLOUD_GATEWAY_MODEL: &str = "ariacompute/ariamodel";
 
+/// Gateway thinking models often take >25s for a full answer; 5s would cut them off.
+pub const DEFAULT_CLOUD_CHAT_TIMEOUT_MS: u64 = 60_000;
+
 /// Estimate hybrid routing signals from prompt text and model context limit.
 ///
 /// - `context_tokens`: ~chars/4 heuristic (OpenAI-style rough estimate)
@@ -121,7 +124,7 @@ impl CloudClient {
         Self {
             base_url: base_url.into(),
             api_key: api_key.into(),
-            timeout_ms: 5_000,
+            timeout_ms: DEFAULT_CLOUD_CHAT_TIMEOUT_MS,
             mock: None,
         }
     }
@@ -182,6 +185,7 @@ mod tests {
     #[test]
     fn cloud_gateway_model_id() {
         assert_eq!(CLOUD_GATEWAY_MODEL, "ariacompute/ariamodel");
+        assert_eq!(DEFAULT_CLOUD_CHAT_TIMEOUT_MS, 60_000);
         let req = CloudChatRequest {
             model: CLOUD_GATEWAY_MODEL.to_string(),
             messages: vec![],
@@ -189,6 +193,13 @@ mod tests {
         };
         let v = serde_json::to_value(&req).unwrap();
         assert_eq!(v["model"], "ariacompute/ariamodel");
+        let omit = CloudChatRequest {
+            model: CLOUD_GATEWAY_MODEL.to_string(),
+            messages: vec![],
+            max_tokens: None,
+        };
+        let v = serde_json::to_value(&omit).unwrap();
+        assert!(v.get("max_tokens").is_none());
     }
 
     #[test]
@@ -643,6 +654,7 @@ mod tests {
     fn cloud_client_availability_without_credentials() {
         let c = CloudClient::new("http://127.0.0.1:9", "");
         assert!(!c.is_available());
+        assert_eq!(c.timeout_ms, DEFAULT_CLOUD_CHAT_TIMEOUT_MS);
     }
 
     #[tokio::test]

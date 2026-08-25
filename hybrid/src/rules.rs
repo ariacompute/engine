@@ -139,11 +139,7 @@ impl RuleEngine {
         }
         // R3: hard cloud constraint.
         if self.execution == ExecutionMode::Cloud {
-            return RuleDecision::decided(
-                RouteAction::CloudHandoff,
-                1.0,
-                "rule:execution_cloud",
-            );
+            return RuleDecision::decided(RouteAction::CloudHandoff, 1.0, "rule:execution_cloud");
         }
 
         // R4..R7: signal-driven hard upgrades (cloud unavailable → must local).
