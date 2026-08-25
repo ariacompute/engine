@@ -7,7 +7,7 @@
 五层：`openai`（OpenAI 兼容 API）→ `hybrid`（端云路由）→ `inference`（全家族推理）
 → `graph`（零拷贝计算图）→ `kernel`（NEON / AVX2 scalar + 可选 CUDA）。
 权重格式：**仅** Aria bundle（`aria-quant-bundle` **v1|v2**：`weight.bin` + `config.json` + tokenizer）。
-评测：`bench/` Python，对标 aria / llama.cpp / ollama / vllm，产出 JSON+MD（report-only）。
+评测：`bench/` Python，对标 aria / llama.cpp / ollama / vllm / sglang，产出 JSON+MD（report-only）。
 
 ## 架构
 `openai` → `hybrid` → `inference`（Bundle + Session + 家族图）→ `graph` → `kernel`。

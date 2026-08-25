@@ -45,7 +45,7 @@ FAMILIES: tuple[Family, ...] = (
     Family("lingbot/lingbot-vla-v2-6b", "robbyant/lingbot-vla-v2-6b", "vla"),
 )
 
-BACKEND_IDS = ("aria", "llamacpp", "ollama", "vllm")
+BACKEND_IDS = ("aria", "llamacpp", "ollama", "vllm", "sglang")
 
 
 def lookup(path: str) -> Family | None:

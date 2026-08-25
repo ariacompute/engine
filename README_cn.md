@@ -216,6 +216,7 @@ python -m bench run \
   --backend llamacpp=http://127.0.0.1:8081 \
   --backend ollama=http://127.0.0.1:11434 \
   --backend vllm=http://127.0.0.1:8000 \
+  --backend sglang=http://127.0.0.1:30000 \
   --max-tokens 64 --warmup 1 --runs 3 \
   --report ./out/bench_report.json
 # 同时会写入 ./out/bench_report.md

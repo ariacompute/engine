@@ -23,7 +23,7 @@ from bench.runner import pick_ref_backend, run_bench  # noqa: E402
 
 class TestFamilies(unittest.TestCase):
     def test_registry_count_and_kinds(self):
-        self.assertEqual(len(FAMILIES), 27)
+        self.assertEqual(len(FAMILIES), 28)
         kinds = {f.kind for f in FAMILIES}
         self.assertEqual(kinds, {"text", "vl", "vla"})
         self.assertEqual(FAMILIES[0].path, "qwen/qwen3-0.6b")

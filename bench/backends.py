@@ -1,4 +1,4 @@
-"""OpenAI-compatible chat clients for aria / llamacpp / ollama / vllm."""
+"""OpenAI-compatible chat clients for aria / llamacpp / ollama / vllm / sglang."""
 
 from __future__ import annotations
 
@@ -10,7 +10,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 
-BACKEND_IDS = ("aria", "llamacpp", "ollama", "vllm")
+BACKEND_IDS = ("aria", "llamacpp", "ollama", "vllm", "sglang")
 
 
 @dataclass
