@@ -482,6 +482,10 @@ mod tests {
             Some("qwen/qwen3-0.6b")
         );
         assert_eq!(
+            infer_family_path("gemma-3-1b-it_q326"),
+            Some("gemma/gemma-3-1b-it")
+        );
+        assert_eq!(
             infer_family_path("gemma-3-1b-it_q326_channel"),
             Some("gemma/gemma-3-1b-it")
         );

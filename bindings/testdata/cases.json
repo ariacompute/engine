@@ -2,6 +2,7 @@
   "version": 1,
   "cases": [
     {"id": "init_ok", "intent": "Valid bundle path", "assert": "handle non-null; destroy succeeds"},
+    {"id": "init_infers_family_from_dirname", "intent": "Hub cache dirname such as gemma-3-1b-it_q326", "assert": "infers gemma/gemma-3-1b-it; does not demand Gemma-4 PLE"},
     {"id": "init_missing_path", "intent": "Bad path", "assert": "null/err; last_error non-empty"},
     {"id": "complete_ok", "intent": "Minimal messages + max_tokens", "assert": "success and non-empty response"},
     {"id": "complete_bad_json", "intent": "Malformed messages", "assert": "error path; no crash"},

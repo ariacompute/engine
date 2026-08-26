@@ -1,6 +1,8 @@
 use crate::bundle::{load_bundle, Bundle, LoadedWeight};
 use crate::chat::{apply_chat_template, strip_assistant_visible, ChatTurn};
-use crate::family::{effective_rope_theta, graph_hook, require_runnable, ArchClass, Family};
+use crate::family::{
+    effective_rope_theta, graph_hook, infer_family_path, require_runnable, ArchClass, Family,
+};
 use crate::multimodal::asr_transcribe_pcm16le;
 use crate::profile::{
     elapsed_ms, load_profile_begin, load_profile_set_cuda_upload, load_profile_set_materialize,
@@ -284,6 +286,7 @@ impl std::fmt::Debug for Session {
 pub struct SessionBuilder {
     path: Option<std::path::PathBuf>,
     family_path: String,
+    family_explicit: bool,
     compute: ComputePref,
     profile: bool,
 }
@@ -293,6 +296,7 @@ impl SessionBuilder {
         Self {
             path: None,
             family_path: "gemma/gemma-4-e2b-it".into(),
+            family_explicit: false,
             compute: ComputePref::Auto,
             profile: false,
         }
@@ -305,6 +309,7 @@ impl SessionBuilder {
 
     pub fn family(mut self, path: impl Into<String>) -> Self {
         self.family_path = path.into();
+        self.family_explicit = true;
         self
     }
 
@@ -319,11 +324,22 @@ impl SessionBuilder {
     }
 
     pub fn build(self) -> Result<Session, EngineError> {
-        let family = require_runnable(&self.family_path)?;
-        let _hook = graph_hook(family.arch);
         let path = self
             .path
             .ok_or_else(|| EngineError::InvalidParam("model path required".into()))?;
+        // Language bindings only pass the bundle path (cache dir like
+        // `gemma-3-1b-it_q326`). Infer §1.1 family from the dirname so a Gemma-3
+        // hub bundle is not treated as Gemma-4 and asked for codebook PLE.
+        let family_path = if self.family_explicit {
+            self.family_path
+        } else {
+            path.to_str()
+                .and_then(infer_family_path)
+                .map(str::to_string)
+                .unwrap_or(self.family_path)
+        };
+        let family = require_runnable(&family_path)?;
+        let _hook = graph_hook(family.arch);
         let (compute, compute_label) = resolve_compute(self.compute)?;
         load_profile_begin(self.profile);
         let t_mmap = Instant::now();
@@ -3003,6 +3019,23 @@ mod tests {
     }
 
     #[test]
+    fn session_infers_family_from_hub_cache_dirname() {
+        let parent = tempfile::tempdir().unwrap();
+        let bundle = parent.path().join("gemma-3-1b-it_q326");
+        std::fs::create_dir(&bundle).unwrap();
+        write_tiny_q4_bundle(&bundle).unwrap();
+        let s = SessionBuilder::new().model(&bundle).build().unwrap();
+        assert_eq!(s.family().path(), "gemma/gemma-3-1b-it");
+
+        let explicit = SessionBuilder::new()
+            .model(&bundle)
+            .family("gemma/gemma-4-e2b-it")
+            .build()
+            .unwrap();
+        assert_eq!(explicit.family().path(), "gemma/gemma-4-e2b-it");
+    }
+
+    #[test]
     fn gemma3_fills_hub_bundle_and_dual_rope() {
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
@@ -5082,6 +5115,7 @@ mod tests {
         assert!(!gemma4_requires_ple("gemma/gemma-4-e2b-it", 64));
         assert!(gemma4_requires_ple("gemma/gemma-4-e2b-it", 1024));
         assert!(gemma4_requires_ple("gemma/gemma-4-e2b-it", 1536));
+        assert!(!gemma4_requires_ple("gemma/gemma-3-1b-it", 1152));
         assert!(gemma4_requires_ple("gemma/gemma-3n-e2b-it", 2048));
         assert!(!gemma4_requires_ple("qwen/qwen3-0.6b", 1536));
         assert!(!gemma3n_requires_altup("gemma/gemma-3n-e2b-it", 64));
@@ -5493,6 +5527,17 @@ mod tests {
             msg.contains("PLE") && msg.contains("embed_tokens_per_layer"),
             "{msg}"
         );
+
+        // Language bindings pass only the cache path (no .family()). A Gemma-3
+        // hub dir such as gemma-3-1b-it_q326 must not inherit the Gemma-4 PLE
+        // requirement just because hidden_size >= 1024.
+        let named_parent = tempfile::tempdir().unwrap();
+        let named = named_parent.path().join("gemma-3-1b-it_q326");
+        std::fs::create_dir(&named).unwrap();
+        std::fs::copy(dir.path().join("config.json"), named.join("config.json")).unwrap();
+        std::fs::copy(dir.path().join("weight.bin"), named.join("weight.bin")).unwrap();
+        let s = SessionBuilder::new().model(&named).build().unwrap();
+        assert_eq!(s.family().path(), "gemma/gemma-3-1b-it");
     }
 
     #[test]

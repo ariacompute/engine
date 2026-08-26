@@ -272,7 +272,7 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 
 | C API | 语义 |
 |------|------|
-| `aria_model_init(path)` | 加载 Aria bundle → opaque handle |
+| `aria_model_init(path)` | 加载 Aria bundle → opaque handle。未显式 `.family()` 时按目录名 `infer_family_path`（与 `serve` 相同）；禁止把 `gemma-3-1b-it_q326` 回落成 `gemma/gemma-4-e2b-it` 并误要 PLE |
 | `aria_complete(…, messages_json, options_json, tools_json, out, …)` | chat；可选 tools；JSON 出参 |
 | `aria_complete_stream(…, callback)` | 流式 token/chunk 回调 |
 | `aria_embed(…, input_json, out)` | embeddings |

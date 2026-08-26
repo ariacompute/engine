@@ -533,6 +533,20 @@ mod tests {
     }
 
     #[test]
+    fn init_infers_family_from_hub_cache_dirname() {
+        let parent = tempfile::tempdir().unwrap();
+        let bundle = parent.path().join("gemma-3-1b-it_q326");
+        std::fs::create_dir(&bundle).unwrap();
+        write_tiny_q4_bundle(&bundle).unwrap();
+        let path = CString::new(bundle.to_str().unwrap()).unwrap();
+        let model = aria_model_init(path.as_ptr());
+        assert!(!model.is_null(), "{:?}", unsafe {
+            CStr::from_ptr(aria_last_error()).to_string_lossy()
+        });
+        aria_model_destroy(model);
+    }
+
+    #[test]
     fn init_missing_path() {
         let path = CString::new("/no/such/bundle").unwrap();
         let model = aria_model_init(path.as_ptr());
