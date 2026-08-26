@@ -67,7 +67,7 @@
 | 1 | **kernel** | matmul、attention、RMSNorm、RoPE、Softmax、SwiGLU、码本查表反量化、FWHT；`SimdMode::{Scalar, Neon, Avx2}` + `ComputeBackend::{Cpu, Cuda}`；`linear`/`attention` 经 backend 分发；CUDA 与 scalar 相对误差有界；无 GPU 时 `--compute cuda` 硬失败（禁止静默 CPU） |
 | 2 | **graph** | Layer → Op → Tensor IR；`BufferPool`；mmap / `external` 零拷贝输入；融合节点 **HDM**（Hadamard + Dequant + MatMul）；阶段 A：LLM decode 所需 ops 可调度；图序列化可选（阶段 B+） |
 | 3 | **inference** | `load_bundle`（mmap `weight.bin`）；KV cache；greedy / 基础 sampling；tokenizer；§1.1 家族注册与图构建钩子；阶段 A：`gemma-4-e2b-it` **tiny q4** 黄金路径；阶段 B/C：见上表 |
-| 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排；CLI：`auth` / `download` / `list` / `clean` / `upgrade` / `serve` |
+| 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排；CLI：`auth` / `download` / `list` / `check` / `clean` / `upgrade` / `serve` |
 | 5 | **hybrid** | 信号→投影→决策：`RouteSignal` → `ProjectionBand` → `RouteDecision{action, reason, policy_version, fallback}`；Pareto 模式 `Cost`/`Balance`/`Intelligence`；会话粘性与失败升级；`RouteOutcome` 内存落盘；云端 OpenAI 兼容 POST；凭证与模式来自 `~/.ariacompute/config.yml`（`CloudClient::new`）；`execution`=`hybrid`\|`device`\|`cloud`；阶段 A：mock + 单测；`device` / privacy 强制 Local，`cloud` 强制 Handoff；**P2**：规则路由层（快路径）+ 语义路由层（慢路径）两层混合路由 `route_hybrid`，语义失败静默回退规则层 |
 | 6 | **反量化语义** | 与 Python `dequantize` 一致的 **rotated-space** 码本重建。embedding **必须**原域行 gather（加载期整表 unrotate 或等价）；线性层可用融合 HDM **或** 原域 `linear`。禁止对旋转域 `W[token]` 做 lookup |
 | 7 | **HTTP** | **axum** 实现本地 serve |
@@ -170,8 +170,9 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 - `GET /v1/engine/routes`（P2 观测端点，只读）：返回最近 N 条路由 `RouteOutcome`（含 `layer` / `confidence` / `semantic_consulted`）+ Local/Cloud 健康分快照 + `policy_version` + **生效** `execution` / `mode`（非 hybrid 为 `unused`）/ `compute` / `cloud_available` / `semantic.enabled`（配置开关）/ `semantic.applicable`（真正会咨询）；`?n=` 可选（默认 20，上限 100）。
 - **CLI（`aria-engine`）**
   - 缓存根：`~/.ariacompute/`（`config.yml` + `models/<model>/`）。
-  - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`clean [model]`、`upgrade [version]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution] [--hybrid-semantic on|off] [--compute] [--profile]`；`-h` / `-v`。
+  - 子命令：`auth [--status|--clear]`、`download <model>`、`list`、`check [model]`、`clean [model]`、`upgrade [version]`、`serve <model> [--bind] [--hybrid-mode] [--hybrid-execution] [--hybrid-semantic on|off] [--compute] [--profile]`；`-h` / `-v`。
   - `list`：`GET {site_url}/api/dashboard/models`（Bearer `cloud_api_key`）展开为可下载 bundle（`_q4`/`_q8`/`_q326`），对照本地缓存标记 `downloaded` / `not downloaded` / `incomplete`；另附 catalog 外本地项。catalog `*_q326` 与本地 `*_q326_channel` / `*_q326_group`（及 `*_q3.26*`）视为同一 int326 缓存，禁止把已下载的 channel 配方标成 `not downloaded`。
+  - `check [model]`：对照**本区**公开 hub（与 `download` 相同：`.com`→Hugging Face，`.cn`→ModelScope）校验本地 bundle **文件数目、文件名、SHA-256**。指定 model（缓存名或现存路径）则查一项；省略则扫描 `~/.ariacompute/models/` 下全部目录。Hub 清单取 `{sdk}/{bundle}/` 下普通文件（默认 `sdk=v1.0`），跳过 `.gitattributes` / `.gitignore` / 点文件。大文件 SHA-256 来自 hub 元数据（HF `lfs.oid` / ModelScope `Sha256`），**禁止**为校验再拉取 `weight.bin`。逐文件打印 `OK` / `MISSING` / `EXTRA` / `MISMATCH`；任一失败进程 exit 1。不访问 Dashboard、不对区 hub。
   - `upgrade [version]`：按 `upgrade_url`（组织根）拼 `{upgrade_url}/engine`，调 GitHub/Gitee Releases API；默认最新**正式** Release（忽略 prerelease/draft），可选 `0.7.2` / `v0.7.2`；下载本机平台 `engine_*` + `libaria_ffi_*`，原地原子替换当前 CLI，并将 FFI 装入 `~/.ariacompute/lib/`（提示 `ARIA_FFI_LIB`）。未配置 `upgrade_url` 时报错并提示先 `auth`；下载/解压失败不得损坏现有 CLI。
   - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。`--compute auto|cpu|cuda` 覆盖本机算力（默认 config / `auto`）。`--profile` 启用加载/生成分段计时，经 `GET /v1/engine/profile` 读出。`--hybrid-semantic on|off` 覆盖语义路由层开关（默认 config / `on`）。
   - **禁止** `ARIA_HYBRID_*` 环境变量；仅保留编译期 `ARIA_ENGINE_VERSION`。
@@ -471,7 +472,7 @@ Report-only JSON（`GET /v1/engine/profile` 或 `scripts/profile_qwen3_serve.py`
 - [x] 全家族在 Spec 内、E2E 分 A/B/C 可接受
 - [x] OpenAI：阶段 A 仅 chat(+SSE)/models；ASR/RAG/Tool 属阶段 C 可接受
 - [x] Hybrid：阶段 A mock + config/`CloudClient::new` 可接受
-- [x] CLI：`~/.ariacompute` + auth/download/list/clean/upgrade/serve；无 `ARIA_HYBRID_*`；三源探针下载可接受
+- [x] CLI：`~/.ariacompute` + auth/download/list/check/clean/upgrade/serve；无 `ARIA_HYBRID_*`；三源探针下载可接受
 - [x] Kernel：NEON/AVX2 CPU + 可选 CUDA；`compute=auto` 与 hybrid 正交可接受
 - [x] 反量化 = rotated-space；embedding 原域 gather；线性层 HDM 或原域 linear 可接受
 - [x] 五 crate 命名与目录映射可接受

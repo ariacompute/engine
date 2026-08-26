@@ -39,6 +39,8 @@ aria-engine auth --status
 # 可选：aria-engine auth 按区提示 hf_token（.com）或 modelscope_api_token（.cn）
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
+aria-engine check gemma-4-e2b-it_q4
+# 或：aria-engine check   # 校验全部本地缓存
 aria-engine clean gemma-4-e2b-it_q4
 
 # 升级 CLI + libaria_ffi（最新正式版，或指定版本）
@@ -58,6 +60,8 @@ aria-engine serve gemma-4-e2b-it_q4 \
 `download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `aria-engine auth` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/config.yml`。
 
 `list` 查询 `{site_url}/api/dashboard/models`（需先 `aria-engine auth`），按可下载 bundle 列出并标记 `downloaded` / `not downloaded`（另附仅本地缓存项）。
+
+`check [model]` 对照本区 hub（与 `download` 相同）校验本地文件数目、文件名与 SHA-256；省略 model 则检查全部缓存。不一致 exit 1；`weight.bin` 只在本地哈希并与 hub 元数据比对，不重新下载。
 
 `serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。
 

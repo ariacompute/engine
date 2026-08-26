@@ -35,6 +35,7 @@ flate2 = "1"
 tar = "0.4"
 dirs = "5"
 urlencoding = "2"
+sha2 = "0.10"
 indicatif = { workspace = true }
 
 [dev-dependencies]

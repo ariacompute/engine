@@ -139,7 +139,7 @@ pub async fn download_model(model: &str, cfg: &AriaConfig) -> io::Result<PathBuf
 }
 
 /// Public hub paired with `site_url` (`.com` → Hugging Face, `.cn` → ModelScope).
-fn preferred_public_hub(site_url: &str) -> DownloadSource {
+pub(crate) fn preferred_public_hub(site_url: &str) -> DownloadSource {
     match GatewayPair::from_url(site_url) {
         Some(GatewayPair::CN) => DownloadSource::ModelScope,
         _ => DownloadSource::HuggingFace,
@@ -280,40 +280,51 @@ fn hub_config_urls(source: DownloadSource, bundle: &BundleRef) -> Vec<String> {
     hub_file_urls(source, bundle, "config.json")
 }
 
-fn hub_file_urls(source: DownloadSource, bundle: &BundleRef, file: &str) -> Vec<String> {
+/// `(repo_id, path_dirname)` candidates, same order as `hub_file_urls`.
+pub(crate) fn hub_repo_candidates(
+    source: DownloadSource,
+    bundle: &BundleRef,
+) -> Vec<(String, String)> {
     let mut names = vec![bundle.model.clone()];
     names.extend(config::bundle_cache_aliases(&bundle.model));
-    let mut urls = Vec::new();
+    let mut out = Vec::new();
     for name in names {
-        let repos = match source {
+        match source {
             DownloadSource::HuggingFace => {
-                vec![format!("ariacompute/{name}"), "ariacompute/model".into()]
+                out.push((format!("ariacompute/{name}"), name.clone()));
+                out.push(("ariacompute/model".into(), name));
             }
             DownloadSource::ModelScope => {
-                vec![format!("AriaCompute/{name}"), "AriaCompute/model".into()]
+                out.push((format!("AriaCompute/{name}"), name.clone()));
+                out.push(("AriaCompute/model".into(), name));
             }
-            DownloadSource::Dashboard => return vec![],
-        };
-        for repo in repos {
-            match source {
-                DownloadSource::HuggingFace => {
-                    urls.push(format!(
-                        "https://huggingface.co/{repo}/resolve/main/{}/{}/{}",
-                        bundle.sdk, name, file
-                    ));
-                }
-                DownloadSource::ModelScope => {
-                    urls.push(format!(
-                        "https://www.modelscope.cn/models/{repo}/resolve/master/{}/{}/{}",
-                        bundle.sdk, name, file
-                    ));
-                    urls.push(format!(
-                        "https://modelscope.cn/models/{repo}/resolve/master/{}/{}/{}",
-                        bundle.sdk, name, file
-                    ));
-                }
-                DownloadSource::Dashboard => {}
+            DownloadSource::Dashboard => {}
+        }
+    }
+    out
+}
+
+pub(crate) fn hub_file_urls(source: DownloadSource, bundle: &BundleRef, file: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for (repo, name) in hub_repo_candidates(source, bundle) {
+        match source {
+            DownloadSource::HuggingFace => {
+                urls.push(format!(
+                    "https://huggingface.co/{repo}/resolve/main/{}/{}/{}",
+                    bundle.sdk, name, file
+                ));
             }
+            DownloadSource::ModelScope => {
+                urls.push(format!(
+                    "https://www.modelscope.cn/models/{repo}/resolve/master/{}/{}/{}",
+                    bundle.sdk, name, file
+                ));
+                urls.push(format!(
+                    "https://modelscope.cn/models/{repo}/resolve/master/{}/{}/{}",
+                    bundle.sdk, name, file
+                ));
+            }
+            DownloadSource::Dashboard => {}
         }
     }
     urls
@@ -341,14 +352,14 @@ pub(crate) fn hub_token(source: DownloadSource, cfg: &AriaConfig) -> Option<Stri
     }
 }
 
-fn http_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
+pub(crate) fn http_client(timeout: Duration) -> Result<reqwest::Client, reqwest::Error> {
     reqwest::Client::builder()
         .timeout(timeout)
         .redirect(reqwest::redirect::Policy::limited(10))
         .build()
 }
 
-fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
+pub(crate) fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
     io::Error::other(e.to_string())
 }
 

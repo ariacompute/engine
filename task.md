@@ -92,6 +92,7 @@
 - [x] `download` 仅本区 hub（`.com`→HF，`.cn`→ModelScope）；禁止 Dashboard 竞速/互退与对区 hub 回退
 - [x] `list` / `clean [model]`；bundle 校验
 - [x] `list` / `serve` / `download` 将 catalog `*_q326` 与本地 `*_q326_channel` 视为同一缓存
+- [x] `check [model]`：对照本区 hub 校验文件数目 / 名称 / SHA-256（不重拉 `weight.bin`）
 
 ### T33 — serve CLI + CloudClient
 - [x] `serve <model> [--bind] [--hybrid-mode] [--hybrid-execution]`

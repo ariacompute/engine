@@ -1,5 +1,6 @@
 use aria_hybrid::{CloudClient, ExecutionMode, ParetoMode, Router};
 use aria_kernel::ComputePref;
+use aria_openai::check;
 use aria_openai::config::{self, AriaConfig};
 use aria_openai::download;
 use aria_openai::gateway_detect;
@@ -33,6 +34,7 @@ Usage:
   aria-engine auth [--status|--clear]
   aria-engine download <model>
   aria-engine list
+  aria-engine check [model]
   aria-engine clean [model]
   aria-engine upgrade [version]
   aria-engine serve <model> [--bind host:port] [--hybrid-mode MODE] [--hybrid-execution MODE]
@@ -50,6 +52,7 @@ auth                 Prompt for API key, region hub token, hybrid prefs; detect 
   --clear            Remove config.yml
 download <model>     Probe dashboard / Hugging Face / ModelScope; fetch best source
 list                 Query site catalog; mark each bundle downloaded / not downloaded
+check [model]        Compare local bundle files (count, names, SHA-256) to regional hub
 clean [model]        Remove one cached model or all
 upgrade [version]    Replace this CLI + libaria_ffi from GitHub/Gitee (via upgrade_url)
 serve <model>        Start OpenAI-compatible HTTP server
@@ -237,6 +240,19 @@ async fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+async fn cmd_check(model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let cfg = load_config_reconciled().await?;
+    let ok = match model {
+        Some(m) => check::check_model(m, &cfg).await?,
+        None => check::check_all(&cfg).await?,
+    };
+    if ok {
+        Ok(())
+    } else {
+        Err("check failed".into())
+    }
+}
+
 fn cmd_clean(model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     download::clean_models(model)?;
     match model {
@@ -399,6 +415,7 @@ async fn main() {
             }
         }
         "list" => cmd_list().await,
+        "check" => cmd_check(args.get(1).map(|s| s.as_str())).await,
         "clean" => cmd_clean(args.get(1).map(|s| s.as_str())),
         "upgrade" => {
             let version = args.get(1).map(|s| s.as_str());

@@ -39,6 +39,8 @@ aria-engine auth --status
 # Optional: aria-engine auth prompts hf_token (.com) or modelscope_api_token (.cn)
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
+aria-engine check gemma-4-e2b-it_q4
+# or: aria-engine check   # all cached models
 aria-engine clean gemma-4-e2b-it_q4
 
 # Upgrade CLI + libaria_ffi (latest stable, or a tag)
@@ -58,6 +60,8 @@ aria-engine serve gemma-4-e2b-it_q4 \
 `download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless `aria-engine auth` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/config.yml`.
 
 `list` queries `{site_url}/api/dashboard/models` (requires `aria-engine auth`) and prints each downloadable bundle as `downloaded` / `not downloaded` (plus local-only caches).
+
+`check [model]` compares local file count, names, and SHA-256 against the regional hub (same source as `download`). Omit the model to check every cached bundle. Exit 1 on mismatch; `weight.bin` is hashed locally and compared to hub metadata (not re-downloaded).
 
 `serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`.
 

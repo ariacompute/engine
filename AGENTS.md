@@ -34,7 +34,7 @@
 ## 常用命令
 - `cargo test`
 - `cargo run -p aria-openai --bin aria-engine -- serve <model|bundle_dir>`
-- `aria-engine auth` / `download` / `list` / `clean` / `upgrade`
+- `aria-engine auth` / `download` / `list` / `check` / `clean` / `upgrade`
 - `./scripts/run-binding-tests.sh`
 - `python -m unittest discover -s bench/tests -t .`
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`

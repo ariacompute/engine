@@ -1,5 +1,6 @@
 //! OpenAI-compatible HTTP surface (chat / embeddings / ASR / tools / RAG).
 
+pub mod check;
 pub mod config;
 pub mod download;
 pub mod gateway_detect;
