@@ -752,6 +752,8 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("ARIA_COMPUTE_HOME", tmp.path());
+        let prev_lib = std::env::var("ARIA_FFI_LIB").ok();
+        std::env::remove_var("ARIA_FFI_LIB");
         let src_dir = tmp.path().join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         let want = if cfg!(windows) {
@@ -777,5 +779,9 @@ mod tests {
         let cached = ensure_ffi_lib(None).unwrap();
         assert_eq!(cached, got);
         std::env::remove_var("ARIA_COMPUTE_HOME");
+        match prev_lib {
+            Some(v) => std::env::set_var("ARIA_FFI_LIB", v),
+            None => std::env::remove_var("ARIA_FFI_LIB"),
+        }
     }
 }

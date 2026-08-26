@@ -195,8 +195,10 @@ test("extractFfiArchive and cached ensureFfiLib skip network", async () => {
     return;
   }
   const home = fs.mkdtempSync(path.join(os.tmpdir(), "aria-ffi-"));
-  const prev = process.env.ARIA_COMPUTE_HOME;
+  const prevHome = process.env.ARIA_COMPUTE_HOME;
+  const prevLib = process.env.ARIA_FFI_LIB;
   process.env.ARIA_COMPUTE_HOME = home;
+  delete process.env.ARIA_FFI_LIB;
   try {
     const src = fs.mkdtempSync(path.join(os.tmpdir(), "aria-ffi-src-"));
     const want = ffiLibName();
@@ -215,6 +217,8 @@ test("extractFfiArchive and cached ensureFfiLib skip network", async () => {
     const cached = await ensureFfiLib();
     assert.equal(cached, got);
   } finally {
-    process.env.ARIA_COMPUTE_HOME = prev;
+    process.env.ARIA_COMPUTE_HOME = prevHome;
+    if (prevLib === undefined) delete process.env.ARIA_FFI_LIB;
+    else process.env.ARIA_FFI_LIB = prevLib;
   }
 });

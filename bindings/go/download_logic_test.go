@@ -229,6 +229,7 @@ func TestUpgradeOrgFromSite(t *testing.T) {
 func TestExtractFfiAndCachedSkip(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ARIA_COMPUTE_HOME", home)
+	t.Setenv("ARIA_FFI_LIB", "")
 	if runtime.GOOS != "linux" {
 		t.Skip("linux .so fixture")
 	}
