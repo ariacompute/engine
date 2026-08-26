@@ -112,6 +112,7 @@
 
 ### T42 — Language scaffolds
 - [x] `bindings/{python,go,rust,swift,kotlin,flutter,react-native,typescript}`
+- [x] 按模型名下载对齐 CLI hub（`.com`→HF，`.cn`→ModelScope；不走 Dashboard）
 
 ### T43 — Host test matrix
 - [x] `bindings/testdata/` + `cases.json`；`scripts/run-binding-tests.sh`

@@ -23,12 +23,14 @@ with Engine("/path/to/bundle") as eng:
 ## 按模型名自动下载
 
 `Engine` 同时接受本地 bundle 路径或 Aria 模型名（如 `gemma-4-e2b-it_q4`）。含 `/`
-或本地已存在的值直接加载；否则由 SDK 从 **Dashboard 私有源** 自动下载（需 `token`，
-`site` 默认 `https://ariacompute.com`）到 `~/.ariacompute/models/{model}` 再加载。
+或本地已存在的值直接加载；否则由 SDK 从**本区公开 hub** 自动下载（`.com` → Hugging Face，
+`.cn` → ModelScope；`site` 默认 `https://ariacompute.com`）到 `~/.ariacompute/models/{model}` 再加载。
+**不再请求 Dashboard**（避免 HTTP 403）。Dashboard `sk-` / `bfvk-` token 不会当作 hub 凭证。
+需授权的 hub 文件请传 Hugging Face / ModelScope token，或先 `aria-engine auth` 后用 CLI 下载。
 缓存中已有有效 bundle 时直接复用，不重复下载。
 
 ```python
-with Engine("gemma-4-e2b-it_q4", token="API_TOKEN") as eng:
+with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
 ```
 

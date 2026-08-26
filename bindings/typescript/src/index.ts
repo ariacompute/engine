@@ -1,7 +1,8 @@
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
-import * as fflate from "fflate";
+import { pipeline } from "node:stream/promises";
+import { Readable } from "node:stream";
 
 export interface GenerateOptions {
   max_tokens?: number;
@@ -33,15 +34,25 @@ export interface CompleteResult {
 }
 
 export interface OpenOptions {
-  /** Dashboard bearer token. Required when modelRef is a model name. */
+  /** Optional Hugging Face / ModelScope hub token. Dashboard sk-/bfvk- keys are ignored. */
   token?: string;
-  /** Dashboard base URL. Defaults to https://ariacompute.com. */
+  /** Site used to pick the regional hub. Defaults to https://ariacompute.com (.com → HF, .cn → ModelScope). */
   site?: string;
   /** Explicit path to the FFI library. */
   ffiLib?: string;
 }
 
 const DEFAULT_SITE = "https://ariacompute.com";
+const DEFAULT_SDK = "v1.0";
+const HUB_REQUIRED = ["config.json", "weight.bin"] as const;
+const HUB_OPTIONAL = [
+  "tokenizer.json",
+  "tokenizer.model",
+  "tokenizer_config.json",
+  "special_tokens_map.json",
+  "vocab.json",
+  "merges.txt",
+] as const;
 
 function ariaHome(): string {
   return process.env.ARIA_COMPUTE_HOME || path.join(os.homedir(), ".ariacompute");
@@ -59,7 +70,10 @@ export function parseBundleName(model: string): { slug: string; quant: string } 
   const idx = model.lastIndexOf("_q");
   if (idx !== -1) {
     const slug = model.slice(0, idx);
-    const suffix = model.slice(idx + 2);
+    let suffix = model.slice(idx + 2);
+    if (suffix.endsWith("_channel") || suffix.endsWith("_group")) {
+      suffix = suffix.slice(0, suffix.lastIndexOf("_"));
+    }
     const quant =
       suffix === "4"
         ? "int4"
@@ -86,82 +100,155 @@ function isValidBundle(dir: string): boolean {
   }
 }
 
-function flattenSingleSubdir(dir: string): void {
-  const entries = fs.readdirSync(dir).filter((e) => !e.startsWith("."));
-  if (entries.length !== 1) return;
-  const only = path.join(dir, entries[0]);
-  if (!fs.statSync(only).isDirectory()) return;
-  if (!fs.existsSync(path.join(only, "config.json"))) return;
-  for (const name of fs.readdirSync(only)) {
-    fs.renameSync(path.join(only, name), path.join(dir, name));
-  }
-  fs.rmdirSync(only);
+export function preferredPublicHub(site?: string): "huggingface" | "modelscope" {
+  if (site && site.toLowerCase().includes("ariacompute.cn")) return "modelscope";
+  return "huggingface";
 }
 
-async function extractZip(data: Buffer, dest: string): Promise<void> {
-  if (data[0] !== 0x50 || data[1] !== 0x4b) {
-    throw new Error("downloaded archive is not a valid zip");
-  }
-  fs.mkdirSync(dest, { recursive: true });
-  const entries = fflate.unzipSync(data);
-  for (const [name, content] of Object.entries(entries)) {
-    const out = path.join(dest, name);
-    if (name.endsWith("/")) {
-      fs.mkdirSync(out, { recursive: true });
-    } else {
-      fs.mkdirSync(path.dirname(out), { recursive: true });
-      fs.writeFileSync(out, content);
+export function hubBearer(token?: string): string | undefined {
+  const t = (token || "").trim();
+  if (!t) return undefined;
+  const low = t.toLowerCase();
+  if (low.startsWith("sk-") || low.startsWith("bfvk-")) return undefined;
+  return t;
+}
+
+function hubPathNames(model: string): string[] {
+  const names = [model];
+  let lower = model.toLowerCase();
+  let core = model;
+  for (const suf of ["_channel", "_group"]) {
+    if (lower.endsWith(suf)) {
+      core = model.slice(0, -suf.length);
+      lower = core.toLowerCase();
+      break;
     }
   }
-  flattenSingleSubdir(dest);
+  const stems = [core];
+  if (lower.endsWith("_q326")) stems.push(`${core.slice(0, -5)}q3.26`);
+  else if (lower.endsWith("_q3.26")) stems.push(`${core.slice(0, -6)}q326`);
+  for (const stem of stems) {
+    for (const share of ["", "_channel", "_group"]) {
+      const cand = `${stem}${share}`;
+      if (!names.includes(cand)) names.push(cand);
+    }
+  }
+  return names;
 }
 
-async function httpGet(url: string, token: string): Promise<{ ok: boolean; status: number; body: Buffer | any }> {
-  const resp = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-  if (!resp.ok) return { ok: false, status: resp.status, body: null };
-  const ct = resp.headers.get("content-type") || "";
-  if (ct.includes("json")) return { ok: true, status: resp.status, body: await resp.json() };
-  return { ok: true, status: resp.status, body: Buffer.from(await resp.arrayBuffer()) };
+export function hubFileUrls(
+  source: "huggingface" | "modelscope",
+  model: string,
+  file: string,
+  sdk: string = DEFAULT_SDK,
+): string[] {
+  const urls: string[] = [];
+  for (const name of hubPathNames(model)) {
+    if (source === "modelscope") {
+      for (const repo of [`AriaCompute/${name}`, "AriaCompute/model"]) {
+        urls.push(`https://www.modelscope.cn/models/${repo}/resolve/master/${sdk}/${name}/${file}`);
+        urls.push(`https://modelscope.cn/models/${repo}/resolve/master/${sdk}/${name}/${file}`);
+      }
+    } else {
+      for (const repo of [`ariacompute/${name}`, "ariacompute/model"]) {
+        urls.push(`https://huggingface.co/${repo}/resolve/main/${sdk}/${name}/${file}`);
+      }
+    }
+  }
+  return urls;
+}
+
+class HubHttpError extends Error {
+  status: number;
+  constructor(status: number, message: string) {
+    super(message);
+    this.status = status;
+  }
+}
+
+async function fetchUrlToFile(url: string, dest: string, token?: string): Promise<void> {
+  const headers: Record<string, string> = {};
+  if (token) headers.Authorization = `Bearer ${token}`;
+  const resp = await fetch(url, { headers });
+  if (resp.status === 401 || resp.status === 403) {
+    throw new HubHttpError(resp.status, `HTTP ${resp.status}`);
+  }
+  if (!resp.ok) throw new HubHttpError(resp.status, `HTTP ${resp.status}`);
+  if (!resp.body) throw new Error("empty response body");
+  fs.mkdirSync(path.dirname(dest), { recursive: true });
+  await pipeline(Readable.fromWeb(resp.body as any), fs.createWriteStream(dest));
+}
+
+async function fetchHubFile(
+  source: "huggingface" | "modelscope",
+  model: string,
+  file: string,
+  dest: string,
+  token: string | undefined,
+  required: boolean,
+): Promise<boolean> {
+  let last: unknown;
+  for (const url of hubFileUrls(source, model, file)) {
+    try {
+      await fetchUrlToFile(url, dest, token);
+      return true;
+    } catch (e) {
+      last = e;
+      if (e instanceof HubHttpError && (e.status === 401 || e.status === 403)) {
+        const field = source === "modelscope" ? "modelscope_api_token" : "hf_token";
+        throw new Error(
+          `auth failed HTTP ${e.status}; set ${field} via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
+        );
+      }
+    }
+  }
+  if (required) throw new Error(`${source}: missing ${file}${last ? `: ${last}` : ""}`);
+  return false;
 }
 
 const encoder = new TextEncoder();
 
-/** Download `model` from the Dashboard private source into
+/** Download `model` from the regional public hub into
  * `~/.ariacompute/models/{model}` and return that directory.
- * Skips the download when a valid bundle is already cached. */
+ * Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
+ * Dashboard is not used. Skips the download when a valid bundle is already cached. */
 export async function downloadModel(
   model: string,
-  token: string,
+  token?: string,
   site: string = DEFAULT_SITE,
 ): Promise<string> {
-  if (!token) throw new Error("api token is required to download a model");
-  const { slug, quant } = parseBundleName(model);
+  parseBundleName(model);
+  const source = preferredPublicHub(site);
+  const hubToken = hubBearer(token);
   const cache = cacheDir(model);
   if (fs.existsSync(cache) && isValidBundle(cache)) return cache;
 
-  const metaUrl = `${site.replace(/\/$/, "")}/api/dashboard/models/${encodeURIComponent(
-    slug,
-  )}/download?quant=${encodeURIComponent(quant)}&sdk=v1.0&format=json`;
-
-  const metaResp = await httpGet(metaUrl, token);
-  if (!metaResp.ok) throw new Error(`dashboard request failed: ${metaResp.status}`);
-  const meta = metaResp.body as { url?: string };
-  if (!meta.url) throw new Error("dashboard meta returned empty url");
-
-  const zipResp = await httpGet(meta.url, token);
-  if (!zipResp.ok) throw new Error(`download stream failed: ${zipResp.status}`);
-  const data = zipResp.body as Buffer;
-
   const staging = path.join(ariaHome(), "models", `.${model}.partial`);
-  if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
-  await extractZip(data, staging);
-  if (!isValidBundle(staging)) {
-    fs.rmSync(staging, { recursive: true, force: true });
-    throw new Error("downloaded archive did not contain a valid aria-quant-bundle");
+  try {
+    if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
+    fs.mkdirSync(staging, { recursive: true });
+    for (const file of HUB_REQUIRED) {
+      await fetchHubFile(source, model, file, path.join(staging, file), hubToken, true);
+    }
+    for (const extra of HUB_OPTIONAL) {
+      try {
+        await fetchHubFile(source, model, extra, path.join(staging, extra), hubToken, false);
+      } catch {
+        /* optional tokenizer sidecar */
+      }
+    }
+    if (!isValidBundle(staging)) {
+      throw new Error(
+        `${source} fetch completed but bundle invalid (need weight.bin + aria-quant-bundle config.json)`,
+      );
+    }
+    if (fs.existsSync(cache)) fs.rmSync(cache, { recursive: true, force: true });
+    fs.renameSync(staging, cache);
+    return cache;
+  } catch (e) {
+    if (fs.existsSync(staging)) fs.rmSync(staging, { recursive: true, force: true });
+    throw e;
   }
-  if (fs.existsSync(cache)) fs.rmSync(cache, { recursive: true, force: true });
-  fs.renameSync(staging, cache);
-  return cache;
 }
 
 function loadLib(ffiLib?: string): any {
@@ -202,13 +289,9 @@ export class Engine {
   }
 
   /** Auto-detect: a value containing a separator or already on disk is a local
-   * path; otherwise it is a model name that is downloaded (requires `token`)
-   * then loaded. */
+   * path; otherwise it is a model name downloaded from the regional public hub. */
   static async open(modelRef: string, opts: OpenOptions = {}): Promise<Engine> {
     if (isLocalRef(modelRef)) return new Engine(modelRef, opts);
-    if (!opts.token) {
-      throw new Error(`model name '${modelRef}' requires an api token to download`);
-    }
     const bundle = await downloadModel(modelRef, opts.token, opts.site ?? DEFAULT_SITE);
     return new Engine(bundle, opts);
   }

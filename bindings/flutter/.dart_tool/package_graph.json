@@ -7,12 +7,15 @@
       "name": "aria_engine",
       "version": "0.1.0",
       "dependencies": [
-        "archive",
         "ffi",
-        "flutter",
-        "http"
+        "flutter"
       ],
       "devDependencies": []
+    },
+    {
+      "name": "ffi",
+      "version": "2.2.0",
+      "dependencies": []
     },
     {
       "name": "flutter",
@@ -27,13 +30,13 @@
       ]
     },
     {
-      "name": "vector_math",
-      "version": "2.2.0",
+      "name": "sky_engine",
+      "version": "0.0.0",
       "dependencies": []
     },
     {
-      "name": "sky_engine",
-      "version": "0.0.0",
+      "name": "vector_math",
+      "version": "2.2.0",
       "dependencies": []
     },
     {
@@ -57,92 +60,6 @@
       "name": "characters",
       "version": "1.4.1",
       "dependencies": []
-    },
-    {
-      "name": "archive",
-      "version": "3.6.1",
-      "dependencies": [
-        "crypto",
-        "path"
-      ]
-    },
-    {
-      "name": "crypto",
-      "version": "3.0.7",
-      "dependencies": [
-        "typed_data"
-      ]
-    },
-    {
-      "name": "typed_data",
-      "version": "1.4.0",
-      "dependencies": [
-        "collection"
-      ]
-    },
-    {
-      "name": "path",
-      "version": "1.9.1",
-      "dependencies": []
-    },
-    {
-      "name": "ffi",
-      "version": "2.2.0",
-      "dependencies": []
-    },
-    {
-      "name": "http",
-      "version": "1.6.0",
-      "dependencies": [
-        "async",
-        "http_parser",
-        "meta",
-        "web"
-      ]
-    },
-    {
-      "name": "web",
-      "version": "1.1.1",
-      "dependencies": []
-    },
-    {
-      "name": "http_parser",
-      "version": "4.1.2",
-      "dependencies": [
-        "collection",
-        "source_span",
-        "string_scanner",
-        "typed_data"
-      ]
-    },
-    {
-      "name": "string_scanner",
-      "version": "1.4.1",
-      "dependencies": [
-        "source_span"
-      ]
-    },
-    {
-      "name": "source_span",
-      "version": "1.10.2",
-      "dependencies": [
-        "collection",
-        "path",
-        "term_glyph"
-      ]
-    },
-    {
-      "name": "term_glyph",
-      "version": "1.2.2",
-      "dependencies": []
-    },
-    {
-      "name": "async",
-      "version": "2.13.1",
-      "dependencies": [
-        "collection",
-        "meta"
-      ]
     }
   ],
   "configVersion": 1

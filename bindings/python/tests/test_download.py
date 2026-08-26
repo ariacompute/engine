@@ -5,7 +5,15 @@ import tempfile
 import unittest
 
 import aria_engine
-from aria_engine import _aria_home, _is_valid_bundle, _parse_bundle_name, download_model
+from aria_engine import (
+    _aria_home,
+    _hub_bearer,
+    _hub_file_urls,
+    _is_valid_bundle,
+    _parse_bundle_name,
+    _preferred_public_hub,
+    download_model,
+)
 
 
 class ParseTests(unittest.TestCase):
@@ -83,9 +91,14 @@ class DownloadTests(unittest.TestCase):
         os.environ.clear()
         os.environ.update(self._orig)
 
-    def test_missing_token(self):
-        with self.assertRaises(ValueError):
-            download_model("foo_q4", None)
+    def test_token_optional_when_cached(self):
+        cache = os.path.join(_aria_home(), "models", "foo_q4")
+        os.makedirs(cache, exist_ok=True)
+        with open(os.path.join(cache, "weight.bin"), "wb") as f:
+            f.write(b"x")
+        with open(os.path.join(cache, "config.json"), "w", encoding="utf-8") as f:
+            f.write(json.dumps({"format": "aria-quant-bundle"}))
+        self.assertEqual(download_model("foo_q4", None), cache)
 
     def test_cached_bundle_skips_download(self):
         cache = os.path.join(_aria_home(), "models", "foo_q4")
@@ -97,9 +110,28 @@ class DownloadTests(unittest.TestCase):
         # should not raise / hit network
         self.assertEqual(download_model("foo_q4", "tok"), cache)
 
-    def test_invalid_meta_no_url(self):
-        with self.assertRaises(RuntimeError):
-            download_model("foo_q4", "tok", site="http://127.0.0.1:9")
+    def test_preferred_hub_follows_site_tld(self):
+        self.assertEqual(_preferred_public_hub("https://ariacompute.com"), "huggingface")
+        self.assertEqual(_preferred_public_hub("https://ariacompute.cn"), "modelscope")
+        self.assertEqual(_preferred_public_hub(None), "huggingface")
+
+    def test_dashboard_token_not_sent_to_hub(self):
+        self.assertIsNone(_hub_bearer("sk-bf-95076ed1-8c1a-4efa-b33c-f52c1d7f9f24"))
+        self.assertIsNone(_hub_bearer("bfvk-test"))
+        self.assertEqual(_hub_bearer("hf_abc"), "hf_abc")
+
+    def test_hub_urls_follow_upload_layout(self):
+        hf = _hub_file_urls("huggingface", "gemma-4-e2b-it_q4", "config.json")
+        self.assertTrue(
+            any(
+                "/ariacompute/gemma-4-e2b-it_q4/resolve/main/v1.0/gemma-4-e2b-it_q4/config.json"
+                in u
+                for u in hf
+            )
+        )
+        ms = _hub_file_urls("modelscope", "gemma-4-e2b-it_q4", "weight.bin")
+        self.assertTrue(any("/v1.0/gemma-4-e2b-it_q4/weight.bin" in u for u in ms))
+        self.assertFalse(any("/api/dashboard/" in u for u in hf + ms))
 
 
 if __name__ == "__main__":

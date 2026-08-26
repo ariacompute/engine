@@ -281,6 +281,8 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 
 **语言包：** Python、Go、Rust（`ariacompute-engine`）、Swift、Kotlin、Flutter、React Native（npm `@ariacompute/engine-rn`）、TypeScript（npm `@ariacompute/engine-ts`）。布局：`ffi/` + `bindings/<lang>/` + `bindings/testdata/`。
 
+**按模型名下载：** 与 `aria-engine download` 相同，仅本区公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。**不**请求 Dashboard zip meta。Dashboard `sk-`/`bfvk-` token 不作为 hub Bearer。公开模型无需 token。缓存 `~/.ariacompute/models/{model}`；已有有效 bundle 则跳过下载。
+
 **测试：** 共享 `cases.json`（lifecycle / chat / stream / tools / embed / ASR）；`cargo test -p ariacompute-ffi`；`./scripts/run-binding-tests.sh`。Flutter/RN：iOS+Android device-farm/emulator CI（`.github/workflows/bindings-mobile.yml`）。
 
 **发布：** GitHub Release 触发 `release.yml`：CLI 资产 + 尝试发布 Maven / CocoaPods / npm / pub.dev / crates.io / PyPI；**publish fail-pass**（不阻断 CLI/资产上传）。版本 = tag 去 `v`。

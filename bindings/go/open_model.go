@@ -1,0 +1,41 @@
+//go:build aria_ffi
+
+package aria
+
+import (
+	"os"
+	"strings"
+)
+
+func fileExists(p string) bool {
+	fi, err := os.Stat(p)
+	return err == nil && fi.IsDir()
+}
+
+// OpenModel opens a model by reference. If ref contains a separator or already
+// exists on disk it is loaded directly; otherwise it is treated as a model name
+// and auto-downloaded from the regional public hub before loading.
+func OpenModel(ref, token, site string) (*Engine, error) {
+	if strings.ContainsAny(ref, "/\\") || fileExists(ref) {
+		return Open(ref)
+	}
+	bundle, err := DownloadModel(ref, token, site)
+	if err != nil {
+		return nil, err
+	}
+	return Open(bundle)
+}
+
+// OpenModel opens a model by reference. If ref contains a separator or already
+// exists on disk it is loaded directly; otherwise it is treated as a model name
+// and auto-downloaded from the regional public hub before loading.
+func OpenModel(ref, token, site string) (*Engine, error) {
+	if strings.ContainsAny(ref, "/\\") || fileExists(ref) {
+		return Open(ref)
+	}
+	bundle, err := DownloadModel(ref, token, site)
+	if err != nil {
+		return nil, err
+	}
+	return Open(bundle)
+}

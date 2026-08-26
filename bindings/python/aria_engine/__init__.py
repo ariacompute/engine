@@ -7,7 +7,6 @@ import os
 import sys
 from ctypes import c_char_p, c_int, c_size_t, c_void_p, POINTER, c_ubyte
 from typing import Any, Optional
-from urllib.parse import quote
 from urllib.request import Request, urlopen
 
 __version__ = "0.1.0"
@@ -89,67 +88,175 @@ def _is_valid_bundle(directory: str) -> bool:
     return meta.get("format") == "aria-quant-bundle"
 
 
-def download_model(model: str, token: str, site: Optional[str] = None) -> str:
-    """Download ``model`` from the Dashboard private source into
+DEFAULT_SDK = "v1.0"
+_HUB_REQUIRED = ("config.json", "weight.bin")
+_HUB_OPTIONAL = (
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "vocab.json",
+    "merges.txt",
+)
+
+
+def _preferred_public_hub(site: Optional[str]) -> str:
+    """``.cn`` → ModelScope, otherwise Hugging Face (same as aria-engine download)."""
+    if site and "ariacompute.cn" in site.lower():
+        return "modelscope"
+    return "huggingface"
+
+
+def _is_dashboard_token(token: Optional[str]) -> bool:
+    if not token:
+        return False
+    t = token.strip().lower()
+    return t.startswith("sk-") or t.startswith("bfvk-")
+
+
+def _hub_bearer(token: Optional[str]) -> Optional[str]:
+    """Dashboard API keys must not be sent to Hugging Face / ModelScope."""
+    if not token or not token.strip() or _is_dashboard_token(token):
+        return None
+    return token.strip()
+
+
+def _hub_path_names(model: str) -> list[str]:
+    names = [model]
+    lower = model.lower()
+    core = model
+    for suf in ("_channel", "_group"):
+        if lower.endswith(suf):
+            core = model[: -len(suf)]
+            lower = core.lower()
+            break
+    stems = [core]
+    if lower.endswith("_q326"):
+        stems.append(f"{core[:-5]}q3.26")
+    elif lower.endswith("_q3.26"):
+        stems.append(f"{core[:-6]}q326")
+    for stem in stems:
+        for share in ("", "_channel", "_group"):
+            cand = f"{stem}{share}"
+            if cand not in names:
+                names.append(cand)
+    return names
+
+
+def _hub_file_urls(source: str, model: str, file: str, sdk: str = DEFAULT_SDK) -> list[str]:
+    urls: list[str] = []
+    for name in _hub_path_names(model):
+        if source == "modelscope":
+            for repo in (f"AriaCompute/{name}", "AriaCompute/model"):
+                urls.append(
+                    f"https://www.modelscope.cn/models/{repo}/resolve/master/{sdk}/{name}/{file}"
+                )
+                urls.append(
+                    f"https://modelscope.cn/models/{repo}/resolve/master/{sdk}/{name}/{file}"
+                )
+        else:
+            for repo in (f"ariacompute/{name}", "ariacompute/model"):
+                urls.append(
+                    f"https://huggingface.co/{repo}/resolve/main/{sdk}/{name}/{file}"
+                )
+    return urls
+
+
+def _fetch_url_to_file(url: str, dest: str, token: Optional[str]) -> None:
+    headers = {}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    req = Request(url, headers=headers)
+    with urlopen(req, timeout=600) as resp:  # nosec - hub URL from _hub_file_urls
+        os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+        with open(dest, "wb") as out:
+            while True:
+                chunk = resp.read(1024 * 1024)
+                if not chunk:
+                    break
+                out.write(chunk)
+
+
+def _fetch_hub_file(
+    source: str, model: str, file: str, dest: str, token: Optional[str], required: bool
+) -> bool:
+    import urllib.error
+
+    last: Optional[BaseException] = None
+    for url in _hub_file_urls(source, model, file):
+        try:
+            _fetch_url_to_file(url, dest, token)
+            return True
+        except urllib.error.HTTPError as e:
+            last = e
+            if e.code in (401, 403):
+                field = "modelscope_api_token" if source == "modelscope" else "hf_token"
+                raise RuntimeError(
+                    f"auth failed HTTP {e.code}; set {field} via aria-engine auth "
+                    f"(do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                ) from e
+            continue
+        except OSError as e:
+            last = e
+            continue
+    if required:
+        raise RuntimeError(f"{source}: missing {file}") from last
+    return False
+
+
+def download_model(
+    model: str, token: Optional[str] = None, site: Optional[str] = None
+) -> str:
+    """Download ``model`` from the regional public hub into
     ``~/.ariacompute/models/{model}`` and return that path.
 
-    If a valid bundle already exists at the cache path, the download is skipped.
+    Matches ``aria-engine download``: ``.com`` → Hugging Face, ``.cn`` → ModelScope.
+    Dashboard is not used. A Dashboard API key (``sk-`` / ``bfvk-``) is ignored for
+    hub auth. If a valid bundle already exists at the cache path, the download is skipped.
     """
-    if token is None:
-        raise ValueError("api token is required to download a model")
+    import shutil
+
+    _parse_bundle_name(model)
     site = site or DEFAULT_SITE
-    slug, quant = _parse_bundle_name(model)
+    source = _preferred_public_hub(site)
+    hub_token = _hub_bearer(token)
     cache = os.path.join(_aria_home(), "models", model)
     if os.path.isdir(cache) and _is_valid_bundle(cache):
         return cache
 
-    meta_url = (
-        f"{site.rstrip('/')}/api/dashboard/models/{quote(slug)}/download"
-        f"?quant={quote(quant)}&sdk=v1.0&format=json"
-    )
-    try:
-        req = Request(meta_url, headers={"Authorization": f"Bearer {token}"})
-        with urlopen(req) as resp:  # nosec - controlled URL from dashboard
-            meta = json.loads(resp.read().decode("utf-8"))
-    except OSError as e:
-        raise RuntimeError(f"dashboard request failed: {e}") from e
-    url = meta.get("url")
-    if not url:
-        raise RuntimeError("dashboard meta returned empty url")
-
-    try:
-        req = Request(url, headers={"Authorization": f"Bearer {token}"})
-        with urlopen(req) as resp:  # nosec - dashboard-provided url
-            data = resp.read()
-    except OSError as e:
-        raise RuntimeError(f"download stream failed: {e}") from e
-
-    import io
-    import shutil
-    import zipfile
-
-    if data[:2] != b"PK":
-        raise RuntimeError("downloaded archive is not a valid zip")
     staging = os.path.join(_aria_home(), "models", f".{model}.partial")
     if os.path.isdir(staging):
         shutil.rmtree(staging)
     os.makedirs(staging, exist_ok=True)
-    with zipfile.ZipFile(io.BytesIO(data)) as zf:
-        zf.extractall(staging)
-    # flatten a single top-level subdir (when config.json sits inside it)
-    entries = [e for e in os.listdir(staging) if not e.startswith(".")]
-    if len(entries) == 1 and os.path.isdir(os.path.join(staging, entries[0])):
-        inner = os.path.join(staging, entries[0])
-        if os.path.isfile(os.path.join(inner, "config.json")):
-            for name in os.listdir(inner):
-                shutil.move(os.path.join(inner, name), os.path.join(staging, name))
-            os.rmdir(inner)
-    if not _is_valid_bundle(staging):
-        shutil.rmtree(staging)
-        raise RuntimeError("downloaded archive did not contain a valid aria-quant-bundle")
-    if os.path.isdir(cache):
-        shutil.rmtree(cache)
-    shutil.move(staging, cache)
+    try:
+        for file in _HUB_REQUIRED:
+            _fetch_hub_file(
+                source, model, file, os.path.join(staging, file), hub_token, required=True
+            )
+        for extra in _HUB_OPTIONAL:
+            try:
+                _fetch_hub_file(
+                    source,
+                    model,
+                    extra,
+                    os.path.join(staging, extra),
+                    hub_token,
+                    required=False,
+                )
+            except RuntimeError:
+                continue
+        if not _is_valid_bundle(staging):
+            raise RuntimeError(
+                f"{source} fetch completed but bundle invalid "
+                "(need weight.bin + aria-quant-bundle config.json)"
+            )
+        if os.path.isdir(cache):
+            shutil.rmtree(cache)
+        shutil.move(staging, cache)
+    except Exception:
+        if os.path.isdir(staging):
+            shutil.rmtree(staging)
+        raise
     return cache
 
 
@@ -189,10 +296,6 @@ class Engine:
 
         bundle_path = model_ref
         if not (os.path.sep in model_ref or "\\" in model_ref or os.path.exists(model_ref)):
-            if not token:
-                raise ValueError(
-                    f"model name '{model_ref}' requires an api token to download"
-                )
             bundle_path = download_model(model_ref, token, site)
         self._handle = self._lib.aria_model_init(bundle_path.encode())
         if not self._handle:

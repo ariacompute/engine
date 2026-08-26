@@ -1,15 +1,12 @@
 package com.ariacompute.engine
 
-import java.io.BufferedInputStream
 import java.io.File
-import java.io.FileOutputStream
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
-import java.util.zip.ZipInputStream
 import org.json.JSONObject
 
 /** Kotlin/JVM + Android JNI wrapper over libaria_ffi. */
@@ -72,7 +69,10 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
             val idx = model.lastIndexOf("_q")
             if (idx != -1) {
                 val slug = model.substring(0, idx)
-                val suffix = model.substring(idx + 2)
+                var suffix = model.substring(idx + 2)
+                if (suffix.endsWith("_channel") || suffix.endsWith("_group")) {
+                    suffix = suffix.substring(0, suffix.lastIndexOf('_'))
+                }
                 val quant = when (suffix) {
                     "4" -> "int4"
                     "8" -> "int8"
@@ -100,95 +100,168 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
         private fun isLocalRef(ref: String): Boolean =
             ref.contains('/') || ref.contains('\\') || File(ref).exists()
 
-        /** Download `model` from the Dashboard private source into
-         * `~/.ariacompute/models/{model}`; skips when a valid bundle is cached. */
+        private const val DEFAULT_SDK = "v1.0"
+        private val HUB_REQUIRED = listOf("config.json", "weight.bin")
+        private val HUB_OPTIONAL = listOf(
+            "tokenizer.json",
+            "tokenizer.model",
+            "tokenizer_config.json",
+            "special_tokens_map.json",
+            "vocab.json",
+            "merges.txt",
+        )
+
+        private fun preferredPublicHub(site: String): String =
+            if (site.lowercase().contains("ariacompute.cn")) "modelscope" else "huggingface"
+
+        private fun hubBearer(token: String): String? {
+            val t = token.trim()
+            if (t.isEmpty()) return null
+            val low = t.lowercase()
+            if (low.startsWith("sk-") || low.startsWith("bfvk-")) return null
+            return t
+        }
+
+        private fun hubPathNames(model: String): List<String> {
+            val names = mutableListOf(model)
+            var lower = model.lowercase()
+            var core = model
+            for (suf in listOf("_channel", "_group")) {
+                if (lower.endsWith(suf)) {
+                    core = model.dropLast(suf.length)
+                    lower = core.lowercase()
+                    break
+                }
+            }
+            val stems = mutableListOf(core)
+            if (lower.endsWith("_q326")) {
+                stems.add(core.dropLast(5) + "q3.26")
+            } else if (lower.endsWith("_q3.26")) {
+                stems.add(core.dropLast(6) + "q326")
+            }
+            for (stem in stems) {
+                for (share in listOf("", "_channel", "_group")) {
+                    val cand = stem + share
+                    if (cand !in names) names.add(cand)
+                }
+            }
+            return names
+        }
+
+        private fun hubFileUrls(source: String, model: String, file: String): List<String> {
+            val urls = mutableListOf<String>()
+            for (name in hubPathNames(model)) {
+                if (source == "modelscope") {
+                    for (repo in listOf("AriaCompute/$name", "AriaCompute/model")) {
+                        urls.add("https://www.modelscope.cn/models/$repo/resolve/master/$DEFAULT_SDK/$name/$file")
+                        urls.add("https://modelscope.cn/models/$repo/resolve/master/$DEFAULT_SDK/$name/$file")
+                    }
+                } else {
+                    for (repo in listOf("ariacompute/$name", "ariacompute/model")) {
+                        urls.add("https://huggingface.co/$repo/resolve/main/$DEFAULT_SDK/$name/$file")
+                    }
+                }
+            }
+            return urls
+        }
+
+        private fun fetchUrlToFile(url: String, dest: File, token: String?, client: HttpClient) {
+            val builder = HttpRequest.newBuilder(URI.create(url)).GET()
+            if (!token.isNullOrEmpty()) {
+                builder.header("Authorization", "Bearer $token")
+            }
+            dest.parentFile?.mkdirs()
+            val resp = client.send(builder.build(), HttpResponse.BodyHandlers.ofFile(dest.toPath()))
+            val code = resp.statusCode()
+            if (code == 401 || code == 403) {
+                throw RuntimeException("HTTP $code")
+            }
+            if (code != 200) {
+                dest.delete()
+                throw RuntimeException("HTTP $code")
+            }
+        }
+
+        private fun fetchHubFile(
+            source: String,
+            model: String,
+            file: String,
+            dest: File,
+            token: String?,
+            required: Boolean,
+            client: HttpClient,
+        ) {
+            var last: Exception? = null
+            for (url in hubFileUrls(source, model, file)) {
+                try {
+                    fetchUrlToFile(url, dest, token, client)
+                    return
+                } catch (e: Exception) {
+                    last = e
+                    val msg = e.message ?: ""
+                    if (msg.contains("HTTP 401") || msg.contains("HTTP 403")) {
+                        val field = if (source == "modelscope") "modelscope_api_token" else "hf_token"
+                        val code = if (msg.contains("401")) 401 else 403
+                        throw RuntimeException(
+                            "auth failed HTTP $code; set $field via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                        )
+                    }
+                }
+            }
+            if (required) {
+                throw RuntimeException("$source: missing $file${last?.let { ": $it" } ?: ""}")
+            }
+        }
+
+        /** Download `model` from the regional public hub into
+         * `~/.ariacompute/models/{model}`; skips when a valid bundle is cached.
+         * Dashboard is not used. Token is optional; Dashboard sk-/bfvk- keys are ignored. */
         @JvmOverloads
         @JvmStatic
-        fun downloadModel(model: String, token: String, site: String = DEFAULT_SITE): String {
-            require(token.isNotEmpty()) { "api token is required to download a model" }
-            val (slug, quant) = parseBundleName(model)
+        fun downloadModel(model: String, token: String = "", site: String = DEFAULT_SITE): String {
+            parseBundleName(model)
+            val source = preferredPublicHub(site)
+            val hubToken = hubBearer(token)
             val cache = cacheDir(model)
             if (File(cache).exists() && isValidBundle(cache)) return cache
 
             val client = HttpClient.newHttpClient()
-            val metaUrl = "${site.trimEnd('/')}/api/dashboard/models/" +
-                java.net.URLEncoder.encode(slug, "UTF-8") +
-                "/download?quant=${java.net.URLEncoder.encode(quant, "UTF-8")}&sdk=v1.0&format=json"
-            val metaReq = HttpRequest.newBuilder(URI.create(metaUrl))
-                .header("Authorization", "Bearer $token")
-                .GET()
-                .build()
-            val metaResp = client.send(metaReq, HttpResponse.BodyHandlers.ofString())
-            if (metaResp.statusCode() != 200) {
-                throw RuntimeException("dashboard request failed: ${metaResp.statusCode()}")
-            }
-            val meta = JSONObject(metaResp.body())
-            val url = meta.optString("url")
-            if (url.isEmpty()) throw RuntimeException("dashboard meta returned empty url")
-
-            val zipReq = HttpRequest.newBuilder(URI.create(url))
-                .header("Authorization", "Bearer $token")
-                .GET()
-                .build()
-            val zipResp = client.send(zipReq, HttpResponse.BodyHandlers.ofByteArray())
-            if (zipResp.statusCode() != 200) {
-                throw RuntimeException("download stream failed: ${zipResp.statusCode()}")
-            }
-            val data = zipResp.body()
-
             val staging = cacheDir(".$model.partial")
-            File(staging).deleteRecursively()
             val stagingDir = File(staging)
+            stagingDir.deleteRecursively()
             stagingDir.mkdirs()
-            extractZip(data.inputStream().buffered(), stagingDir)
-            if (!isValidBundle(staging)) {
+            try {
+                for (file in HUB_REQUIRED) {
+                    fetchHubFile(source, model, file, File(stagingDir, file), hubToken, true, client)
+                }
+                for (extra in HUB_OPTIONAL) {
+                    try {
+                        fetchHubFile(source, model, extra, File(stagingDir, extra), hubToken, false, client)
+                    } catch (_: Exception) {
+                    }
+                }
+                if (!isValidBundle(staging)) {
+                    throw RuntimeException(
+                        "$source fetch completed but bundle invalid (need weight.bin + aria-quant-bundle config.json)"
+                    )
+                }
+                val cacheFile = File(cache)
+                cacheFile.deleteRecursively()
+                Files.move(stagingDir.toPath(), cacheFile.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                return cache
+            } catch (e: Exception) {
                 stagingDir.deleteRecursively()
-                throw RuntimeException("downloaded archive did not contain a valid aria-quant-bundle")
-            }
-            val cacheFile = File(cache)
-            cacheFile.deleteRecursively()
-            Files.move(stagingDir.toPath(), cacheFile.toPath(), StandardCopyOption.ATOMIC_MOVE)
-            return cache
-        }
-
-        private fun extractZip(stream: BufferedInputStream, dest: File) {
-            ZipInputStream(stream).use { zis ->
-                var entry = zis.nextEntry
-                while (entry != null) {
-                    val out = File(dest, entry.name)
-                    if (entry.isDirectory) {
-                        out.mkdirs()
-                    } else {
-                        out.parentFile?.mkdirs()
-                        FileOutputStream(out).use { fos -> zis.copyTo(fos) }
-                    }
-                    zis.closeEntry()
-                    entry = zis.nextEntry
-                }
-            }
-            // flatten a single top-level subdir
-            val entries = dest.listFiles()?.filter { !it.name.startsWith(".") } ?: emptyList()
-            if (entries.size == 1 && entries[0].isDirectory) {
-                val inner = entries[0]
-                if (File(inner, "config.json").isFile) {
-                    inner.listFiles()?.forEach { f ->
-                        Files.move(f.toPath(), File(dest, f.name).toPath(), StandardCopyOption.REPLACE_EXISTING)
-                    }
-                    inner.deleteRecursively()
-                }
+                throw e
             }
         }
 
         /** Open a model by reference. A value containing a separator or already
-         * on disk is a local path; otherwise it is a model name that is
-         * downloaded (requires `token`) then loaded. */
+         * on disk is a local path; otherwise it is a model name downloaded from
+         * the regional public hub then loaded. */
         @JvmOverloads
         @JvmStatic
         fun open(modelRef: String, token: String = "", site: String = DEFAULT_SITE): AriaEngine {
             if (isLocalRef(modelRef)) return AriaEngine(modelRef)
-            if (token.isEmpty()) {
-                throw IllegalArgumentException("model name '$modelRef' requires an api token to download")
-            }
             val bundle = downloadModel(modelRef, token, site)
             return AriaEngine(bundle)
         }

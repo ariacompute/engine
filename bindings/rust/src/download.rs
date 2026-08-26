@@ -1,26 +1,22 @@
-//! Dashboard-only model auto-download for the Rust SDK.
+//! Regional public-hub model auto-download for the Rust SDK.
 //!
-//! Mirrors the `dashboard` branch of `openai/src/download.rs`: resolve the
-//! `slug`/`quant` from the model name, request the meta URL with a bearer
-//! token, stream the zip, validate the zip magic, extract (flattening a single
-//! top-level subdir), and verify the resulting bundle.
+//! Matches `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope.
+//! Dashboard zip meta is not used. A Dashboard `sk-` / `bfvk-` token is ignored
+//! for hub auth.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum DownloadError {
     #[error("invalid model name: {0}")]
     InvalidModelName(String),
-    #[error("dashboard request failed: {0}")]
+    #[error("{0}")]
     Request(String),
     #[error("download stream failed: {0}")]
     Stream(String),
-    #[error("invalid zip archive: {0}")]
-    BadZip(String),
-    #[error("extraction failed: {0}")]
-    Extract(String),
     #[error("invalid bundle after download: {0}")]
     InvalidBundle(String),
     #[error("io error: {0}")]
@@ -28,6 +24,16 @@ pub enum DownloadError {
 }
 
 const DEFAULT_SITE: &str = "https://ariacompute.com";
+const DEFAULT_SDK: &str = "v1.0";
+const HUB_REQUIRED: &[&str] = &["config.json", "weight.bin"];
+const HUB_OPTIONAL: &[&str] = &[
+    "tokenizer.json",
+    "tokenizer.model",
+    "tokenizer_config.json",
+    "special_tokens_map.json",
+    "vocab.json",
+    "merges.txt",
+];
 
 fn aria_home() -> Result<PathBuf, DownloadError> {
     if let Ok(override_home) = std::env::var("ARIA_COMPUTE_HOME") {
@@ -92,33 +98,80 @@ fn parse_bundle_name(model: &str) -> Result<(String, String), DownloadError> {
     Ok((slug, quant))
 }
 
-fn url_encode(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for b in s.bytes() {
-        match b {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(b as char)
-            }
-            _ => out.push_str(&format!("%{:02X}", b)),
+fn preferred_public_hub(site: Option<&str>) -> &'static str {
+    if site
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .contains("ariacompute.cn")
+    {
+        "modelscope"
+    } else {
+        "huggingface"
+    }
+}
+
+fn hub_bearer(token: &str) -> Option<&str> {
+    let t = token.trim();
+    if t.is_empty() {
+        return None;
+    }
+    let low = t.to_ascii_lowercase();
+    if low.starts_with("sk-") || low.starts_with("bfvk-") {
+        None
+    } else {
+        Some(t)
+    }
+}
+
+fn hub_path_names(model: &str) -> Vec<String> {
+    let mut names = vec![model.to_string()];
+    let mut lower = model.to_ascii_lowercase();
+    let mut core = model.to_string();
+    for suf in ["_channel", "_group"] {
+        if lower.ends_with(suf) {
+            core = model[..model.len() - suf.len()].to_string();
+            lower = core.to_ascii_lowercase();
+            break;
         }
     }
-    out
+    let mut stems = vec![core.clone()];
+    if lower.ends_with("_q326") {
+        stems.push(format!("{}q3.26", &core[..core.len() - 5]));
+    } else if lower.ends_with("_q3.26") {
+        stems.push(format!("{}q326", &core[..core.len() - 6]));
+    }
+    for stem in stems {
+        for share in ["", "_channel", "_group"] {
+            let cand = format!("{stem}{share}");
+            if !names.iter().any(|n| n == &cand) {
+                names.push(cand);
+            }
+        }
+    }
+    names
 }
 
-#[derive(serde::Deserialize)]
-struct DashboardMeta {
-    url: String,
-}
-
-fn meta_url(site: &str, slug: &str, quant: &str) -> String {
-    let sdk = "v1.0";
-    format!(
-        "{}/api/dashboard/models/{}/download?quant={}&sdk={}&format=json",
-        site.trim_end_matches('/'),
-        url_encode(slug),
-        url_encode(quant),
-        url_encode(sdk),
-    )
+fn hub_file_urls(source: &str, model: &str, file: &str) -> Vec<String> {
+    let mut urls = Vec::new();
+    for name in hub_path_names(model) {
+        if source == "modelscope" {
+            for repo in [format!("AriaCompute/{name}"), "AriaCompute/model".into()] {
+                urls.push(format!(
+                    "https://www.modelscope.cn/models/{repo}/resolve/master/{DEFAULT_SDK}/{name}/{file}"
+                ));
+                urls.push(format!(
+                    "https://modelscope.cn/models/{repo}/resolve/master/{DEFAULT_SDK}/{name}/{file}"
+                ));
+            }
+        } else {
+            for repo in [format!("ariacompute/{name}"), "ariacompute/model".into()] {
+                urls.push(format!(
+                    "https://huggingface.co/{repo}/resolve/main/{DEFAULT_SDK}/{name}/{file}"
+                ));
+            }
+        }
+    }
+    urls
 }
 
 fn is_valid_bundle(dir: &Path) -> bool {
@@ -139,66 +192,6 @@ fn is_valid_bundle(dir: &Path) -> bool {
         .unwrap_or(false)
 }
 
-/// Flatten a single top-level subdir (when config.json sits inside it).
-fn flatten_single_subdir(dir: &Path) -> std::io::Result<()> {
-    let mut entries: Vec<_> = std::fs::read_dir(dir)?
-        .filter_map(|e| e.ok())
-        .map(|e| e.path())
-        .collect();
-    if entries.len() != 1 {
-        return Ok(());
-    }
-    let only = &entries[0];
-    if !only.is_dir() {
-        return Ok(());
-    }
-    if !only.join("config.json").is_file() {
-        return Ok(());
-    }
-    let tmp = dir.join(format!(".flatten_{}", std::process::id()));
-    std::fs::rename(only, &tmp)?;
-    for entry in std::fs::read_dir(&tmp)? {
-        let entry = entry?;
-        std::fs::rename(entry.path(), dir.join(entry.file_name()))?;
-    }
-    std::fs::remove_dir_all(&tmp)?;
-    entries.clear();
-    Ok(())
-}
-
-fn extract_zip(data: &[u8], dest: &Path) -> Result<(), DownloadError> {
-    if data.len() < 4 || &data[0..2] != b"PK" {
-        return Err(DownloadError::BadZip("missing PK magic".into()));
-    }
-    std::fs::create_dir_all(dest)?;
-    let cursor = std::io::Cursor::new(data);
-    let mut archive = zip::ZipArchive::new(cursor)
-        .map_err(|e| DownloadError::BadZip(e.to_string()))?;
-    for i in 0..archive.len() {
-        let mut file = archive
-            .by_index(i)
-            .map_err(|e| DownloadError::Extract(e.to_string()))?;
-        let name = match file.enclosed_name() {
-            Some(n) => n.to_path_buf(),
-            None => continue,
-        };
-        let out_path = dest.join(&name);
-        if file.is_dir() {
-            std::fs::create_dir_all(&out_path)?;
-        } else {
-            if let Some(parent) = out_path.parent() {
-                std::fs::create_dir_all(parent)?;
-            }
-            let mut buf = Vec::with_capacity(file.size() as usize);
-            file.read_to_end(&mut buf)?;
-            let mut out = std::fs::File::create(&out_path)?;
-            out.write_all(&buf)?;
-        }
-    }
-    flatten_single_subdir(dest).map_err(DownloadError::Io)?;
-    Ok(())
-}
-
 fn atomic_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
     if dst.exists() {
         std::fs::remove_dir_all(dst)?;
@@ -206,60 +199,192 @@ fn atomic_replace(src: &Path, dst: &Path) -> std::io::Result<()> {
     std::fs::rename(src, dst)
 }
 
-/// Download `model` from the Dashboard private source into
+fn auth_error(source: &str, code: u16) -> DownloadError {
+    let field = if source == "modelscope" {
+        "modelscope_api_token"
+    } else {
+        "hf_token"
+    };
+    DownloadError::Request(format!(
+        "auth failed HTTP {code}; set {field} via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+    ))
+}
+
+fn fetch_url_to_file(url: &str, dest: &Path, token: Option<&str>) -> Result<(), DownloadError> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(600))
+        .build();
+    let mut req = agent.get(url);
+    if let Some(t) = token {
+        req = req.set("Authorization", &format!("Bearer {t}"));
+    }
+    let resp = match req.call() {
+        Ok(r) => r,
+        Err(ureq::Error::Status(code, _)) if code == 401 || code == 403 => {
+            return Err(DownloadError::Request(format!("HTTP {code}")));
+        }
+        Err(ureq::Error::Status(code, _)) => {
+            return Err(DownloadError::Request(format!("HTTP {code}")));
+        }
+        Err(e) => return Err(DownloadError::Request(e.to_string())),
+    };
+    if let Some(parent) = dest.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let mut reader = resp.into_reader();
+    let mut out = std::fs::File::create(dest)?;
+    let mut buf = [0u8; 1024 * 1024];
+    loop {
+        let n = reader
+            .read(&mut buf)
+            .map_err(|e| DownloadError::Stream(e.to_string()))?;
+        if n == 0 {
+            break;
+        }
+        out.write_all(&buf[..n])?;
+    }
+    Ok(())
+}
+
+fn fetch_hub_file(
+    source: &str,
+    model: &str,
+    file: &str,
+    dest: &Path,
+    token: Option<&str>,
+    required: bool,
+) -> Result<bool, DownloadError> {
+    let mut last: Option<DownloadError> = None;
+    for url in hub_file_urls(source, model, file) {
+        match fetch_url_to_file(&url, dest, token) {
+            Ok(()) => return Ok(true),
+            Err(DownloadError::Request(msg))
+                if msg.contains("HTTP 401") || msg.contains("HTTP 403") =>
+            {
+                let code = if msg.contains("401") { 401 } else { 403 };
+                return Err(auth_error(source, code));
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    if required {
+        Err(DownloadError::Request(format!(
+            "{source}: missing {file}{}",
+            last.map(|e| format!(": {e}")).unwrap_or_default()
+        )))
+    } else {
+        Ok(false)
+    }
+}
+
+/// Download `model` from the regional public hub into
 /// `~/.ariacompute/models/{model}`, then return that directory.
 ///
 /// If a valid bundle already exists at the cache path, the download is skipped.
+/// `token` may be empty; Dashboard `sk-` / `bfvk-` keys are not sent to the hub.
 pub fn download_model(
     model: &str,
     token: &str,
     site: Option<&str>,
 ) -> Result<PathBuf, DownloadError> {
-    let (slug, quant) = parse_bundle_name(model)?;
+    parse_bundle_name(model)?;
     let site = site.unwrap_or(DEFAULT_SITE);
+    let source = preferred_public_hub(Some(site));
+    let hub_token = hub_bearer(token);
     let cache = models_dir()?.join(model);
 
     if cache.exists() && is_valid_bundle(&cache) {
         return Ok(cache);
     }
 
-    let url = meta_url(site, &slug, &quant);
-    let agent = ureq::AgentBuilder::new().build();
-    let meta: DashboardMeta = agent
-        .get(&url)
-        .set("Authorization", &format!("Bearer {token}"))
-        .call()
-        .map_err(|e| DownloadError::Request(e.to_string()))?
-        .into_json::<DashboardMeta>()
-        .map_err(|e| DownloadError::Request(e.to_string()))?;
-    if meta.url.is_empty() {
-        return Err(DownloadError::Request(
-            "dashboard meta returned empty url".into(),
-        ));
-    }
-
-    let mut reader = agent
-        .get(&meta.url)
-        .set("Authorization", &format!("Bearer {token}"))
-        .call()
-        .map_err(|e| DownloadError::Stream(e.to_string()))?
-        .into_reader();
-    let mut data = Vec::new();
-    reader
-        .read_to_end(&mut data)
-        .map_err(|e| DownloadError::Stream(e.to_string()))?;
-
     let staging = models_dir()?.join(format!(".{}.partial", model));
     if staging.exists() {
         std::fs::remove_dir_all(&staging)?;
     }
-    extract_zip(&data, &staging)?;
-    if !is_valid_bundle(&staging) {
+    std::fs::create_dir_all(&staging)?;
+    let result = (|| {
+        for file in HUB_REQUIRED {
+            fetch_hub_file(source, model, file, &staging.join(file), hub_token, true)?;
+        }
+        for extra in HUB_OPTIONAL {
+            let _ = fetch_hub_file(source, model, extra, &staging.join(extra), hub_token, false);
+        }
+        if !is_valid_bundle(&staging) {
+            return Err(DownloadError::InvalidBundle(
+                "need weight.bin + aria-quant-bundle config.json".into(),
+            ));
+        }
+        atomic_replace(&staging, &cache)?;
+        Ok(cache.clone())
+    })();
+    if result.is_err() && staging.exists() {
         let _ = std::fs::remove_dir_all(&staging);
-        return Err(DownloadError::InvalidBundle(
-            "downloaded archive did not contain a valid aria-quant-bundle".into(),
-        ));
     }
-    atomic_replace(&staging, &cache)?;
-    Ok(cache)
+    result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Mutex;
+
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    #[test]
+    fn preferred_hub_follows_site_tld() {
+        assert_eq!(
+            preferred_public_hub(Some("https://ariacompute.com")),
+            "huggingface"
+        );
+        assert_eq!(
+            preferred_public_hub(Some("https://ariacompute.cn")),
+            "modelscope"
+        );
+        assert_eq!(preferred_public_hub(None), "huggingface");
+    }
+
+    #[test]
+    fn dashboard_token_not_sent_to_hub() {
+        assert!(hub_bearer("sk-bf-95076ed1-8c1a-4efa-b33c-f52c1d7f9f24").is_none());
+        assert!(hub_bearer("bfvk-test").is_none());
+        assert_eq!(hub_bearer("hf_abc"), Some("hf_abc"));
+    }
+
+    #[test]
+    fn hub_urls_follow_upload_layout() {
+        let hf = hub_file_urls("huggingface", "gemma-4-e2b-it_q4", "config.json");
+        assert!(hf.iter().any(|u| u.contains(
+            "/ariacompute/gemma-4-e2b-it_q4/resolve/main/v1.0/gemma-4-e2b-it_q4/config.json"
+        )));
+        let ms = hub_file_urls("modelscope", "gemma-4-e2b-it_q4", "weight.bin");
+        assert!(ms
+            .iter()
+            .any(|u| u.contains("/v1.0/gemma-4-e2b-it_q4/weight.bin")));
+        assert!(hf.iter().chain(ms.iter()).all(|u| !u.contains("/api/dashboard/")));
+    }
+
+    #[test]
+    fn parse_channel_suffix() {
+        let (slug, quant) = parse_bundle_name("foo_q326_channel").unwrap();
+        assert_eq!(slug, "foo");
+        assert_eq!(quant, "int326");
+    }
+
+    #[test]
+    fn cached_bundle_skips_download() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", tmp.path());
+        let cache = tmp.path().join("models").join("foo_q4");
+        std::fs::create_dir_all(&cache).unwrap();
+        std::fs::write(cache.join("weight.bin"), b"x").unwrap();
+        std::fs::write(
+            cache.join("config.json"),
+            br#"{"format":"aria-quant-bundle"}"#,
+        )
+        .unwrap();
+        let got = download_model("foo_q4", "", None).unwrap();
+        assert_eq!(got, cache);
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+    }
 }

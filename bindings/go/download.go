@@ -1,19 +1,30 @@
 package aria
 
 import (
-	"archive/zip"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const defaultSite = "https://ariacompute.com"
+const defaultSDK = "v1.0"
+
+var hubRequired = []string{"config.json", "weight.bin"}
+var hubOptional = []string{
+	"tokenizer.json",
+	"tokenizer.model",
+	"tokenizer_config.json",
+	"special_tokens_map.json",
+	"vocab.json",
+	"merges.txt",
+}
+
+var hubClient = &http.Client{Timeout: 10 * time.Minute}
 
 func ariaHome() (string, error) {
 	if v := os.Getenv("ARIA_COMPUTE_HOME"); v != "" {
@@ -43,6 +54,11 @@ func parseBundleName(model string) (slug, quant string, err error) {
 	if idx != -1 {
 		slug = model[:idx]
 		suffix := model[idx+2:]
+		if strings.HasSuffix(suffix, "_channel") || strings.HasSuffix(suffix, "_group") {
+			if i := strings.LastIndex(suffix, "_"); i >= 0 {
+				suffix = suffix[:i]
+			}
+		}
 		switch suffix {
 		case "4":
 			quant = "int4"
@@ -78,20 +94,160 @@ func isValidBundle(dir string) bool {
 	return meta.Format == "aria-quant-bundle"
 }
 
-// DownloadModel downloads `model` from the Dashboard private source into
-// ~/.ariacompute/models/{model} and returns that path. If a valid bundle is
-// already cached, the download is skipped.
+func preferredPublicHub(site string) string {
+	if strings.Contains(strings.ToLower(site), "ariacompute.cn") {
+		return "modelscope"
+	}
+	return "huggingface"
+}
+
+func isDashboardToken(token string) bool {
+	t := strings.ToLower(strings.TrimSpace(token))
+	return strings.HasPrefix(t, "sk-") || strings.HasPrefix(t, "bfvk-")
+}
+
+func hubBearer(token string) string {
+	t := strings.TrimSpace(token)
+	if t == "" || isDashboardToken(t) {
+		return ""
+	}
+	return t
+}
+
+func hubPathNames(model string) []string {
+	names := []string{model}
+	lower := strings.ToLower(model)
+	core := model
+	for _, suf := range []string{"_channel", "_group"} {
+		if strings.HasSuffix(lower, suf) {
+			core = model[:len(model)-len(suf)]
+			lower = strings.ToLower(core)
+			break
+		}
+	}
+	stems := []string{core}
+	if strings.HasSuffix(lower, "_q326") {
+		stems = append(stems, core[:len(core)-5]+"q3.26")
+	} else if strings.HasSuffix(lower, "_q3.26") {
+		stems = append(stems, core[:len(core)-6]+"q326")
+	}
+	for _, stem := range stems {
+		for _, share := range []string{"", "_channel", "_group"} {
+			cand := stem + share
+			found := false
+			for _, n := range names {
+				if n == cand {
+					found = true
+					break
+				}
+			}
+			if !found {
+				names = append(names, cand)
+			}
+		}
+	}
+	return names
+}
+
+func hubFileURLs(source, model, file string) []string {
+	var urls []string
+	for _, name := range hubPathNames(model) {
+		if source == "modelscope" {
+			for _, repo := range []string{"AriaCompute/" + name, "AriaCompute/model"} {
+				urls = append(urls,
+					fmt.Sprintf("https://www.modelscope.cn/models/%s/resolve/master/%s/%s/%s", repo, defaultSDK, name, file),
+					fmt.Sprintf("https://modelscope.cn/models/%s/resolve/master/%s/%s/%s", repo, defaultSDK, name, file),
+				)
+			}
+		} else {
+			for _, repo := range []string{"ariacompute/" + name, "ariacompute/model"} {
+				urls = append(urls,
+					fmt.Sprintf("https://huggingface.co/%s/resolve/main/%s/%s/%s", repo, defaultSDK, name, file),
+				)
+			}
+		}
+	}
+	return urls
+}
+
+type hubAuthError struct {
+	code   int
+	source string
+}
+
+func (e *hubAuthError) Error() string {
+	field := "hf_token"
+	if e.source == "modelscope" {
+		field = "modelscope_api_token"
+	}
+	return fmt.Sprintf("auth failed HTTP %d; set %s via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)", e.code, field)
+}
+
+func fetchURLToFile(url, dest, token string) error {
+	req, err := http.NewRequest(http.MethodGet, url, nil)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := hubClient.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		return &hubAuthError{code: resp.StatusCode}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("HTTP %s", resp.Status)
+	}
+	if err := os.MkdirAll(filepath.Dir(dest), 0o755); err != nil {
+		return err
+	}
+	out, err := os.Create(dest)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	_, err = io.Copy(out, resp.Body)
+	return err
+}
+
+func fetchHubFile(source, model, file, dest, token string, required bool) error {
+	var last error
+	for _, u := range hubFileURLs(source, model, file) {
+		err := fetchURLToFile(u, dest, token)
+		if err == nil {
+			return nil
+		}
+		if ae, ok := err.(*hubAuthError); ok {
+			ae.source = source
+			return ae
+		}
+		last = err
+	}
+	if required {
+		return fmt.Errorf("%s: missing %s: %v", source, file, last)
+	}
+	return nil
+}
+
+// DownloadModel downloads `model` from the regional public hub into
+// ~/.ariacompute/models/{model} and returns that path.
+//
+// Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
+// Dashboard is not used. A Dashboard API key (sk- / bfvk-) is ignored for
+// hub auth. If a valid bundle already exists at the cache path, the download is skipped.
 func DownloadModel(model, token, site string) (string, error) {
-	if token == "" {
-		return "", errors.New("api token is required to download a model")
+	if _, _, err := parseBundleName(model); err != nil {
+		return "", err
 	}
 	if site == "" {
 		site = defaultSite
 	}
-	slug, quant, err := parseBundleName(model)
-	if err != nil {
-		return "", err
-	}
+	source := preferredPublicHub(site)
+	hubToken := hubBearer(token)
 	cache, err := cacheDir(model)
 	if err != nil {
 		return "", err
@@ -100,136 +256,37 @@ func DownloadModel(model, token, site string) (string, error) {
 		return cache, nil
 	}
 
-	metaURL := fmt.Sprintf("%s/api/dashboard/models/%s/download?quant=%s&sdk=v1.0&format=json",
-		strings.TrimRight(site, "/"), url.PathEscape(slug), url.QueryEscape(quant))
-	req, _ := http.NewRequest(http.MethodGet, metaURL, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	home, err := ariaHome()
 	if err != nil {
-		return "", fmt.Errorf("dashboard request failed: %w", err)
-	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("dashboard request failed: %s", resp.Status)
-	}
-	var meta struct {
-		URL string `json:"url"`
-	}
-	if err := json.NewDecoder(resp.Body).Decode(&meta); err != nil {
-		return "", fmt.Errorf("dashboard meta decode failed: %w", err)
-	}
-	if meta.URL == "" {
-		return "", errors.New("dashboard meta returned empty url")
-	}
-
-	req, _ = http.NewRequest(http.MethodGet, meta.URL, nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	zipResp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("download stream failed: %w", err)
-	}
-	defer zipResp.Body.Close()
-	if zipResp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("download stream failed: %s", zipResp.Status)
-	}
-	data, err := io.ReadAll(zipResp.Body)
-	if err != nil {
-		return "", fmt.Errorf("download stream failed: %w", err)
-	}
-
-	home, _ := ariaHome()
-	staging := filepath.Join(home, "models", "."+model+".partial")
-	os.RemoveAll(staging)
-	if err := extractZip(data, staging); err != nil {
-		os.RemoveAll(staging)
 		return "", err
 	}
+	staging := filepath.Join(home, "models", "."+model+".partial")
+	os.RemoveAll(staging)
+	if err := os.MkdirAll(staging, 0o755); err != nil {
+		return "", err
+	}
+	cleanup := true
+	defer func() {
+		if cleanup {
+			os.RemoveAll(staging)
+		}
+	}()
+
+	for _, file := range hubRequired {
+		if err := fetchHubFile(source, model, file, filepath.Join(staging, file), hubToken, true); err != nil {
+			return "", err
+		}
+	}
+	for _, extra := range hubOptional {
+		_ = fetchHubFile(source, model, extra, filepath.Join(staging, extra), hubToken, false)
+	}
 	if !isValidBundle(staging) {
-		os.RemoveAll(staging)
-		return "", errors.New("downloaded archive did not contain a valid aria-quant-bundle")
+		return "", fmt.Errorf("%s fetch completed but bundle invalid (need weight.bin + aria-quant-bundle config.json)", source)
 	}
 	os.RemoveAll(cache)
 	if err := os.Rename(staging, cache); err != nil {
 		return "", err
 	}
+	cleanup = false
 	return cache, nil
-}
-
-func extractZip(data []byte, dest string) error {
-	zr, err := zip.NewReader(strings.NewReader(string(data)), int64(len(data)))
-	if err != nil {
-		return fmt.Errorf("invalid zip archive: %w", err)
-	}
-	if err := os.MkdirAll(dest, 0o755); err != nil {
-		return err
-	}
-	for _, f := range zr.File {
-		out := filepath.Join(dest, f.Name)
-		if f.FileInfo().IsDir() {
-			if err := os.MkdirAll(out, 0o755); err != nil {
-				return err
-			}
-			continue
-		}
-		if err := os.MkdirAll(filepath.Dir(out), 0o755); err != nil {
-			return err
-		}
-		rc, err := f.Open()
-		if err != nil {
-			return err
-		}
-		outF, err := os.Create(out)
-		if err != nil {
-			rc.Close()
-			return err
-		}
-		if _, err := io.Copy(outF, rc); err != nil {
-			rc.Close()
-			outF.Close()
-			return err
-		}
-		rc.Close()
-		outF.Close()
-	}
-	// flatten a single top-level subdir
-	entries, _ := os.ReadDir(dest)
-	real := make([]os.DirEntry, 0, len(entries))
-	for _, e := range entries {
-		if !strings.HasPrefix(e.Name(), ".") {
-			real = append(real, e)
-		}
-	}
-	if len(real) == 1 && real[0].IsDir() {
-		inner := filepath.Join(dest, real[0].Name())
-		if fi, _ := os.Stat(filepath.Join(inner, "config.json")); fi != nil && !fi.IsDir() {
-			names, _ := os.ReadDir(inner)
-			for _, n := range names {
-				os.Rename(filepath.Join(inner, n.Name()), filepath.Join(dest, n.Name()))
-			}
-			os.Remove(inner)
-		}
-	}
-	return nil
-}
-
-// OpenModel opens a model by reference. If ref contains a separator or already
-// exists on disk it is loaded directly; otherwise it is treated as a model name
-// and auto-downloaded (requires an api token) before loading.
-func OpenModel(ref, token, site string) (*Engine, error) {
-	if strings.ContainsAny(ref, "/\\") || fileExists(ref) {
-		return Open(ref)
-	}
-	if token == "" {
-		return nil, fmt.Errorf("model name %q requires an api token to download", ref)
-	}
-	bundle, err := DownloadModel(ref, token, site)
-	if err != nil {
-		return nil, err
-	}
-	return Open(bundle)
-}
-
-func fileExists(p string) bool {
-	fi, err := os.Stat(p)
-	return err == nil && fi.IsDir()
 }

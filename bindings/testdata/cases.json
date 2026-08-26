@@ -16,9 +16,9 @@
     {"id": "transcribe_bad_audio", "intent": "Empty pcm", "assert": "error, no crash"},
     {"id": "cache_dir_resolves", "intent": "aria_model_cache_dir(model) helper", "assert": "returns ~/.ariacompute/models/{model}; honors ARIA_COMPUTE_HOME"},
     {"id": "is_local_path_detects", "intent": "aria_is_local_path(ref) helper", "assert": "1 for '/abs/path' or existing dir; 0 for bare model name"},
-    {"id": "open_model_name_requires_token", "intent": "Model name without token", "assert": "open_model/open rejects with clear missing-token error"},
+    {"id": "open_model_name_token_optional", "intent": "Model name without token", "assert": "open_model/open attempts hub download; token is optional for public models"},
     {"id": "open_local_path_ignores_token", "intent": "Local path with no token", "assert": "loads directly; token optional"},
     {"id": "download_cached_skip", "intent": "Valid cached bundle present", "assert": "download_model returns cache path without network"},
-    {"id": "download_invalid_token", "intent": "Bad/missing api token", "assert": "download raises clear error, no silent failure"}
+    {"id": "download_dashboard_token_ignored", "intent": "Dashboard sk-/bfvk- token", "assert": "not sent as hub Bearer; public hub download proceeds without it"}
   ]
 }

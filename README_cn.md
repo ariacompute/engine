@@ -271,7 +271,7 @@ C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`�
 
 ### 按模型名自动下载
 
-所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名，由 SDK 从 **Dashboard 私有源** 自动下载（需传入 dashboard `token`；`site_url` 默认 `https://ariacompute.com`，可用 `site`/环境变量覆盖）。下载逻辑与 `aria-engine download` 的 Dashboard 分支一致：解析 `slug`/`quant`、请求 meta URL、流式拉取 zip、校验 zip 魔数、解压（flatten 单层子目录）、校验 `weight.bin` + `config.json` 且 `format == "aria-quant-bundle"`。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
+所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `aria-engine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**（Dashboard 的 `sk-`/`bfvk-` token 不会当作 hub 凭证）。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
@@ -321,8 +321,8 @@ with Engine("/path/to/aria-bundle") as eng:
     print(out["response"])
     # 也可：eng.embed("hi"), eng.transcribe(pcm_bytes)
 
-# 或按模型名 —— 自动从 Dashboard 下载（需要 api token）：
-with Engine("gemma-4-e2b-it_q4", token="<api_token>") as eng:
+# 或按模型名 —— 从本区公开 hub 自动下载（Hugging Face / ModelScope，不走 Dashboard）：
+with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
 
@@ -345,8 +345,8 @@ const out = eng.complete(
 console.log(out.response);
 eng.close();
 
-// 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
-const eng2 = await Engine.open("gemma-4-e2b-it_q4", { token: "<api_token>" });
+// 或按模型名 —— 自动从本区公开 hub 下载（Hugging Face / ModelScope，不走 Dashboard）：
+const eng2 = await Engine.open("gemma-4-e2b-it_q4");
 console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
 eng2.close();
 ```
@@ -385,8 +385,8 @@ func main() {
 	}
 	fmt.Println(out["response"])
 
-	// 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
-	eng2, err := aria.OpenModel("gemma-4-e2b-it_q4", "<api_token>", "")
+	// 或按模型名 —— 自动从本区公开 hub 下载（Hugging Face / ModelScope，不走 Dashboard）：
+	eng2, err := aria.OpenModel("gemma-4-e2b-it_q4", "", "")
 	if err != nil {
 		panic(err)
 	}
@@ -413,12 +413,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     })?;
     println!("{}", g.text);
 
-    // 或按模型名 —— 自动从 Dashboard 下载（需要 token）：
-    let opts = OpenOptions {
-        token: Some("<api_token>".into()),
-        site: None,
-    };
-    let mut eng2 = Engine::open_model("gemma-4-e2b-it_q4", &opts)?;
+    // 或按模型名 —— 自动从本区公开 hub 下载（Hugging Face / ModelScope，不走 Dashboard）：
+    let mut eng2 = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions::default())?;
     let g2 = eng2.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?;
     println!("{}", g2.text);
     Ok(())

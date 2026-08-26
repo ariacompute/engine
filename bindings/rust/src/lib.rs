@@ -9,12 +9,12 @@ pub use aria_inference::{EngineError, GenerateOpts, Generation, Session, Session
 mod download;
 pub use download::{download_model, DownloadError};
 
-/// Options controlling model auto-download from the Dashboard private source.
+/// Options controlling model auto-download from the regional public hub.
 #[derive(Default, Clone)]
 pub struct OpenOptions {
-    /// Dashboard bearer token. Required when `model_ref` is a model name.
+    /// Optional Hugging Face / ModelScope hub token. Dashboard `sk-` / `bfvk-` keys are ignored.
     pub token: Option<String>,
-    /// Dashboard base URL. Defaults to `https://ariacompute.com`.
+    /// Site used to pick the regional hub. Defaults to `https://ariacompute.com` (`.com` → HF, `.cn` → ModelScope).
     pub site: Option<String>,
 }
 
@@ -33,17 +33,17 @@ impl Engine {
     /// Open a model by reference. If `model_ref` looks like a local path
     /// (contains a separator or exists on disk) it is loaded directly;
     /// otherwise it is treated as a model name and auto-downloaded from the
-    /// Dashboard source into `~/.ariacompute/models/{model}` before loading.
+    /// regional public hub into `~/.ariacompute/models/{model}` before loading.
     pub fn open_model(model_ref: &str, opts: &OpenOptions) -> Result<Self, OpenError> {
         let path = if model_ref.contains('/') || model_ref.contains('\\') || std::path::Path::new(model_ref).exists() {
             std::path::PathBuf::from(model_ref)
         } else {
-            let token = opts
-                .token
-                .as_ref()
-                .ok_or_else(|| OpenError::MissingToken(model_ref.to_string()))?;
-            download_model(model_ref, token, opts.site.as_deref())
-                .map_err(OpenError::Download)?
+            download_model(
+                model_ref,
+                opts.token.as_deref().unwrap_or(""),
+                opts.site.as_deref(),
+            )
+            .map_err(OpenError::Download)?
         };
         let session = SessionBuilder::new()
             .model(&path)
@@ -70,8 +70,6 @@ impl Engine {
 /// Error returned by [`Engine::open_model`].
 #[derive(Debug, thiserror::Error)]
 pub enum OpenError {
-    #[error("model name '{0}' requires an api token")]
-    MissingToken(String),
     #[error("download failed: {0}")]
     Download(#[from] DownloadError),
     #[error("engine load failed: {0}")]
@@ -105,11 +103,5 @@ mod tests {
             .complete("hi", &GenerateOpts { max_tokens: 2, temperature: 0.0 })
             .unwrap();
         assert!(!g.text.is_empty());
-    }
-
-    #[test]
-    fn open_model_name_requires_token() {
-        let err = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions::default());
-        assert!(matches!(err, Err(OpenError::MissingToken(_))));
     }
 }

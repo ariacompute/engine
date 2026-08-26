@@ -271,7 +271,7 @@ C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `ari
 
 ### Auto-download by model name
 
-Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name that the SDK downloads from the **Dashboard private source** (requires a dashboard `token`; `site_url` defaults to `https://ariacompute.com`, overridable via `site`/env). The download logic mirrors `aria-engine download` (Dashboard branch): resolve `slug`/`quant`, fetch the meta URL, stream the zip, validate the zip magic, extract (flattening a single top-level subdir), and verify `weight.bin` + `config.json` with `format == "aria-quant-bundle"`. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
+Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard (a Dashboard `sk-`/`bfvk-` token is ignored for hub auth). Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
@@ -320,8 +320,8 @@ with Engine("/path/to/aria-bundle") as eng:
     )
     print(out["response"])
 
-# Or by model name — auto-downloads from Dashboard (needs an api token):
-with Engine("gemma-4-e2b-it_q4", token="<api_token>") as eng:
+# Or by model name — auto-downloads from Hugging Face / ModelScope (not Dashboard):
+with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
     # also: eng.embed("hi"), eng.transcribe(pcm_bytes)
 ```
@@ -345,8 +345,8 @@ const out = eng.complete(
 console.log(out.response);
 eng.close();
 
-// Or by model name — auto-downloads from Dashboard (needs an api token):
-const eng2 = await Engine.open("gemma-4-e2b-it_q4", { token: "<api_token>" });
+// Or by model name — auto-downloads from Hugging Face / ModelScope (not Dashboard):
+const eng2 = await Engine.open("gemma-4-e2b-it_q4");
 console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
 eng2.close();
 ```
@@ -383,6 +383,14 @@ func main() {
 		panic(err)
 	}
 	fmt.Println(out["response"])
+
+	// Or by model name — auto-downloads from Hugging Face / ModelScope (not Dashboard):
+	eng2, err := aria.OpenModel("gemma-4-e2b-it_q4", "", "")
+	if err != nil {
+		panic(err)
+	}
+	defer eng2.Close()
+	_ = eng2
 }
 ```
 
@@ -393,7 +401,7 @@ cargo add ariacompute-engine
 ```
 
 ```rust
-use aria_engine::{Engine, GenerateOpts};
+use aria_engine::{Engine, GenerateOpts, OpenOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut eng = Engine::open("/path/to/aria-bundle")?;
@@ -402,6 +410,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         temperature: 0.0,
     })?;
     println!("{}", g.text);
+
+    // Or by model name — auto-downloads from Hugging Face / ModelScope (not Dashboard):
+    let mut eng2 = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions::default())?;
+    let g2 = eng2.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?;
+    println!("{}", g2.text);
     Ok(())
 }
 ```

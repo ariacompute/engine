@@ -2,10 +2,7 @@ import Foundation
 
 public enum AriaDownloadError: Error {
     case invalidModelName(String)
-    case missingToken
     case requestFailed(Int, String)
-    case emptyUrl
-    case invalidZip(String)
     case invalidBundle(String)
 }
 
@@ -60,94 +57,155 @@ public final class AriaEngine {
         return format == "aria-quant-bundle"
     }
 
-    // MARK: - Download (Dashboard private source only)
+    // MARK: - Download (regional public hub)
 
-    /// Download `model` from the Dashboard source into `~/.ariacompute/models/{model}`.
-    /// Skips the download when a valid bundle is already cached.
+    private static let defaultSDK = "v1.0"
+    private static let hubRequired = ["config.json", "weight.bin"]
+    private static let hubOptional = [
+        "tokenizer.json",
+        "tokenizer.model",
+        "tokenizer_config.json",
+        "special_tokens_map.json",
+        "vocab.json",
+        "merges.txt",
+    ]
+
+    private static func preferredPublicHub(_ site: String) -> String {
+        site.lowercased().contains("ariacompute.cn") ? "modelscope" : "huggingface"
+    }
+
+    private static func hubBearer(_ token: String) -> String? {
+        let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.isEmpty { return nil }
+        let low = t.lowercased()
+        if low.hasPrefix("sk-") || low.hasPrefix("bfvk-") { return nil }
+        return t
+    }
+
+    private static func hubPathNames(_ model: String) -> [String] {
+        var names = [model]
+        var lower = model.lowercased()
+        var core = model
+        for suf in ["_channel", "_group"] where lower.hasSuffix(suf) {
+            core = String(model.dropLast(suf.count))
+            lower = core.lowercased()
+            break
+        }
+        var stems = [core]
+        if lower.hasSuffix("_q326") {
+            stems.append(String(core.dropLast(5)) + "q3.26")
+        } else if lower.hasSuffix("_q3.26") {
+            stems.append(String(core.dropLast(6)) + "q326")
+        }
+        for stem in stems {
+            for share in ["", "_channel", "_group"] {
+                let cand = stem + share
+                if !names.contains(cand) { names.append(cand) }
+            }
+        }
+        return names
+    }
+
+    private static func hubFileURLs(source: String, model: String, file: String) -> [String] {
+        var urls: [String] = []
+        for name in hubPathNames(model) {
+            if source == "modelscope" {
+                for repo in ["AriaCompute/\(name)", "AriaCompute/model"] {
+                    urls.append("https://www.modelscope.cn/models/\(repo)/resolve/master/\(defaultSDK)/\(name)/\(file)")
+                    urls.append("https://modelscope.cn/models/\(repo)/resolve/master/\(defaultSDK)/\(name)/\(file)")
+                }
+            } else {
+                for repo in ["ariacompute/\(name)", "ariacompute/model"] {
+                    urls.append("https://huggingface.co/\(repo)/resolve/main/\(defaultSDK)/\(name)/\(file)")
+                }
+            }
+        }
+        return urls
+    }
+
+    private static func fetchURLToFile(_ urlStr: String, dest: String, token: String?) throws {
+        guard let url = URL(string: urlStr) else {
+            throw AriaDownloadError.requestFailed(0, "bad url")
+        }
+        var req = URLRequest(url: url)
+        if let token, !token.isEmpty {
+            req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
+        let (data, code): (Data, Int) = try awaitWith { completion in
+            URLSession.shared.dataTask(with: req) { data, resp, err in
+                if let err = err { completion(.failure(err)); return }
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                guard let data = data else {
+                    completion(.failure(AriaDownloadError.requestFailed(code, "empty")))
+                    return
+                }
+                completion(.success((data, code)))
+            }.resume()
+        }
+        if code == 401 || code == 403 {
+            throw AriaDownloadError.requestFailed(code, "auth")
+        }
+        if code != 200 {
+            throw AriaDownloadError.requestFailed(code, "http")
+        }
+        let destURL = URL(fileURLWithPath: dest)
+        try FileManager.default.createDirectory(at: destURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try data.write(to: destURL)
+    }
+
+    private static func fetchHubFile(source: String, model: String, file: String, dest: String, token: String?, required: Bool) throws {
+        var last: Error?
+        for url in hubFileURLs(source: source, model: model, file: file) {
+            do {
+                try fetchURLToFile(url, dest: dest, token: token)
+                return
+            } catch let AriaDownloadError.requestFailed(code, _) where code == 401 || code == 403 {
+                let field = source == "modelscope" ? "modelscope_api_token" : "hf_token"
+                throw AriaDownloadError.requestFailed(
+                    code,
+                    "auth failed HTTP \(code); set \(field) via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                )
+            } catch {
+                last = error
+            }
+        }
+        if required {
+            throw AriaDownloadError.requestFailed(0, "\(source): missing \(file)\(last.map { ": \($0)" } ?? "")")
+        }
+    }
+
+    /// Download `model` from the regional public hub into `~/.ariacompute/models/{model}`.
+    /// Dashboard is not used. Skips the download when a valid bundle is already cached.
     @discardableResult
-    public static func downloadModel(_ model: String, token: String, site: String = "https://ariacompute.com") throws -> String {
-        guard !token.isEmpty else { throw AriaDownloadError.missingToken }
-        guard let (slug, quant) = parseBundleName(model) else {
+    public static func downloadModel(_ model: String, token: String = "", site: String = "https://ariacompute.com") throws -> String {
+        guard parseBundleName(model) != nil else {
             throw AriaDownloadError.invalidModelName(model)
         }
         let cache = cacheDir(for: model)
         if FileManager.default.fileExists(atPath: cache), isValidBundle(cache) {
             return cache
         }
-
-        let metaURLStr = "\(site.trimmingCharacters(in: CharacterSet(charactersIn: "/")))/api/dashboard/models/\(slug.addingPercentEncoding(withAllowedCharacters: .urlPathAllowed) ?? slug)/download?quant=\(quant)&sdk=v1.0&format=json"
-        guard let metaURL = URL(string: metaURLStr) else { throw AriaDownloadError.requestFailed(0, "bad meta url") }
-
-        var metaReq = URLRequest(url: metaURL)
-        metaReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let meta = try awaitWith { completion in
-            URLSession.shared.dataTask(with: metaReq) { data, resp, err in
-                if let err = err { completion(.failure(err)); return }
-                guard let data = data,
-                      let code = (resp as? HTTPURLResponse)?.statusCode, code == 200,
-                      let meta = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                    let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                    completion(.failure(AriaDownloadError.requestFailed(code, "meta")))
-                    return
-                }
-                completion(.success(meta))
-            }.resume()
-        }
-        guard let urlStr = meta["url"] as? String, !urlStr.isEmpty else { throw AriaDownloadError.emptyUrl }
-        guard let url = URL(string: urlStr) else { throw AriaDownloadError.emptyUrl }
-
-        var zipReq = URLRequest(url: url)
-        zipReq.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
-        let data = try awaitWith { completion in
-            URLSession.shared.dataTask(with: zipReq) { data, resp, err in
-                if let err = err { completion(.failure(err)); return }
-                guard let data = data,
-                      let code = (resp as? HTTPURLResponse)?.statusCode, code == 200 else {
-                    let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
-                    completion(.failure(AriaDownloadError.requestFailed(code, "zip")))
-                    return
-                }
-                completion(.success(data))
-            }.resume()
-        }
-
-        let staging = (cacheDir(for: model) as NSString).appendingPathComponent(".partial")
+        let source = preferredPublicHub(site)
+        let hubToken = hubBearer(token)
+        let staging = (ariaHome() as NSString).appendingPathComponent("models").appendingPathComponent(".\(model).partial")
         try? FileManager.default.removeItem(atPath: staging)
-        try data.write(to: URL(fileURLWithPath: staging).appendingPathComponent("bundle.zip"))
-        try extractZip(at: staging, into: staging)
-
-        if !isValidBundle(staging) {
-            try? FileManager.default.removeItem(atPath: staging)
-            throw AriaDownloadError.invalidBundle("not a valid aria-quant-bundle")
-        }
-        try? FileManager.default.removeItem(atPath: cache)
-        try FileManager.default.moveItem(atPath: staging, toPath: cache)
-        return cache
-    }
-
-    private static func extractZip(at zipDir: String, into dest: String) throws {
-        let zipPath = (zipDir as NSString).appendingPathComponent("bundle.zip")
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = ["-o", zipPath, "-d", dest]
-        try process.run()
-        process.waitUntilExit()
-        if process.terminationStatus != 0 {
-            throw AriaDownloadError.invalidZip("unzip failed")
-        }
-        // flatten a single top-level subdir
-        let contents = try FileManager.default.contentsOfDirectory(atPath: dest).filter { !$0.hasPrefix(".") }
-        if contents.count == 1 {
-            let only = (dest as NSString).appendingPathComponent(contents[0])
-            var isDir: ObjCBool = false
-            FileManager.default.fileExists(atPath: only, isDirectory: &isDir)
-            if isDir.boolValue, FileManager.default.fileExists(atPath: (only as NSString).appendingPathComponent("config.json")) {
-                for name in try FileManager.default.contentsOfDirectory(atPath: only) {
-                    try FileManager.default.moveItem(atPath: (only as NSString).appendingPathComponent(name),
-                                                     toPath: (dest as NSString).appendingPathComponent(name))
-                }
-                try FileManager.default.removeItem(atPath: only)
+        try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: true)
+        do {
+            for file in hubRequired {
+                try fetchHubFile(source: source, model: model, file: file, dest: (staging as NSString).appendingPathComponent(file), token: hubToken, required: true)
             }
+            for extra in hubOptional {
+                try? fetchHubFile(source: source, model: model, file: extra, dest: (staging as NSString).appendingPathComponent(extra), token: hubToken, required: false)
+            }
+            if !isValidBundle(staging) {
+                throw AriaDownloadError.invalidBundle("need weight.bin + aria-quant-bundle config.json")
+            }
+            try? FileManager.default.removeItem(atPath: cache)
+            try FileManager.default.moveItem(atPath: staging, toPath: cache)
+            return cache
+        } catch {
+            try? FileManager.default.removeItem(atPath: staging)
+            throw error
         }
     }
 
@@ -162,13 +220,12 @@ public final class AriaEngine {
 
     /// Open a model by reference. A value containing a separator or already on
     /// disk is a local path (loaded directly); otherwise it is a model name
-    /// that is downloaded (requires `token`) then loaded.
-    public static func open(_ ref: String, token: String = "", site: String = "https://ariacompute.com") async throws -> AriaEngine {
+    /// downloaded from the regional public hub then loaded.
+    public static func open(_ ref: String, token: String = "", site: String = "https://ariacompute.com") throws -> AriaEngine {
         if isLocalRef(ref) {
             return try AriaEngine(bundlePath: ref)
         }
-        guard !token.isEmpty else { throw AriaDownloadError.missingToken }
-        let bundle = try await downloadModel(ref, token: token, site: site)
+        let bundle = try downloadModel(ref, token: token, site: site)
         return try AriaEngine(bundlePath: bundle)
     }
 

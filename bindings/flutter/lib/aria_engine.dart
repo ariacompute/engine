@@ -1,10 +1,7 @@
 import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
-import 'dart:typed_data';
 import 'package:ffi/ffi.dart';
-import 'package:http/http.dart' as http;
-import 'package:archive/archive.dart';
 
 typedef AriaInitC = Pointer Function(Pointer<Utf8>);
 typedef AriaInitDart = Pointer Function(Pointer<Utf8>);
@@ -16,6 +13,16 @@ typedef AriaCompleteDart = int Function(
     Pointer, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, Pointer<Utf8>, int);
 
 const _defaultSite = 'https://ariacompute.com';
+const _defaultSdk = 'v1.0';
+const _hubRequired = ['config.json', 'weight.bin'];
+const _hubOptional = [
+  'tokenizer.json',
+  'tokenizer.model',
+  'tokenizer_config.json',
+  'special_tokens_map.json',
+  'vocab.json',
+  'merges.txt',
+];
 
 String _ariaHome() {
   final override = Platform.environment['ARIA_COMPUTE_HOME'];
@@ -35,7 +42,10 @@ String _cacheDir(String model) => '${_ariaHome()}/models/$model';
   final idx = model.lastIndexOf('_q');
   if (idx != -1) {
     final slug = model.substring(0, idx);
-    final suffix = model.substring(idx + 2);
+    var suffix = model.substring(idx + 2);
+    if (suffix.endsWith('_channel') || suffix.endsWith('_group')) {
+      suffix = suffix.substring(0, suffix.lastIndexOf('_'));
+    }
     final quant = switch (suffix) {
       '4' => 'int4',
       '8' => 'int8',
@@ -63,71 +73,158 @@ bool _isValidBundle(Directory dir) {
 bool _isLocalRef(String ref) =>
     ref.contains('/') || ref.contains('\\') || Directory(ref).existsSync();
 
-Future<String> downloadModel(String model,
-    {required String token, String site = _defaultSite}) async {
-  if (token.isEmpty) {
-    throw ArgumentError('api token is required to download a model');
+String _preferredPublicHub(String site) =>
+    site.toLowerCase().contains('ariacompute.cn') ? 'modelscope' : 'huggingface';
+
+String? _hubBearer(String? token) {
+  final t = token?.trim() ?? '';
+  if (t.isEmpty) return null;
+  final low = t.toLowerCase();
+  if (low.startsWith('sk-') || low.startsWith('bfvk-')) return null;
+  return t;
+}
+
+List<String> _hubPathNames(String model) {
+  final names = <String>[model];
+  var lower = model.toLowerCase();
+  var core = model;
+  for (final suf in ['_channel', '_group']) {
+    if (lower.endsWith(suf)) {
+      core = model.substring(0, model.length - suf.length);
+      lower = core.toLowerCase();
+      break;
+    }
   }
-  final (slug, quant) = _parseBundleName(model);
+  final stems = <String>[core];
+  if (lower.endsWith('_q326')) {
+    stems.add('${core.substring(0, core.length - 5)}q3.26');
+  } else if (lower.endsWith('_q3.26')) {
+    stems.add('${core.substring(0, core.length - 6)}q326');
+  }
+  for (final stem in stems) {
+    for (final share in ['', '_channel', '_group']) {
+      final cand = '$stem$share';
+      if (!names.contains(cand)) names.add(cand);
+    }
+  }
+  return names;
+}
+
+List<String> _hubFileUrls(String source, String model, String file) {
+  final urls = <String>[];
+  for (final name in _hubPathNames(model)) {
+    if (source == 'modelscope') {
+      for (final repo in ['AriaCompute/$name', 'AriaCompute/model']) {
+        urls.add(
+            'https://www.modelscope.cn/models/$repo/resolve/master/$_defaultSdk/$name/$file');
+        urls.add(
+            'https://modelscope.cn/models/$repo/resolve/master/$_defaultSdk/$name/$file');
+      }
+    } else {
+      for (final repo in ['ariacompute/$name', 'ariacompute/model']) {
+        urls.add(
+            'https://huggingface.co/$repo/resolve/main/$_defaultSdk/$name/$file');
+      }
+    }
+  }
+  return urls;
+}
+
+class _HubAuthException implements Exception {
+  final int code;
+  final String source;
+  _HubAuthException(this.code, this.source);
+  @override
+  String toString() {
+    final field =
+        source == 'modelscope' ? 'modelscope_api_token' : 'hf_token';
+    return 'auth failed HTTP $code; set $field via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)';
+  }
+}
+
+Future<void> _fetchUrlToFile(String url, String dest, String? token) async {
+  final client = HttpClient();
+  try {
+    final req = await client.getUrl(Uri.parse(url));
+    if (token != null && token.isNotEmpty) {
+      req.headers.set(HttpHeaders.authorizationHeader, 'Bearer $token');
+    }
+    final resp = await req.close();
+    if (resp.statusCode == 401 || resp.statusCode == 403) {
+      await resp.drain();
+      throw HttpException('HTTP ${resp.statusCode}', uri: Uri.parse(url));
+    }
+    if (resp.statusCode != 200) {
+      await resp.drain();
+      throw HttpException('HTTP ${resp.statusCode}', uri: Uri.parse(url));
+    }
+    await File(dest).parent.create(recursive: true);
+    await resp.pipe(File(dest).openWrite());
+  } finally {
+    client.close();
+  }
+}
+
+Future<bool> _fetchHubFile(String source, String model, String file,
+    String dest, String? token, {required bool required}) async {
+  Object? last;
+  for (final url in _hubFileUrls(source, model, file)) {
+    try {
+      await _fetchUrlToFile(url, dest, token);
+      return true;
+    } catch (e) {
+      last = e;
+      final msg = e.toString();
+      if (msg.contains('HTTP 401') || msg.contains('HTTP 403')) {
+        final code = msg.contains('401') ? 401 : 403;
+        throw _HubAuthException(code, source);
+      }
+    }
+  }
+  if (required) {
+    throw Exception('$source: missing $file${last != null ? ': $last' : ''}');
+  }
+  return false;
+}
+
+/// Download [model] from the regional public hub into
+/// `~/.ariacompute/models/{model}`. Dashboard is not used.
+Future<String> downloadModel(String model,
+    {String? token, String site = _defaultSite}) async {
+  _parseBundleName(model);
+  final source = _preferredPublicHub(site);
+  final hubToken = _hubBearer(token);
   final cache = Directory(_cacheDir(model));
   if (cache.existsSync() && _isValidBundle(cache)) {
     return cache.path;
   }
 
-  final metaUrl = Uri.parse(
-      '${site.replaceAll(RegExp(r'/$'), '')}/api/dashboard/models/'
-      '${Uri.encodeComponent(slug)}/download'
-      '?quant=${Uri.encodeComponent(quant)}&sdk=v1.0&format=json');
-  final metaResp = await http.get(metaUrl, headers: {'Authorization': 'Bearer $token'});
-  if (metaResp.statusCode != 200) {
-    throw Exception('dashboard request failed: ${metaResp.statusCode}');
-  }
-  final url = (jsonDecode(metaResp.body) as Map<String, dynamic>)['url'] as String?;
-  if (url == null || url.isEmpty) {
-    throw Exception('dashboard meta returned empty url');
-  }
-
-  final zipResp = await http.get(Uri.parse(url),
-      headers: {'Authorization': 'Bearer $token'});
-  if (zipResp.statusCode != 200) {
-    throw Exception('download stream failed: ${zipResp.statusCode}');
-  }
-  final data = zipResp.bodyBytes;
-
-  final staging = Directory('${_cacheDir('.$model.partial')}');
-  if (staging.existsSync()) staging.deleteSync(recursive: true);
-  staging.createSync(recursive: true);
-  _extractZip(data, staging);
-  if (!_isValidBundle(staging)) {
-    staging.deleteSync(recursive: true);
-    throw Exception('downloaded archive did not contain a valid aria-quant-bundle');
-  }
-  if (cache.existsSync()) cache.deleteSync(recursive: true);
-  staging.renameSync(cache.path);
-  return cache.path;
-}
-
-void _extractZip(Uint8List data, Directory dest) {
-  final archive = ZipDecoder().decodeBytes(data);
-  for (final file in archive) {
-    final out = File('${dest.path}/${file.name}');
-    if (file.isFile) {
-      out.parent.createSync(recursive: true);
-      out.writeAsBytesSync(file.content as List<int>);
-    } else {
-      out.createSync(recursive: true);
+  final staging = Directory('${_ariaHome()}/models/.$model.partial');
+  try {
+    if (staging.existsSync()) staging.deleteSync(recursive: true);
+    staging.createSync(recursive: true);
+    for (final file in _hubRequired) {
+      await _fetchHubFile(
+          source, model, file, '${staging.path}/$file', hubToken,
+          required: true);
     }
-  }
-  // flatten a single top-level subdir
-  final entries = dest.listSync().where((e) => !e.path.split('/').last.startsWith('.')).toList();
-  if (entries.length == 1 && entries[0] is Directory) {
-    final inner = entries[0] as Directory;
-    if (File('${inner.path}/config.json').existsSync()) {
-      for (final f in inner.listSync()) {
-        f.renameSync('${dest.path}/${f.path.split('/').last}');
-      }
-      inner.deleteSync(recursive: true);
+    for (final extra in _hubOptional) {
+      try {
+        await _fetchHubFile(
+            source, model, extra, '${staging.path}/$extra', hubToken,
+            required: false);
+      } catch (_) {}
     }
+    if (!_isValidBundle(staging)) {
+      throw Exception(
+          '$source fetch completed but bundle invalid (need weight.bin + aria-quant-bundle config.json)');
+    }
+    if (cache.existsSync()) cache.deleteSync(recursive: true);
+    staging.renameSync(cache.path);
+    return cache.path;
+  } catch (e) {
+    if (staging.existsSync()) staging.deleteSync(recursive: true);
+    rethrow;
   }
 }
 
@@ -150,14 +247,11 @@ class AriaEngine {
   }
 
   /// Open a model by reference. A value containing a separator or already on
-  /// disk is a local path; otherwise it is a model name that is downloaded
-  /// (requires [token]) then loaded.
+  /// disk is a local path; otherwise it is a model name downloaded from the
+  /// regional public hub then loaded.
   static Future<AriaEngine> open(String modelRef,
       {String? token, String site = _defaultSite, String? libPath}) async {
     if (_isLocalRef(modelRef)) return AriaEngine(modelRef, libPath: libPath);
-    if (token == null || token.isEmpty) {
-      throw ArgumentError("model name '$modelRef' requires an api token to download");
-    }
     final bundle = await downloadModel(modelRef, token: token, site: site);
     return AriaEngine(bundle, libPath: libPath);
   }
