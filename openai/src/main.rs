@@ -45,8 +45,8 @@ Cache:
   ~/.ariacompute/models/<model>/
   ~/.ariacompute/lib/   (libaria_ffi from upgrade)
 
-auth                 Prompt for API key + hybrid prefs; detect .com/.cn from key
-  --status           Show config status (key redacted)
+auth                 Prompt for API key, region hub token, hybrid prefs; detect .com/.cn from key
+  --status           Show config status (keys redacted)
   --clear            Remove config.yml
 download <model>     Probe dashboard / Hugging Face / ModelScope; fetch best source
 list                 Query site catalog; mark each bundle downloaded / not downloaded
@@ -90,21 +90,34 @@ fn prompt_choice(label: &str, allowed: &[&str], default: &str) -> io::Result<Str
     }
 }
 
+/// `.com` → Hugging Face token; `.cn` → ModelScope token. The other field is left as-is.
+fn prompt_regional_hub_token(
+    pair: gateway_detect::GatewayPair,
+    existing: &AriaConfig,
+) -> io::Result<(String, String)> {
+    let cn = pair == gateway_detect::GatewayPair::CN;
+    let entered = if cn {
+        prompt("modelscope_api_token (ModelScope, optional): ")?
+    } else {
+        prompt("hf_token (Hugging Face, optional): ")?
+    };
+    Ok(config::apply_hub_token_input(existing, cn, &entered))
+}
+
+fn redact_secret(value: &str) -> String {
+    if value.is_empty() {
+        "(not set)".into()
+    } else if value.len() <= 8 {
+        "********".into()
+    } else {
+        format!("{}…{}", &value[..4], &value[value.len() - 4..])
+    }
+}
+
 async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--status") {
         let cfg = config::load_config()?;
-        let key = if cfg.cloud_api_key.is_empty() {
-            "(not set)".into()
-        } else if cfg.cloud_api_key.len() <= 8 {
-            "********".into()
-        } else {
-            format!(
-                "{}…{}",
-                &cfg.cloud_api_key[..4],
-                &cfg.cloud_api_key[cfg.cloud_api_key.len() - 4..]
-            )
-        };
-        println!("cloud_api_key: {key}");
+        println!("cloud_api_key: {}", redact_secret(&cfg.cloud_api_key));
         println!(
             "cloud_url: {}",
             if cfg.cloud_url.is_empty() {
@@ -136,6 +149,11 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             cfg.hybrid_semantic, cfg.hybrid_semantic_timeout_ms, cfg.hybrid_semantic_cache_size
         );
         println!("compute: {}", cfg.compute);
+        println!("hf_token: {}", redact_secret(&cfg.hf_token));
+        println!(
+            "modelscope_api_token: {}",
+            redact_secret(&cfg.modelscope_api_token)
+        );
         println!("config: {}", config::config_path()?.display());
         println!("lib: {}", config::lib_dir()?.display());
         return Ok(());
@@ -146,6 +164,7 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         return Ok(());
     }
 
+    let existing = config::load_config().unwrap_or_default();
     let api_key = prompt("API key (sk-… / bfvk-…): ")?;
     if api_key.is_empty() {
         return Err("API key required".into());
@@ -166,6 +185,7 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let hybrid_execution =
         prompt_choice("hybrid_execution", &["hybrid", "device", "cloud"], "hybrid")?;
     let compute = prompt_choice("compute", &["auto", "cpu", "cuda"], "auto")?;
+    let (hf_token, modelscope_api_token) = prompt_regional_hub_token(pair, &existing)?;
 
     let cfg = AriaConfig {
         cloud_api_key: api_key,
@@ -175,7 +195,9 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         hybrid_mode,
         hybrid_execution,
         compute,
-        ..AriaConfig::default()
+        hf_token,
+        modelscope_api_token,
+        ..existing
     };
     config::save_config(&cfg)?;
     println!("wrote {}", config::config_path()?.display());

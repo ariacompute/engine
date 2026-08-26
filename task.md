@@ -255,3 +255,4 @@
 - [x] 四轴合成：`EffectiveRouting` / `chat_policy`；serve 与 `/v1/engine/routes` 打印生效 `execution` / `mode` / `semantic` / `cloud` / `compute`（`semantic.applicable` 与配置 `enabled` 区分）
 - [x] 单测：routes 端点字段、fake 语义层采纳 E2E（`semantic-cloud` + outcome layer=semantic）
 - [x] `max_tokens` 设置则本地/云端原样使用；未设置则本地至 stop 或剩余 context（不默认 16），云端省略；`CloudClient` 超时 60s
+- [x] hub token 走 `aria-engine auth`：按 site 区只提示 `hf_token`（`.com`）或 `modelscope_api_token`（`.cn`）；`download` 不再读 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`

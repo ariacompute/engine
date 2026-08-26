@@ -27,6 +27,8 @@ Credentials and hybrid prefs live in `~/.ariacompute/config.yml` (via `aria-engi
 | `hybrid_semantic_timeout_ms` | Semantic routing per-consult timeout | `800` |
 | `hybrid_semantic_cache_size` | Semantic decision cache capacity (TTL 60s) | `512` |
 | `compute` | `auto` / `cpu` / `cuda` (local GEMM; **not** a hybrid switch) | `auto` |
+| `hf_token` | Hugging Face hub token (optional; `.com` gated files) | _(empty)_ |
+| `modelscope_api_token` | ModelScope hub token (optional; `.cn` gated files) | _(empty)_ |
 
 ```bash
 # Auth
@@ -34,8 +36,7 @@ aria-engine auth
 aria-engine auth --status
 
 # Download models
-# .com → Hugging Face (export HF_TOKEN)
-# .cn  → ModelScope (export MODELSCOPE_API_TOKEN)
+# Optional: aria-engine auth prompts hf_token (.com) or modelscope_api_token (.cn)
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
 aria-engine clean gemma-4-e2b-it_q4
@@ -54,7 +55,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 ```
 
-`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless a token is set: `HF_TOKEN` for Hugging Face, `MODELSCOPE_API_TOKEN` for ModelScope.
+`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless `aria-engine auth` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/config.yml`.
 
 `list` queries `{site_url}/api/dashboard/models` (requires `aria-engine auth`) and prints each downloadable bundle as `downloaded` / `not downloaded` (plus local-only caches).
 

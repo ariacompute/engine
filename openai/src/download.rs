@@ -100,7 +100,7 @@ pub async fn download_model(model: &str, cfg: &AriaConfig) -> io::Result<PathBuf
     }
 
     let source = preferred_public_hub(&cfg.site_url);
-    let probe = probe_hub(source, &bundle).await;
+    let probe = probe_hub(source, &bundle, cfg).await;
     if !probe.reachable {
         return Err(io::Error::new(
             io::ErrorKind::NotConnected,
@@ -117,7 +117,7 @@ pub async fn download_model(model: &str, cfg: &AriaConfig) -> io::Result<PathBuf
         probe.source.as_str(),
         probe.detail
     );
-    match fetch_hub(source, &bundle, &dest).await {
+    match fetch_hub(source, &bundle, &dest, cfg).await {
         Ok(()) => {
             if is_valid_bundle(&dest) {
                 return Ok(dest);
@@ -146,7 +146,7 @@ fn preferred_public_hub(site_url: &str) -> DownloadSource {
     }
 }
 
-async fn probe_hub(source: DownloadSource, bundle: &BundleRef) -> ProbeResult {
+async fn probe_hub(source: DownloadSource, bundle: &BundleRef, cfg: &AriaConfig) -> ProbeResult {
     let urls = hub_config_urls(source, bundle);
     let client = match http_client(PROBE_TIMEOUT) {
         Ok(c) => c,
@@ -162,7 +162,7 @@ async fn probe_hub(source: DownloadSource, bundle: &BundleRef) -> ProbeResult {
     for url in urls {
         let start = Instant::now();
         let mut req = client.get(&url);
-        if let Some(token) = hub_token(source) {
+        if let Some(token) = hub_token(source, cfg) {
             req = req.bearer_auth(token);
         }
         // Prefer Range to cap probe size.
@@ -193,7 +193,11 @@ async fn probe_hub(source: DownloadSource, bundle: &BundleRef) -> ProbeResult {
                     source,
                     reachable: false,
                     bytes_per_sec: 0.0,
-                    detail: format!("auth failed HTTP {}", r.status()),
+                    detail: format!(
+                        "auth failed HTTP {}; run `aria-engine auth` to set {}",
+                        r.status(),
+                        hub_token_field(source)
+                    ),
                 };
             }
             _ => continue,
@@ -207,7 +211,12 @@ async fn probe_hub(source: DownloadSource, bundle: &BundleRef) -> ProbeResult {
     }
 }
 
-async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> io::Result<()> {
+async fn fetch_hub(
+    source: DownloadSource,
+    bundle: &BundleRef,
+    dest: &Path,
+    cfg: &AriaConfig,
+) -> io::Result<()> {
     let files = ["config.json", "weight.bin"];
     let staging = dest.with_extension("partial");
     let _ = fs::remove_dir_all(&staging);
@@ -218,7 +227,7 @@ async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> i
         let mut fetched = false;
         for url in hub_file_urls(source, bundle, file) {
             let mut req = client.get(&url);
-            if let Some(token) = hub_token(source) {
+            if let Some(token) = hub_token(source, cfg) {
                 req = req.bearer_auth(token);
             }
             match req.send().await {
@@ -251,7 +260,7 @@ async fn fetch_hub(source: DownloadSource, bundle: &BundleRef, dest: &Path) -> i
     ] {
         for url in hub_file_urls(source, bundle, extra) {
             let mut req = client.get(&url);
-            if let Some(token) = hub_token(source) {
+            if let Some(token) = hub_token(source, cfg) {
                 req = req.bearer_auth(token);
             }
             if let Ok(r) = req.send().await {
@@ -310,17 +319,25 @@ fn hub_file_urls(source: DownloadSource, bundle: &BundleRef, file: &str) -> Vec<
     urls
 }
 
-fn hub_token(source: DownloadSource) -> Option<String> {
+fn hub_token_field(source: DownloadSource) -> &'static str {
     match source {
-        DownloadSource::HuggingFace => std::env::var("HF_TOKEN")
-            .or_else(|_| std::env::var("HUGGING_FACE_HUB_TOKEN"))
-            .ok()
-            .filter(|s| !s.is_empty()),
-        DownloadSource::ModelScope => std::env::var("MODELSCOPE_API_TOKEN")
-            .or_else(|_| std::env::var("MODELSCOPE_TOKEN"))
-            .ok()
-            .filter(|s| !s.is_empty()),
-        DownloadSource::Dashboard => None,
+        DownloadSource::HuggingFace => "hf_token",
+        DownloadSource::ModelScope => "modelscope_api_token",
+        DownloadSource::Dashboard => "cloud_api_key",
+    }
+}
+
+pub(crate) fn hub_token(source: DownloadSource, cfg: &AriaConfig) -> Option<String> {
+    let raw = match source {
+        DownloadSource::HuggingFace => cfg.hf_token.as_str(),
+        DownloadSource::ModelScope => cfg.modelscope_api_token.as_str(),
+        DownloadSource::Dashboard => "",
+    };
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        None
+    } else {
+        Some(trimmed.to_string())
     }
 }
 
@@ -633,6 +650,30 @@ pub fn clean_models(model: Option<&str>) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hub_token_reads_config_not_env() {
+        std::env::set_var("HF_TOKEN", "env-hf");
+        std::env::set_var("MODELSCOPE_API_TOKEN", "env-ms");
+        let empty = AriaConfig::default();
+        assert_eq!(hub_token(DownloadSource::HuggingFace, &empty), None);
+        assert_eq!(hub_token(DownloadSource::ModelScope, &empty), None);
+        let cfg = AriaConfig {
+            hf_token: "hf_from_yml".into(),
+            modelscope_api_token: "ms_from_yml".into(),
+            ..AriaConfig::default()
+        };
+        assert_eq!(
+            hub_token(DownloadSource::HuggingFace, &cfg).as_deref(),
+            Some("hf_from_yml")
+        );
+        assert_eq!(
+            hub_token(DownloadSource::ModelScope, &cfg).as_deref(),
+            Some("ms_from_yml")
+        );
+        std::env::remove_var("HF_TOKEN");
+        std::env::remove_var("MODELSCOPE_API_TOKEN");
+    }
 
     #[test]
     fn parse_quant_suffixes() {

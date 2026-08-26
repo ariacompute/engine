@@ -27,6 +27,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `hybrid_semantic_timeout_ms` | 语义路由单次调用超时 | `800` |
 | `hybrid_semantic_cache_size` | 语义决策缓存容量（TTL 60s） | `512` |
 | `compute` | `auto` / `cpu` / `cuda`（本机 GEMM；**不是** hybrid 开关） | `auto` |
+| `hf_token` | Hugging Face hub token（可选；`.com` 需授权文件） | _(空)_ |
+| `modelscope_api_token` | ModelScope hub token（可选；`.cn` 需授权文件） | _(空)_ |
 
 ```bash
 # 认证
@@ -34,8 +36,7 @@ aria-engine auth
 aria-engine auth --status
 
 # 下载模型
-# .com → Hugging Face（需 export HF_TOKEN）
-# .cn  → ModelScope（需 export MODELSCOPE_API_TOKEN）
+# 可选：aria-engine auth 按区提示 hf_token（.com）或 modelscope_api_token（.cn）
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
 aria-engine clean gemma-4-e2b-it_q4
@@ -54,7 +55,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 ```
 
-`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：Hugging Face 使用环境变量 `HF_TOKEN`，ModelScope 使用 `MODELSCOPE_API_TOKEN`。
+`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `aria-engine auth` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/config.yml`。
 
 `list` 查询 `{site_url}/api/dashboard/models`（需先 `aria-engine auth`），按可下载 bundle 列出并标记 `downloaded` / `not downloaded`（另附仅本地缓存项）。
 

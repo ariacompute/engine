@@ -194,8 +194,10 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 | `hybrid_semantic_timeout_ms` | 语义路由单次调用超时（默认 `800`） |
 | `hybrid_semantic_cache_size` | 语义决策缓存容量上限（默认 `512`；TTL 60s） |
 | `compute` | `auto` \| `cpu` \| `cuda`（默认 `auto`；与 `hybrid_execution` 正交） |
+| `hf_token` | Hugging Face hub token（可选，默认空；`.com` 需授权文件） |
+| `modelscope_api_token` | ModelScope hub token（可选，默认空；`.cn` 需授权文件） |
 
-- `auth`：提示 API key → **用 key 探测** Dashboard（`GET /api/dashboard/models`）判定 `.com` / `.cn`，写入匹配的 `cloud_url`/`site_url`/`upgrade_url`（同 TLD）；两端均失败时回退 locale + 连通性。`list`/`download` 启动时若 URL 不一致或 key 被当前 site 拒绝会自动纠偏并回写 config（含刷新 `upgrade_url`）。
+- `auth`：提示 API key → **用 key 探测** Dashboard（`GET /api/dashboard/models`）判定 `.com` / `.cn`，写入匹配的 `cloud_url`/`site_url`/`upgrade_url`（同 TLD）；两端均失败时回退 locale + 连通性。按区**只提示一项** hub token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`；回车跳过；已有值则保留；另一字段不动）。`list`/`download` 启动时若 URL 不一致或 key 被当前 site 拒绝会自动纠偏并回写 config（含刷新 `upgrade_url`）。
 - Gateway / site / upgrade 组织根始终成对（同为 `.com` 或同为 `.cn`）；`download` 公开 hub 与 site 同区且不交叉（`.com`→HF，`.cn`→ModelScope），不与 Dashboard 竞速或互退。
 
 ### 3.4.2 四轴合成（compute ⊥ execution）

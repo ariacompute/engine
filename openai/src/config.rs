@@ -32,6 +32,12 @@ pub struct AriaConfig {
     pub hybrid_semantic_cache_size: usize,
     #[serde(default = "default_compute")]
     pub compute: String,
+    /// Optional Hugging Face hub token (`.com` gated/private files).
+    #[serde(default)]
+    pub hf_token: String,
+    /// Optional ModelScope hub token (`.cn` gated/private files).
+    #[serde(default)]
+    pub modelscope_api_token: String,
 }
 
 fn default_hybrid_mode() -> String {
@@ -58,6 +64,31 @@ fn default_compute() -> String {
     "auto".into()
 }
 
+fn keep_or_replace(existing: &str, entered: &str) -> String {
+    if entered.is_empty() {
+        existing.to_string()
+    } else {
+        entered.to_string()
+    }
+}
+
+/// Merge one regional hub-token prompt into config fields.
+/// `cn=true` (`.cn` / ModelScope) updates `modelscope_api_token`; otherwise `hf_token`.
+/// Empty input keeps the current value; the other field is left as-is.
+pub fn apply_hub_token_input(existing: &AriaConfig, cn: bool, entered: &str) -> (String, String) {
+    if cn {
+        (
+            existing.hf_token.clone(),
+            keep_or_replace(&existing.modelscope_api_token, entered),
+        )
+    } else {
+        (
+            keep_or_replace(&existing.hf_token, entered),
+            existing.modelscope_api_token.clone(),
+        )
+    }
+}
+
 impl Default for AriaConfig {
     fn default() -> Self {
         Self {
@@ -71,6 +102,8 @@ impl Default for AriaConfig {
             hybrid_semantic_timeout_ms: default_hybrid_semantic_timeout_ms(),
             hybrid_semantic_cache_size: default_hybrid_semantic_cache_size(),
             compute: default_compute(),
+            hf_token: String::new(),
+            modelscope_api_token: String::new(),
         }
     }
 }
@@ -230,6 +263,8 @@ mod tests {
             hybrid_semantic_timeout_ms: 500,
             hybrid_semantic_cache_size: 64,
             compute: "cpu".into(),
+            hf_token: "hf_test".into(),
+            modelscope_api_token: "ms_test".into(),
         };
         save_config(&cfg).unwrap();
         let loaded = load_config().unwrap();
@@ -250,6 +285,46 @@ mod tests {
         assert!(cfg.hybrid_semantic);
         assert_eq!(cfg.hybrid_semantic_timeout_ms, 800);
         assert_eq!(cfg.hybrid_semantic_cache_size, 512);
+        assert!(cfg.hf_token.is_empty());
+        assert!(cfg.modelscope_api_token.is_empty());
+    }
+
+    #[test]
+    fn hub_tokens_parse_when_present() {
+        let raw = "hf_token: hf_abc\nmodelscope_api_token: ms_xyz\n";
+        let cfg: AriaConfig = serde_yaml::from_str(raw).unwrap();
+        assert_eq!(cfg.hf_token, "hf_abc");
+        assert_eq!(cfg.modelscope_api_token, "ms_xyz");
+    }
+
+    #[test]
+    fn apply_hub_token_input_intl_only_updates_hf() {
+        let existing = AriaConfig {
+            hf_token: "old_hf".into(),
+            modelscope_api_token: "old_ms".into(),
+            ..Default::default()
+        };
+        let (hf, ms) = apply_hub_token_input(&existing, false, "new_hf");
+        assert_eq!(hf, "new_hf");
+        assert_eq!(ms, "old_ms");
+        let (hf, ms) = apply_hub_token_input(&existing, false, "");
+        assert_eq!(hf, "old_hf");
+        assert_eq!(ms, "old_ms");
+    }
+
+    #[test]
+    fn apply_hub_token_input_cn_only_updates_modelscope() {
+        let existing = AriaConfig {
+            hf_token: "old_hf".into(),
+            modelscope_api_token: "old_ms".into(),
+            ..Default::default()
+        };
+        let (hf, ms) = apply_hub_token_input(&existing, true, "new_ms");
+        assert_eq!(hf, "old_hf");
+        assert_eq!(ms, "new_ms");
+        let (hf, ms) = apply_hub_token_input(&existing, true, "");
+        assert_eq!(hf, "old_hf");
+        assert_eq!(ms, "old_ms");
     }
 
     #[test]
