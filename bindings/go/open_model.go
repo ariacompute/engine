@@ -16,24 +16,15 @@ func fileExists(p string) bool {
 // exists on disk it is loaded directly; otherwise it is treated as a model name
 // and auto-downloaded from the regional public hub before loading.
 func OpenModel(ref, token, site string) (*Engine, error) {
-	if strings.ContainsAny(ref, "/\\") || fileExists(ref) {
-		return Open(ref)
-	}
-	bundle, err := DownloadModel(ref, token, site)
-	if err != nil {
-		return nil, err
-	}
-	return Open(bundle)
+	return OpenModelOpts(ref, DownloadOptions{Token: token, Site: site})
 }
 
-// OpenModel opens a model by reference. If ref contains a separator or already
-// exists on disk it is loaded directly; otherwise it is treated as a model name
-// and auto-downloaded from the regional public hub before loading.
-func OpenModel(ref, token, site string) (*Engine, error) {
+// OpenModelOpts is OpenModel with explicit hf_token / modelscope_api_token.
+func OpenModelOpts(ref string, opts DownloadOptions) (*Engine, error) {
 	if strings.ContainsAny(ref, "/\\") || fileExists(ref) {
 		return Open(ref)
 	}
-	bundle, err := DownloadModel(ref, token, site)
+	bundle, err := DownloadModelOpts(ref, opts)
 	if err != nil {
 		return nil, err
 	}

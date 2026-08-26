@@ -27,8 +27,12 @@ export interface CompleteResult {
     generation?: Generation;
 }
 export interface OpenOptions {
-    /** Optional Hugging Face / ModelScope hub token. Dashboard sk-/bfvk- keys are ignored. */
+    /** Legacy generic hub token. Dashboard sk-/bfvk- keys are ignored. */
     token?: string;
+    /** Hugging Face hub token (`.com`). Same field as `aria-engine auth` `hf_token`. */
+    hfToken?: string;
+    /** ModelScope hub token (`.cn`). Same field as `aria-engine auth` `modelscope_api_token`. */
+    modelscopeApiToken?: string;
     /** Site used to pick the regional hub. Defaults to https://ariacompute.com (.com → HF, .cn → ModelScope). */
     site?: string;
     /** Explicit path to the FFI library. */
@@ -41,12 +45,14 @@ export declare function parseBundleName(model: string): {
 };
 export declare function preferredPublicHub(site?: string): "huggingface" | "modelscope";
 export declare function hubBearer(token?: string): string | undefined;
+export declare function configYmlScalar(key: string): string | undefined;
+export declare function resolveHubToken(source: "huggingface" | "modelscope", opts?: Pick<OpenOptions, "token" | "hfToken" | "modelscopeApiToken">): string | undefined;
 export declare function hubFileUrls(source: "huggingface" | "modelscope", model: string, file: string, sdk?: string): string[];
 /** Download `model` from the regional public hub into
  * `~/.ariacompute/models/{model}` and return that directory.
  * Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
  * Dashboard is not used. Skips the download when a valid bundle is already cached. */
-export declare function downloadModel(model: string, token?: string, site?: string): Promise<string>;
+export declare function downloadModel(model: string, tokenOrOpts?: string | OpenOptions, site?: string): Promise<string>;
 export declare function isLocalRef(modelRef: string): boolean;
 export declare class Engine {
     private lib;

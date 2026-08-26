@@ -22,6 +22,11 @@ and then loads it. Dashboard is not used. A Dashboard `sk-` / `bfvk-` token is
 ignored for hub auth. Token is optional for public models. A valid cached bundle
 is reused without re-downloading.
 
+Gated files: pass `HFToken` (`.com`) or `ModelScopeAPIToken` (`.cn`) — same keys as
+`aria-engine auth` (`hf_token` / `modelscope_api_token`). If omitted, the SDK reads
+`~/.ariacompute/config.yml`.
+
 ```go
 eng, err := aria.OpenModel("gemma-4-e2b-it_q4", "", "")
+eng, err = aria.OpenModelOpts("gemma-4-e2b-it_q4", aria.DownloadOptions{HFToken: "hf_..."})
 ```

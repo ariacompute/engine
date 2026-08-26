@@ -23,6 +23,10 @@ and then loads it. Dashboard is not used. A Dashboard `sk-` / `bfvk-` token is
 ignored for hub auth. Token is optional for public models. A valid cached bundle
 is reused without re-downloading.
 
+Gated files: pass `hfToken` (`.com`) or `modelscopeApiToken` (`.cn`) — same keys as
+`aria-engine auth`. If omitted, the SDK reads `~/.ariacompute/config.yml`.
+
 ```ts
 const eng = await Engine.open("gemma-4-e2b-it_q4");
+const gated = await Engine.open("gemma-4-e2b-it_q4", { hfToken: "hf_..." });
 ```

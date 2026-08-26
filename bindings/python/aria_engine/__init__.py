@@ -121,6 +121,53 @@ def _hub_bearer(token: Optional[str]) -> Optional[str]:
     return token.strip()
 
 
+def _config_yml_scalar(key: str) -> Optional[str]:
+    """Read a top-level scalar from ``~/.ariacompute/config.yml`` (aria-engine auth)."""
+    path = os.path.join(_aria_home(), "config.yml")
+    try:
+        with open(path, encoding="utf-8") as f:
+            for line in f:
+                if line[:1].isspace():
+                    continue
+                s = line.strip()
+                if not s or s.startswith("#") or ":" not in s:
+                    continue
+                k, _, v = s.partition(":")
+                if k.strip() != key:
+                    continue
+                v = v.strip()
+                if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                    v = v[1:-1]
+                return v or None
+    except OSError:
+        return None
+    return None
+
+
+def _hub_token_field(source: str) -> str:
+    return "modelscope_api_token" if source == "modelscope" else "hf_token"
+
+
+def _resolve_hub_token(
+    source: str,
+    token: Optional[str] = None,
+    hf_token: Optional[str] = None,
+    modelscope_api_token: Optional[str] = None,
+) -> Optional[str]:
+    """Named field for the active hub, then generic ``token``, then config.yml.
+
+    Same keys as ``aria-engine auth``: ``hf_token`` (``.com``) /
+    ``modelscope_api_token`` (``.cn``). Does not read ``HF_TOKEN`` /
+    ``MODELSCOPE_API_TOKEN``. Dashboard ``sk-`` / ``bfvk-`` values are skipped.
+    """
+    named = modelscope_api_token if source == "modelscope" else hf_token
+    for cand in (named, token, _config_yml_scalar(_hub_token_field(source))):
+        bearer = _hub_bearer(cand)
+        if bearer:
+            return bearer
+    return None
+
+
 def _hub_path_names(model: str) -> list[str]:
     names = [model]
     lower = model.lower()
@@ -205,21 +252,32 @@ def _fetch_hub_file(
 
 
 def download_model(
-    model: str, token: Optional[str] = None, site: Optional[str] = None
+    model: str,
+    token: Optional[str] = None,
+    site: Optional[str] = None,
+    hf_token: Optional[str] = None,
+    modelscope_api_token: Optional[str] = None,
 ) -> str:
     """Download ``model`` from the regional public hub into
     ``~/.ariacompute/models/{model}`` and return that path.
 
     Matches ``aria-engine download``: ``.com`` → Hugging Face, ``.cn`` → ModelScope.
-    Dashboard is not used. A Dashboard API key (``sk-`` / ``bfvk-``) is ignored for
-    hub auth. If a valid bundle already exists at the cache path, the download is skipped.
+    Hub auth uses ``hf_token`` / ``modelscope_api_token`` (call args, else
+    ``~/.ariacompute/config.yml`` from ``aria-engine auth``). Dashboard is not used.
+    A Dashboard API key (``sk-`` / ``bfvk-``) is ignored for hub auth. If a valid
+    bundle already exists at the cache path, the download is skipped.
     """
     import shutil
 
     _parse_bundle_name(model)
     site = site or DEFAULT_SITE
     source = _preferred_public_hub(site)
-    hub_token = _hub_bearer(token)
+    hub_token = _resolve_hub_token(
+        source,
+        token=token,
+        hf_token=hf_token,
+        modelscope_api_token=modelscope_api_token,
+    )
     cache = os.path.join(_aria_home(), "models", model)
     if os.path.isdir(cache) and _is_valid_bundle(cache):
         return cache
@@ -267,6 +325,8 @@ class Engine:
         lib=None,
         token: Optional[str] = None,
         site: Optional[str] = None,
+        hf_token: Optional[str] = None,
+        modelscope_api_token: Optional[str] = None,
     ):
         self._lib = lib or _load_lib()
         self._lib.aria_model_init.restype = c_void_p
@@ -296,7 +356,13 @@ class Engine:
 
         bundle_path = model_ref
         if not (os.path.sep in model_ref or "\\" in model_ref or os.path.exists(model_ref)):
-            bundle_path = download_model(model_ref, token, site)
+            bundle_path = download_model(
+                model_ref,
+                token=token,
+                site=site,
+                hf_token=hf_token,
+                modelscope_api_token=modelscope_api_token,
+            )
         self._handle = self._lib.aria_model_init(bundle_path.encode())
         if not self._handle:
             err = self._lib.aria_last_error()

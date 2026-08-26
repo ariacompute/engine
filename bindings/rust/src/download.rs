@@ -123,6 +123,73 @@ fn hub_bearer(token: &str) -> Option<&str> {
     }
 }
 
+fn unquote_yaml(v: &str) -> String {
+    let t = v.trim();
+    let b = t.as_bytes();
+    if b.len() >= 2
+        && ((b[0] == b'"' && *b.last().unwrap() == b'"')
+            || (b[0] == b'\'' && *b.last().unwrap() == b'\''))
+    {
+        t[1..t.len() - 1].to_string()
+    } else {
+        t.to_string()
+    }
+}
+
+fn config_yml_scalar(key: &str) -> Option<String> {
+    let path = aria_home().ok()?.join("config.yml");
+    let raw = std::fs::read_to_string(path).ok()?;
+    for line in raw.lines() {
+        if line.starts_with(' ') || line.starts_with('\t') {
+            continue;
+        }
+        let s = line.trim();
+        if s.is_empty() || s.starts_with('#') {
+            continue;
+        }
+        let Some((k, v)) = s.split_once(':') else {
+            continue;
+        };
+        if k.trim() != key {
+            continue;
+        }
+        let val = unquote_yaml(v);
+        if val.is_empty() {
+            return None;
+        }
+        return Some(val);
+    }
+    None
+}
+
+fn hub_token_field(source: &str) -> &'static str {
+    if source == "modelscope" {
+        "modelscope_api_token"
+    } else {
+        "hf_token"
+    }
+}
+
+fn resolve_hub_token(
+    source: &str,
+    token: &str,
+    hf_token: Option<&str>,
+    modelscope_api_token: Option<&str>,
+) -> Option<String> {
+    let named = if source == "modelscope" {
+        modelscope_api_token.unwrap_or("")
+    } else {
+        hf_token.unwrap_or("")
+    };
+    let from_cfg = config_yml_scalar(hub_token_field(source)).unwrap_or_default();
+    for cand in [named, token, from_cfg.as_str()] {
+        if let Some(b) = hub_bearer(cand) {
+            return Some(b.to_string());
+        }
+    }
+    None
+}
+
 fn hub_path_names(model: &str) -> Vec<String> {
     let mut names = vec![model.to_string()];
     let mut lower = model.to_ascii_lowercase();
@@ -281,16 +348,30 @@ fn fetch_hub_file(
 /// `~/.ariacompute/models/{model}`, then return that directory.
 ///
 /// If a valid bundle already exists at the cache path, the download is skipped.
-/// `token` may be empty; Dashboard `sk-` / `bfvk-` keys are not sent to the hub.
+/// Hub auth: explicit `hf_token` / `modelscope_api_token`, then generic `token`,
+/// then `~/.ariacompute/config.yml` (same keys as `aria-engine auth`).
+/// Dashboard `sk-` / `bfvk-` keys are not sent to the hub.
 pub fn download_model(
     model: &str,
     token: &str,
     site: Option<&str>,
 ) -> Result<PathBuf, DownloadError> {
+    download_model_auth(model, token, site, None, None)
+}
+
+/// Like [`download_model`], with named hub tokens matching `aria-engine auth`.
+pub fn download_model_auth(
+    model: &str,
+    token: &str,
+    site: Option<&str>,
+    hf_token: Option<&str>,
+    modelscope_api_token: Option<&str>,
+) -> Result<PathBuf, DownloadError> {
     parse_bundle_name(model)?;
     let site = site.unwrap_or(DEFAULT_SITE);
     let source = preferred_public_hub(Some(site));
-    let hub_token = hub_bearer(token);
+    let hub_owned = resolve_hub_token(source, token, hf_token, modelscope_api_token);
+    let hub_token = hub_owned.as_deref();
     let cache = models_dir()?.join(model);
 
     if cache.exists() && is_valid_bundle(&cache) {
@@ -385,6 +466,39 @@ mod tests {
         .unwrap();
         let got = download_model("foo_q4", "", None).unwrap();
         assert_eq!(got, cache);
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+    }
+
+    #[test]
+    fn resolve_named_and_config_yml() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", tmp.path());
+        std::fs::write(
+            tmp.path().join("config.yml"),
+            "hf_token: hf_from_yml\nmodelscope_api_token: \"ms_from_yml\"\n",
+        )
+        .unwrap();
+        assert_eq!(
+            resolve_hub_token("huggingface", "hf_generic", Some("hf_named"), None).as_deref(),
+            Some("hf_named")
+        );
+        assert_eq!(
+            resolve_hub_token("modelscope", "", None, Some("ms_named")).as_deref(),
+            Some("ms_named")
+        );
+        assert_eq!(
+            resolve_hub_token("huggingface", "", None, None).as_deref(),
+            Some("hf_from_yml")
+        );
+        assert_eq!(
+            resolve_hub_token("modelscope", "", None, None).as_deref(),
+            Some("ms_from_yml")
+        );
+        assert_eq!(
+            resolve_hub_token("huggingface", "sk-bf-not-hub", None, None).as_deref(),
+            Some("hf_from_yml")
+        );
         std::env::remove_var("ARIA_COMPUTE_HOME");
     }
 }

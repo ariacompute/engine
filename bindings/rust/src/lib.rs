@@ -7,13 +7,17 @@ pub use aria_ffi::{
 pub use aria_inference::{EngineError, GenerateOpts, Generation, Session, SessionBuilder};
 
 mod download;
-pub use download::{download_model, DownloadError};
+pub use download::{download_model, download_model_auth, DownloadError};
 
 /// Options controlling model auto-download from the regional public hub.
 #[derive(Default, Clone)]
 pub struct OpenOptions {
-    /// Optional Hugging Face / ModelScope hub token. Dashboard `sk-` / `bfvk-` keys are ignored.
+    /// Legacy generic hub token. Dashboard `sk-` / `bfvk-` keys are ignored.
     pub token: Option<String>,
+    /// Hugging Face hub token (`.com`). Same field as `aria-engine auth` `hf_token`.
+    pub hf_token: Option<String>,
+    /// ModelScope hub token (`.cn`). Same field as `aria-engine auth` `modelscope_api_token`.
+    pub modelscope_api_token: Option<String>,
     /// Site used to pick the regional hub. Defaults to `https://ariacompute.com` (`.com` → HF, `.cn` → ModelScope).
     pub site: Option<String>,
 }
@@ -38,10 +42,12 @@ impl Engine {
         let path = if model_ref.contains('/') || model_ref.contains('\\') || std::path::Path::new(model_ref).exists() {
             std::path::PathBuf::from(model_ref)
         } else {
-            download_model(
+            download_model_auth(
                 model_ref,
                 opts.token.as_deref().unwrap_or(""),
                 opts.site.as_deref(),
+                opts.hf_token.as_deref(),
+                opts.modelscope_api_token.as_deref(),
             )
             .map_err(OpenError::Download)?
         };

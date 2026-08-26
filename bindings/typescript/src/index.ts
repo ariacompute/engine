@@ -34,8 +34,12 @@ export interface CompleteResult {
 }
 
 export interface OpenOptions {
-  /** Optional Hugging Face / ModelScope hub token. Dashboard sk-/bfvk- keys are ignored. */
+  /** Legacy generic hub token. Dashboard sk-/bfvk- keys are ignored. */
   token?: string;
+  /** Hugging Face hub token (`.com`). Same field as `aria-engine auth` `hf_token`. */
+  hfToken?: string;
+  /** ModelScope hub token (`.cn`). Same field as `aria-engine auth` `modelscope_api_token`. */
+  modelscopeApiToken?: string;
   /** Site used to pick the regional hub. Defaults to https://ariacompute.com (.com → HF, .cn → ModelScope). */
   site?: string;
   /** Explicit path to the FFI library. */
@@ -111,6 +115,45 @@ export function hubBearer(token?: string): string | undefined {
   const low = t.toLowerCase();
   if (low.startsWith("sk-") || low.startsWith("bfvk-")) return undefined;
   return t;
+}
+
+function unquoteYaml(v: string): string {
+  const t = v.trim();
+  if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+export function configYmlScalar(key: string): string | undefined {
+  try {
+    const raw = fs.readFileSync(path.join(ariaHome(), "config.yml"), "utf8");
+    for (const line of raw.split("\n")) {
+      if (line.startsWith(" ") || line.startsWith("\t")) continue;
+      const s = line.trim();
+      if (!s || s.startsWith("#") || !s.includes(":")) continue;
+      const idx = s.indexOf(":");
+      if (s.slice(0, idx).trim() !== key) continue;
+      const v = unquoteYaml(s.slice(idx + 1));
+      return v || undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+export function resolveHubToken(
+  source: "huggingface" | "modelscope",
+  opts: Pick<OpenOptions, "token" | "hfToken" | "modelscopeApiToken"> = {},
+): string | undefined {
+  const named = source === "modelscope" ? opts.modelscopeApiToken : opts.hfToken;
+  const field = source === "modelscope" ? "modelscope_api_token" : "hf_token";
+  for (const cand of [named, opts.token, configYmlScalar(field)]) {
+    const b = hubBearer(cand);
+    if (b) return b;
+  }
+  return undefined;
 }
 
 function hubPathNames(model: string): string[] {
@@ -214,12 +257,17 @@ const encoder = new TextEncoder();
  * Dashboard is not used. Skips the download when a valid bundle is already cached. */
 export async function downloadModel(
   model: string,
-  token?: string,
+  tokenOrOpts?: string | OpenOptions,
   site: string = DEFAULT_SITE,
 ): Promise<string> {
+  const opts: OpenOptions =
+    tokenOrOpts && typeof tokenOrOpts === "object"
+      ? tokenOrOpts
+      : { token: tokenOrOpts, site };
   parseBundleName(model);
-  const source = preferredPublicHub(site);
-  const hubToken = hubBearer(token);
+  const resolvedSite = opts.site ?? site ?? DEFAULT_SITE;
+  const source = preferredPublicHub(resolvedSite);
+  const hubToken = resolveHubToken(source, opts);
   const cache = cacheDir(model);
   if (fs.existsSync(cache) && isValidBundle(cache)) return cache;
 
@@ -292,7 +340,7 @@ export class Engine {
    * path; otherwise it is a model name downloaded from the regional public hub. */
   static async open(modelRef: string, opts: OpenOptions = {}): Promise<Engine> {
     if (isLocalRef(modelRef)) return new Engine(modelRef, opts);
-    const bundle = await downloadModel(modelRef, opts.token, opts.site ?? DEFAULT_SITE);
+    const bundle = await downloadModel(modelRef, opts);
     return new Engine(bundle, opts);
   }
 

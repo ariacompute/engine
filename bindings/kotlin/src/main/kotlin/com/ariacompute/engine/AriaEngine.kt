@@ -122,6 +122,48 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
             return t
         }
 
+        private fun unquoteYaml(v: String): String {
+            val t = v.trim()
+            if (t.length >= 2 &&
+                ((t.startsWith("\"") && t.endsWith("\"")) || (t.startsWith("'") && t.endsWith("'")))
+            ) {
+                return t.substring(1, t.length - 1)
+            }
+            return t
+        }
+
+        private fun configYmlScalar(key: String): String? {
+            val path = File(ariaHome(), "config.yml")
+            if (!path.isFile) return null
+            return try {
+                path.readLines().firstNotNullOfOrNull { line ->
+                    if (line.startsWith(" ") || line.startsWith("\t")) return@firstNotNullOfOrNull null
+                    val s = line.trim()
+                    if (s.isEmpty() || s.startsWith("#") || ':' !in s) return@firstNotNullOfOrNull null
+                    val idx = s.indexOf(':')
+                    if (s.substring(0, idx).trim() != key) return@firstNotNullOfOrNull null
+                    unquoteYaml(s.substring(idx + 1)).ifEmpty { null }
+                }
+            } catch (_: Exception) {
+                null
+            }
+        }
+
+        private fun resolveHubToken(
+            source: String,
+            token: String = "",
+            hfToken: String = "",
+            modelscopeApiToken: String = "",
+        ): String? {
+            val named = if (source == "modelscope") modelscopeApiToken else hfToken
+            val field = if (source == "modelscope") "modelscope_api_token" else "hf_token"
+            for (cand in listOf(named, token, configYmlScalar(field) ?: "")) {
+                val b = hubBearer(cand)
+                if (b != null) return b
+            }
+            return null
+        }
+
         private fun hubPathNames(model: String): List<String> {
             val names = mutableListOf(model)
             var lower = model.lowercase()
@@ -218,10 +260,16 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
          * Dashboard is not used. Token is optional; Dashboard sk-/bfvk- keys are ignored. */
         @JvmOverloads
         @JvmStatic
-        fun downloadModel(model: String, token: String = "", site: String = DEFAULT_SITE): String {
+        fun downloadModel(
+            model: String,
+            token: String = "",
+            site: String = DEFAULT_SITE,
+            hfToken: String = "",
+            modelscopeApiToken: String = "",
+        ): String {
             parseBundleName(model)
             val source = preferredPublicHub(site)
-            val hubToken = hubBearer(token)
+            val hubToken = resolveHubToken(source, token, hfToken, modelscopeApiToken)
             val cache = cacheDir(model)
             if (File(cache).exists() && isValidBundle(cache)) return cache
 
@@ -260,9 +308,15 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
          * the regional public hub then loaded. */
         @JvmOverloads
         @JvmStatic
-        fun open(modelRef: String, token: String = "", site: String = DEFAULT_SITE): AriaEngine {
+        fun open(
+            modelRef: String,
+            token: String = "",
+            site: String = DEFAULT_SITE,
+            hfToken: String = "",
+            modelscopeApiToken: String = "",
+        ): AriaEngine {
             if (isLocalRef(modelRef)) return AriaEngine(modelRef)
-            val bundle = downloadModel(modelRef, token, site)
+            val bundle = downloadModel(modelRef, token, site, hfToken, modelscopeApiToken)
             return AriaEngine(bundle)
         }
     }

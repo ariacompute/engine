@@ -271,7 +271,7 @@ C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`�
 
 ### 按模型名自动下载
 
-所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `aria-engine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**（Dashboard 的 `sk-`/`bfvk-` token 不会当作 hub 凭证）。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
+所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `aria-engine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**。需授权的 hub 文件使用与 `aria-engine auth` 相同的字段：调用时可传入 `hf_token`（`.com`）或 `modelscope_api_token`（`.cn`）；未传则读 `~/.ariacompute/config.yml`。Dashboard 的 `sk-`/`bfvk-` token 不会当作 hub 凭证。不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
@@ -324,6 +324,16 @@ with Engine("/path/to/aria-bundle") as eng:
 # 或按模型名 —— 从本区公开 hub 自动下载（Hugging Face / ModelScope，不走 Dashboard）：
 with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
+
+# 需授权的 hub 文件 —— 字段与 `aria-engine auth` 相同（未传则读 ~/.ariacompute/config.yml）：
+with Engine("gemma-4-e2b-it_q4", hf_token="hf_...") as eng:  # .com → Hugging Face
+    print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
+with Engine(
+    "gemma-4-e2b-it_q4",
+    modelscope_api_token="ms_...",
+    site="https://ariacompute.cn",
+) as eng:  # .cn → ModelScope
+    print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
 
 **TypeScript / Node**（`@ariacompute/engine-ts`）：
@@ -349,6 +359,15 @@ eng.close();
 const eng2 = await Engine.open("gemma-4-e2b-it_q4");
 console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
 eng2.close();
+
+// 需授权的 hub 文件 —— 字段与 `aria-engine auth` 相同（未传则读 ~/.ariacompute/config.yml）：
+const engHf = await Engine.open("gemma-4-e2b-it_q4", { hfToken: "hf_..." }); // .com
+const engMs = await Engine.open("gemma-4-e2b-it_q4", {
+  modelscopeApiToken: "ms_...",
+  site: "https://ariacompute.cn",
+}); // .cn
+engHf.close();
+engMs.close();
 ```
 
 **Go**（cgo；链接 `libaria_ffi`）：
@@ -392,6 +411,23 @@ func main() {
 	}
 	defer eng2.Close()
 	_ = eng2
+
+	// 需授权的 hub 文件 —— 字段与 `aria-engine auth` 相同（未传则读 ~/.ariacompute/config.yml）：
+	engHf, err := aria.OpenModelOpts("gemma-4-e2b-it_q4", aria.DownloadOptions{HFToken: "hf_..."}) // .com
+	if err != nil {
+		panic(err)
+	}
+	defer engHf.Close()
+	engMs, err := aria.OpenModelOpts("gemma-4-e2b-it_q4", aria.DownloadOptions{
+		ModelScopeAPIToken: "ms_...",
+		Site:               "https://ariacompute.cn",
+	}) // .cn
+	if err != nil {
+		panic(err)
+	}
+	defer engMs.Close()
+	_ = engHf
+	_ = engMs
 }
 ```
 
@@ -417,6 +453,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut eng2 = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions::default())?;
     let g2 = eng2.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?;
     println!("{}", g2.text);
+
+    // 需授权的 hub 文件 —— 字段与 `aria-engine auth` 相同（未传则读 ~/.ariacompute/config.yml）：
+    let mut eng_hf = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions {
+        hf_token: Some("hf_...".into()), // .com → Hugging Face
+        ..Default::default()
+    })?;
+    println!("{}", eng_hf.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?.text);
+    let mut eng_ms = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions {
+        modelscope_api_token: Some("ms_...".into()), // .cn → ModelScope
+        site: Some("https://ariacompute.cn".into()),
+        ..Default::default()
+    })?;
+    println!("{}", eng_ms.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?.text);
     Ok(())
 }
 ```

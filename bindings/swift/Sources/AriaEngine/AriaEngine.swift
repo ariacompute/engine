@@ -82,6 +82,40 @@ public final class AriaEngine {
         return t
     }
 
+    private static func unquoteYAML(_ v: String) -> String {
+        let t = v.trimmingCharacters(in: .whitespacesAndNewlines)
+        if t.count >= 2 {
+            if (t.hasPrefix("\"") && t.hasSuffix("\"")) || (t.hasPrefix("'") && t.hasSuffix("'")) {
+                return String(t.dropFirst().dropLast())
+            }
+        }
+        return t
+    }
+
+    private static func configYMLScalar(_ key: String) -> String? {
+        let path = (ariaHome() as NSString).appendingPathComponent("config.yml")
+        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
+        for line in raw.components(separatedBy: "\n") {
+            if line.hasPrefix(" ") || line.hasPrefix("\t") { continue }
+            let s = line.trimmingCharacters(in: .whitespacesAndNewlines)
+            if s.isEmpty || s.hasPrefix("#") { continue }
+            guard let idx = s.firstIndex(of: ":") else { continue }
+            if String(s[..<idx]).trimmingCharacters(in: .whitespaces) != key { continue }
+            let v = unquoteYAML(String(s[s.index(after: idx)...]))
+            return v.isEmpty ? nil : v
+        }
+        return nil
+    }
+
+    private static func resolveHubToken(source: String, token: String, hfToken: String, modelscopeApiToken: String) -> String? {
+        let named = source == "modelscope" ? modelscopeApiToken : hfToken
+        let field = source == "modelscope" ? "modelscope_api_token" : "hf_token"
+        for cand in [named, token, configYMLScalar(field) ?? ""] {
+            if let b = hubBearer(cand) { return b }
+        }
+        return nil
+    }
+
     private static func hubPathNames(_ model: String) -> [String] {
         var names = [model]
         var lower = model.lowercased()
@@ -177,7 +211,13 @@ public final class AriaEngine {
     /// Download `model` from the regional public hub into `~/.ariacompute/models/{model}`.
     /// Dashboard is not used. Skips the download when a valid bundle is already cached.
     @discardableResult
-    public static func downloadModel(_ model: String, token: String = "", site: String = "https://ariacompute.com") throws -> String {
+    public static func downloadModel(
+        _ model: String,
+        token: String = "",
+        site: String = "https://ariacompute.com",
+        hfToken: String = "",
+        modelscopeApiToken: String = ""
+    ) throws -> String {
         guard parseBundleName(model) != nil else {
             throw AriaDownloadError.invalidModelName(model)
         }
@@ -186,7 +226,7 @@ public final class AriaEngine {
             return cache
         }
         let source = preferredPublicHub(site)
-        let hubToken = hubBearer(token)
+        let hubToken = resolveHubToken(source: source, token: token, hfToken: hfToken, modelscopeApiToken: modelscopeApiToken)
         let staging = (ariaHome() as NSString).appendingPathComponent("models").appendingPathComponent(".\(model).partial")
         try? FileManager.default.removeItem(atPath: staging)
         try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: true)
@@ -221,11 +261,17 @@ public final class AriaEngine {
     /// Open a model by reference. A value containing a separator or already on
     /// disk is a local path (loaded directly); otherwise it is a model name
     /// downloaded from the regional public hub then loaded.
-    public static func open(_ ref: String, token: String = "", site: String = "https://ariacompute.com") throws -> AriaEngine {
+    public static func open(
+        _ ref: String,
+        token: String = "",
+        site: String = "https://ariacompute.com",
+        hfToken: String = "",
+        modelscopeApiToken: String = ""
+    ) throws -> AriaEngine {
         if isLocalRef(ref) {
             return try AriaEngine(bundlePath: ref)
         }
-        let bundle = try downloadModel(ref, token: token, site: site)
+        let bundle = try downloadModel(ref, token: token, site: site, hfToken: hfToken, modelscopeApiToken: modelscopeApiToken)
         return try AriaEngine(bundlePath: bundle)
     }
 

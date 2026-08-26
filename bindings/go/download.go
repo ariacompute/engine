@@ -114,6 +114,71 @@ func hubBearer(token string) string {
 	return t
 }
 
+func unquoteYAML(v string) string {
+	v = strings.TrimSpace(v)
+	if n := len(v); n >= 2 {
+		if (v[0] == '"' && v[n-1] == '"') || (v[0] == '\'' && v[n-1] == '\'') {
+			return v[1 : n-1]
+		}
+	}
+	return v
+}
+
+func configYMLScalar(key string) string {
+	home, err := ariaHome()
+	if err != nil {
+		return ""
+	}
+	raw, err := os.ReadFile(filepath.Join(home, "config.yml"))
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if line != "" && (line[0] == ' ' || line[0] == '\t') {
+			continue
+		}
+		s := strings.TrimSpace(line)
+		if s == "" || strings.HasPrefix(s, "#") {
+			continue
+		}
+		k, v, ok := strings.Cut(s, ":")
+		if !ok || strings.TrimSpace(k) != key {
+			continue
+		}
+		return unquoteYAML(v)
+	}
+	return ""
+}
+
+func hubTokenField(source string) string {
+	if source == "modelscope" {
+		return "modelscope_api_token"
+	}
+	return "hf_token"
+}
+
+// DownloadOptions controls hub download auth. Field names match aria-engine auth
+// (hf_token / modelscope_api_token) plus a legacy Token and Site.
+type DownloadOptions struct {
+	Token              string
+	HFToken            string
+	ModelScopeAPIToken string
+	Site               string
+}
+
+func resolveHubToken(source string, opts DownloadOptions) string {
+	named := opts.HFToken
+	if source == "modelscope" {
+		named = opts.ModelScopeAPIToken
+	}
+	for _, cand := range []string{named, opts.Token, configYMLScalar(hubTokenField(source))} {
+		if b := hubBearer(cand); b != "" {
+			return b
+		}
+	}
+	return ""
+}
+
 func hubPathNames(model string) []string {
 	names := []string{model}
 	lower := strings.ToLower(model)
@@ -237,17 +302,24 @@ func fetchHubFile(source, model, file, dest, token string, required bool) error 
 // ~/.ariacompute/models/{model} and returns that path.
 //
 // Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
-// Dashboard is not used. A Dashboard API key (sk- / bfvk-) is ignored for
-// hub auth. If a valid bundle already exists at the cache path, the download is skipped.
+// Hub auth uses hf_token / modelscope_api_token (DownloadModelOpts, else
+// ~/.ariacompute/config.yml from aria-engine auth). Dashboard is not used.
 func DownloadModel(model, token, site string) (string, error) {
+	return DownloadModelOpts(model, DownloadOptions{Token: token, Site: site})
+}
+
+// DownloadModelOpts is DownloadModel with explicit hub tokens (same keys as
+// aria-engine auth).
+func DownloadModelOpts(model string, opts DownloadOptions) (string, error) {
 	if _, _, err := parseBundleName(model); err != nil {
 		return "", err
 	}
+	site := opts.Site
 	if site == "" {
 		site = defaultSite
 	}
 	source := preferredPublicHub(site)
-	hubToken := hubBearer(token)
+	hubToken := resolveHubToken(source, opts)
 	cache, err := cacheDir(model)
 	if err != nil {
 		return "", err

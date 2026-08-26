@@ -84,6 +84,46 @@ String? _hubBearer(String? token) {
   return t;
 }
 
+String _unquoteYaml(String v) {
+  final t = v.trim();
+  if (t.length >= 2 &&
+      ((t.startsWith('"') && t.endsWith('"')) ||
+          (t.startsWith("'") && t.endsWith("'")))) {
+    return t.substring(1, t.length - 1);
+  }
+  return t;
+}
+
+String? _configYmlScalar(String key) {
+  try {
+    final raw = File('${_ariaHome()}/config.yml').readAsStringSync();
+    for (final line in raw.split('\n')) {
+      if (line.startsWith(' ') || line.startsWith('\t')) continue;
+      final s = line.trim();
+      if (s.isEmpty || s.startsWith('#') || !s.contains(':')) continue;
+      final idx = s.indexOf(':');
+      if (s.substring(0, idx).trim() != key) continue;
+      final v = _unquoteYaml(s.substring(idx + 1));
+      return v.isEmpty ? null : v;
+    }
+  } catch (_) {
+    return null;
+  }
+  return null;
+}
+
+String? _resolveHubToken(String source,
+    {String? token, String? hfToken, String? modelscopeApiToken}) {
+  final named = source == 'modelscope' ? modelscopeApiToken : hfToken;
+  final field =
+      source == 'modelscope' ? 'modelscope_api_token' : 'hf_token';
+  for (final cand in [named, token, _configYmlScalar(field)]) {
+    final b = _hubBearer(cand);
+    if (b != null) return b;
+  }
+  return null;
+}
+
 List<String> _hubPathNames(String model) {
   final names = <String>[model];
   var lower = model.toLowerCase();
@@ -190,10 +230,14 @@ Future<bool> _fetchHubFile(String source, String model, String file,
 /// Download [model] from the regional public hub into
 /// `~/.ariacompute/models/{model}`. Dashboard is not used.
 Future<String> downloadModel(String model,
-    {String? token, String site = _defaultSite}) async {
+    {String? token,
+    String? hfToken,
+    String? modelscopeApiToken,
+    String site = _defaultSite}) async {
   _parseBundleName(model);
   final source = _preferredPublicHub(site);
-  final hubToken = _hubBearer(token);
+  final hubToken = _resolveHubToken(source,
+      token: token, hfToken: hfToken, modelscopeApiToken: modelscopeApiToken);
   final cache = Directory(_cacheDir(model));
   if (cache.existsSync() && _isValidBundle(cache)) {
     return cache.path;
@@ -250,9 +294,17 @@ class AriaEngine {
   /// disk is a local path; otherwise it is a model name downloaded from the
   /// regional public hub then loaded.
   static Future<AriaEngine> open(String modelRef,
-      {String? token, String site = _defaultSite, String? libPath}) async {
+      {String? token,
+      String? hfToken,
+      String? modelscopeApiToken,
+      String site = _defaultSite,
+      String? libPath}) async {
     if (_isLocalRef(modelRef)) return AriaEngine(modelRef, libPath: libPath);
-    final bundle = await downloadModel(modelRef, token: token, site: site);
+    final bundle = await downloadModel(modelRef,
+        token: token,
+        hfToken: hfToken,
+        modelscopeApiToken: modelscopeApiToken,
+        site: site);
     return AriaEngine(bundle, libPath: libPath);
   }
 

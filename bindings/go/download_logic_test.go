@@ -148,3 +148,28 @@ func TestDownloadModelTokenOptionalWhenCached(t *testing.T) {
 		t.Fatalf("want %q got %q", cache, got)
 	}
 }
+
+func TestResolveHubTokenNamedAndConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ARIA_COMPUTE_HOME", home)
+	os.WriteFile(filepath.Join(home, "config.yml"), []byte("hf_token: hf_from_yml\nmodelscope_api_token: \"ms_from_yml\"\n"), 0o644)
+
+	if got := resolveHubToken("huggingface", DownloadOptions{HFToken: "hf_named", Token: "hf_generic"}); got != "hf_named" {
+		t.Fatalf("named hf_token: got %q", got)
+	}
+	if got := resolveHubToken("modelscope", DownloadOptions{ModelScopeAPIToken: "ms_named"}); got != "ms_named" {
+		t.Fatalf("named modelscope_api_token: got %q", got)
+	}
+	if got := resolveHubToken("huggingface", DownloadOptions{}); got != "hf_from_yml" {
+		t.Fatalf("config hf_token: got %q", got)
+	}
+	if got := resolveHubToken("modelscope", DownloadOptions{}); got != "ms_from_yml" {
+		t.Fatalf("config modelscope_api_token: got %q", got)
+	}
+	if got := resolveHubToken("huggingface", DownloadOptions{Token: "sk-bf-not-hub"}); got != "hf_from_yml" {
+		t.Fatalf("dashboard token should fall back to config, got %q", got)
+	}
+	if got := resolveHubToken("modelscope", DownloadOptions{HFToken: "hf_only"}); got != "ms_from_yml" {
+		t.Fatalf("wrong-region named token should be ignored, got %q", got)
+	}
+}

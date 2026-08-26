@@ -76,6 +76,44 @@ function hubBearer(token) {
   return t;
 }
 
+function unquoteYaml(v) {
+  const t = (v || '').trim();
+  if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))) {
+    return t.slice(1, -1);
+  }
+  return t;
+}
+
+function configYmlScalar(key) {
+  const fs = require('fs');
+  const path = require('path');
+  try {
+    const raw = fs.readFileSync(path.join(ariaHome(), 'config.yml'), 'utf8');
+    for (const line of raw.split('\n')) {
+      if (line.startsWith(' ') || line.startsWith('\t')) continue;
+      const s = line.trim();
+      if (!s || s.startsWith('#') || !s.includes(':')) continue;
+      const idx = s.indexOf(':');
+      if (s.slice(0, idx).trim() !== key) continue;
+      const v = unquoteYaml(s.slice(idx + 1));
+      return v || undefined;
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
+function resolveHubToken(source, opts = {}) {
+  const named = source === 'modelscope' ? opts.modelscopeApiToken : opts.hfToken;
+  const field = source === 'modelscope' ? 'modelscope_api_token' : 'hf_token';
+  for (const cand of [named, opts.token, configYmlScalar(field)]) {
+    const b = hubBearer(cand);
+    if (b) return b;
+  }
+  return undefined;
+}
+
 function hubPathNames(model) {
   const names = [model];
   let lower = model.toLowerCase();
@@ -180,12 +218,17 @@ async function fetchHubFile(source, model, file, dest, token, required) {
   return false;
 }
 
-async function downloadModel(model, token, site = DEFAULT_SITE) {
+async function downloadModel(model, tokenOrOpts, site = DEFAULT_SITE) {
+  const opts =
+    tokenOrOpts && typeof tokenOrOpts === 'object'
+      ? tokenOrOpts
+      : { token: tokenOrOpts, site };
   parseBundleName(model);
   const fs = require('fs');
   const path = require('path');
-  const source = preferredPublicHub(site);
-  const hubToken = hubBearer(token);
+  const resolvedSite = opts.site ?? site ?? DEFAULT_SITE;
+  const source = preferredPublicHub(resolvedSite);
+  const hubToken = resolveHubToken(source, opts);
   const cache = cacheDir(model);
   if (fs.existsSync(cache) && (await isValidBundle(cache))) {
     return cache;
@@ -226,7 +269,7 @@ export class AriaEngine {
 
   static async open(modelRef, opts = {}) {
     if (isLocalRef(modelRef)) return new AriaEngine(modelRef);
-    const bundle = await downloadModel(modelRef, opts.token, opts.site ?? DEFAULT_SITE);
+    const bundle = await downloadModel(modelRef, opts);
     return new AriaEngine(bundle);
   }
 

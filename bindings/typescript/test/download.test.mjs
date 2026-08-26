@@ -95,6 +95,40 @@ test("hub URLs follow upload layout", () => {
   assert.ok([...hf, ...ms].every((u) => !u.includes("/api/dashboard/")));
 });
 
+test("resolveHubToken uses named fields and config.yml", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { resolveHubToken } = mod;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "aria-ts-"));
+  const prev = process.env.ARIA_COMPUTE_HOME;
+  process.env.ARIA_COMPUTE_HOME = home;
+  try {
+    fs.writeFileSync(
+      path.join(home, "config.yml"),
+      'hf_token: hf_from_yml\nmodelscope_api_token: "ms_from_yml"\n',
+    );
+    assert.equal(
+      resolveHubToken("huggingface", { hfToken: "hf_named", token: "hf_generic" }),
+      "hf_named",
+    );
+    assert.equal(
+      resolveHubToken("modelscope", { modelscopeApiToken: "ms_named" }),
+      "ms_named",
+    );
+    assert.equal(resolveHubToken("huggingface", {}), "hf_from_yml");
+    assert.equal(resolveHubToken("modelscope", {}), "ms_from_yml");
+    assert.equal(
+      resolveHubToken("huggingface", { token: "sk-bf-not-hub" }),
+      "hf_from_yml",
+    );
+  } finally {
+    process.env.ARIA_COMPUTE_HOME = prev;
+  }
+});
+
 test("downloadModel cached bundle skips network", async () => {
   const mod = loadDownload();
   if (!mod) {

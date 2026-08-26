@@ -12,6 +12,7 @@ from aria_engine import (
     _is_valid_bundle,
     _parse_bundle_name,
     _preferred_public_hub,
+    _resolve_hub_token,
     download_model,
 )
 
@@ -132,6 +133,48 @@ class DownloadTests(unittest.TestCase):
         ms = _hub_file_urls("modelscope", "gemma-4-e2b-it_q4", "weight.bin")
         self.assertTrue(any("/v1.0/gemma-4-e2b-it_q4/weight.bin" in u for u in ms))
         self.assertFalse(any("/api/dashboard/" in u for u in hf + ms))
+
+    def test_named_hf_token_wins_over_generic_and_config(self):
+        with open(os.path.join(self.home, "config.yml"), "w", encoding="utf-8") as f:
+            f.write("hf_token: hf_from_yml\nmodelscope_api_token: ms_from_yml\n")
+        self.assertEqual(
+            _resolve_hub_token(
+                "huggingface",
+                token="hf_generic",
+                hf_token="hf_named",
+                modelscope_api_token="ms_named",
+            ),
+            "hf_named",
+        )
+        self.assertEqual(
+            _resolve_hub_token(
+                "modelscope",
+                token="hf_generic",
+                hf_token="hf_named",
+                modelscope_api_token="ms_named",
+            ),
+            "ms_named",
+        )
+
+    def test_config_yml_used_when_args_empty(self):
+        with open(os.path.join(self.home, "config.yml"), "w", encoding="utf-8") as f:
+            f.write('hf_token: "hf_from_yml"\nmodelscope_api_token: ms_from_yml\n')
+        self.assertEqual(_resolve_hub_token("huggingface"), "hf_from_yml")
+        self.assertEqual(_resolve_hub_token("modelscope"), "ms_from_yml")
+
+    def test_dashboard_token_falls_back_to_config(self):
+        with open(os.path.join(self.home, "config.yml"), "w", encoding="utf-8") as f:
+            f.write("hf_token: hf_from_yml\n")
+        self.assertEqual(
+            _resolve_hub_token("huggingface", token="sk-bf-not-a-hub-key"),
+            "hf_from_yml",
+        )
+
+    def test_wrong_region_named_token_is_ignored(self):
+        cfg = os.path.join(self.home, "config.yml")
+        if os.path.exists(cfg):
+            os.remove(cfg)
+        self.assertIsNone(_resolve_hub_token("modelscope", hf_token="hf_only"))
 
 
 if __name__ == "__main__":

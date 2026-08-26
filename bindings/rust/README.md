@@ -28,7 +28,12 @@ Dashboard is not used. A Dashboard `sk-` / `bfvk-` token is ignored for hub auth
 Token is optional for public models. A valid cached bundle is reused without
 re-downloading.
 
+Gated files: pass `hf_token` (`.com`) or `modelscope_api_token` (`.cn`) — same
+keys as `aria-engine auth`. If omitted, the SDK reads `~/.ariacompute/config.yml`.
+
 ```rust
 use aria_engine::{Engine, OpenOptions};
 let mut eng = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions::default())?;
+let opts = OpenOptions { hf_token: Some("hf_...".into()), ..Default::default() };
+let mut gated = Engine::open_model("gemma-4-e2b-it_q4", &opts)?;
 ```
