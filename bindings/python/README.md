@@ -47,7 +47,10 @@ with Engine("gemma-4-e2b-it_q4", hf_token="hf_...") as eng:
 1. 显式传入的 `path`
 2. 环境变量 `ARIA_FFI_LIB`（源码安装 / 自定义路径时使用）
 3. wheel 内捆绑的 `aria_engine/lib/<libaria_ffi.so|dylib|dll>`
-4. 都找不到 → `RuntimeError`（提示安装 wheel 或设置 `ARIA_FFI_LIB`）
+4. `~/.ariacompute/lib/`（与 `aria-engine upgrade` 相同目录）
+5. 都找不到 → 从本区 Releases 下载最新正式版 `libaria_ffi_{ver}_{os}.tar.gz` 解压到 `~/.ariacompute/lib/`（`upgrade_url` 优先；否则 `.com` → GitHub，`.cn` → Gitee）。失败明确报错。
+
+`aria-engine download` 只拉模型 bundle，不会装 FFI；Python SDK 在 `Engine(...)` 加载前自动补齐。
 
 ## 源码安装（开发）
 

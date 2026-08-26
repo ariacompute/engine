@@ -259,3 +259,11 @@
 - [x] 单测：routes 端点字段、fake 语义层采纳 E2E（`semantic-cloud` + outcome layer=semantic）
 - [x] `max_tokens` 设置则本地/云端原样使用；未设置则本地至 stop 或剩余 context（不默认 16），云端省略；`CloudClient` 超时 60s
 - [x] hub token 走 `aria-engine auth`：按 site 区只提示 `hf_token`（`.com`）或 `modelscope_api_token`（`.cn`）；`download` 不再读 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`
+
+## SDK 自动安装 libaria_ffi（requirements §3.7）
+
+### T81 — 八语言绑定加载前保证 `~/.ariacompute/lib/`
+- [x] 解析顺序：`ARIA_FFI_LIB` → 包内捆绑 → `~/.ariacompute/lib/`；缺失则从本区 Releases 拉最新正式 `libaria_ffi_{ver}_{os}.tar.gz`
+- [x] `upgrade_url` 优先；否则 `.com` GitHub / `.cn` Gitee。已缓存跳过。失败明确报错
+- [x] 单测：asset os / 选最新 stable / tar 解压 / 缓存跳过；`cases.json` `ensure_ffi_lib_*`
+

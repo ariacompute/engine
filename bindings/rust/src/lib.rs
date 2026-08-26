@@ -7,7 +7,7 @@ pub use aria_ffi::{
 pub use aria_inference::{EngineError, GenerateOpts, Generation, Session, SessionBuilder};
 
 mod download;
-pub use download::{download_model, download_model_auth, DownloadError};
+pub use download::{download_model, download_model_auth, ensure_ffi_lib, DownloadError};
 
 /// Options controlling model auto-download from the regional public hub.
 #[derive(Default, Clone)]
@@ -39,6 +39,7 @@ impl Engine {
     /// otherwise it is treated as a model name and auto-downloaded from the
     /// regional public hub into `~/.ariacompute/models/{model}` before loading.
     pub fn open_model(model_ref: &str, opts: &OpenOptions) -> Result<Self, OpenError> {
+        let _ = ensure_ffi_lib(opts.site.as_deref())?;
         let path = if model_ref.contains('/') || model_ref.contains('\\') || std::path::Path::new(model_ref).exists() {
             std::path::PathBuf::from(model_ref)
         } else {
@@ -102,6 +103,19 @@ mod tests {
 
     #[test]
     fn open_model_local_path_no_token() {
+        let _guard = crate::download::ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", home.path());
+        let libdir = home.path().join("lib");
+        std::fs::create_dir_all(&libdir).unwrap();
+        let name = if cfg!(windows) {
+            "aria_ffi.dll"
+        } else if cfg!(target_os = "macos") {
+            "libaria_ffi.dylib"
+        } else {
+            "libaria_ffi.so"
+        };
+        std::fs::write(libdir.join(name), b"x").unwrap();
         let dir = tempfile::tempdir().unwrap();
         write_tiny_q4_bundle(dir.path()).unwrap();
         let mut eng = Engine::open_model(dir.path().to_str().unwrap(), &OpenOptions::default()).unwrap();
@@ -109,5 +123,6 @@ mod tests {
             .complete("hi", &GenerateOpts { max_tokens: 2, temperature: 0.0 })
             .unwrap();
         assert!(!g.text.is_empty());
+        std::env::remove_var("ARIA_COMPUTE_HOME");
     }
 }

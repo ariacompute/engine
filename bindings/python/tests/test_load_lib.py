@@ -1,12 +1,23 @@
 """Unit tests for aria_engine lib resolution (env override, bundled lib, errors)."""
+import io
+import json
 import os
 import sys
+import tarfile
 import tempfile
 import unittest
 from unittest import mock
 
-import aria_engine
-from aria_engine import _default_lib_path, _load_lib
+from aria_engine import (
+    _cached_ffi_path,
+    _default_lib_path,
+    _extract_ffi_archive,
+    _ffi_asset_os,
+    _load_lib,
+    _select_latest_stable,
+    _upgrade_org,
+    ensure_ffi_lib,
+)
 
 
 class LibPathTests(unittest.TestCase):
@@ -65,7 +76,6 @@ class LoadLibTests(unittest.TestCase):
         self.pkg_dir = self._tmp.name
 
     def test_resolution_prefers_env(self):
-        # resolve via patched CDLL capture
         captured = {}
 
         def fake_cdll(path):
@@ -89,12 +99,34 @@ class LoadLibTests(unittest.TestCase):
         os.makedirs(os.path.dirname(bundled), exist_ok=True)
         with open(bundled, "wb"):
             pass
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
         with mock.patch.object(sys, "platform", "linux"):
-            with mock.patch.dict(os.environ, {}, clear=True):
+            with mock.patch.dict(os.environ, {"ARIA_COMPUTE_HOME": home.name}, clear=True):
                 with mock.patch("aria_engine._default_lib_path", return_value=bundled):
                     with mock.patch("ctypes.CDLL", side_effect=fake_cdll):
                         _load_lib()
         self.assertEqual(captured["path"], bundled)
+
+    def test_resolution_falls_back_to_home_lib(self):
+        captured = {}
+
+        def fake_cdll(path):
+            captured["path"] = path
+            return object()
+
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        cached = os.path.join(home.name, "lib", "libaria_ffi.so")
+        os.makedirs(os.path.dirname(cached), exist_ok=True)
+        with open(cached, "wb"):
+            pass
+        with mock.patch.object(sys, "platform", "linux"):
+            with mock.patch.dict(os.environ, {"ARIA_COMPUTE_HOME": home.name}, clear=True):
+                with mock.patch("aria_engine._default_lib_path", return_value=None):
+                    with mock.patch("ctypes.CDLL", side_effect=fake_cdll):
+                        _load_lib()
+        self.assertEqual(captured["path"], cached)
 
     def test_explicit_path_wins(self):
         captured = {}
@@ -112,9 +144,109 @@ class LoadLibTests(unittest.TestCase):
         with mock.patch.object(sys, "platform", "linux"):
             with mock.patch.dict(os.environ, {}, clear=True):
                 with mock.patch("aria_engine._default_lib_path", return_value=None):
-                    with self.assertRaises(RuntimeError) as ctx:
-                        _load_lib()
+                    with mock.patch("aria_engine._cached_ffi_path", return_value=None):
+                        with mock.patch(
+                            "aria_engine.ensure_ffi_lib",
+                            side_effect=RuntimeError("Cannot locate libaria_ffi"),
+                        ):
+                            with self.assertRaises(RuntimeError) as ctx:
+                                _load_lib()
         self.assertIn("Cannot locate libaria_ffi", str(ctx.exception))
+
+
+class FfiReleaseTests(unittest.TestCase):
+    def test_asset_os(self):
+        self.assertEqual(_ffi_asset_os("Linux", "x86_64"), "linux_x86_64")
+        self.assertEqual(_ffi_asset_os("Linux", "aarch64"), "linux_arm64")
+        self.assertEqual(_ffi_asset_os("Darwin", "arm64"), "macos")
+        self.assertEqual(_ffi_asset_os("Windows", "AMD64"), "windows_x86_64")
+        with self.assertRaises(RuntimeError):
+            _ffi_asset_os("Linux", "ppc64le")
+
+    def test_select_latest_stable(self):
+        releases = [
+            {"tag_name": "v0.7.1", "draft": False, "prerelease": False},
+            {"tag_name": "v0.8.0-rc1", "draft": False, "prerelease": True},
+            {"tag_name": "v0.7.2", "draft": False, "prerelease": False},
+            {"tag_name": "v0.9.0", "draft": True, "prerelease": False},
+        ]
+        self.assertEqual(_select_latest_stable(releases), "0.7.2")
+
+    def test_upgrade_org_from_site(self):
+        with mock.patch("aria_engine._config_yml_scalar", return_value=None):
+            self.assertEqual(_upgrade_org("https://ariacompute.com"), "https://github.com/ariacompute")
+            self.assertEqual(_upgrade_org("https://ariacompute.cn"), "https://gitee.com/ariacompute")
+
+    def test_extract_and_cached_skip(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        archive = os.path.join(home.name, "libaria_ffi_0.1.0_linux_x86_64.tar.gz")
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            info = tarfile.TarInfo("libaria_ffi.so")
+            data = b"dummy-ffi"
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        with open(archive, "wb") as f:
+            f.write(buf.getvalue())
+        dest_dir = os.path.join(home.name, "lib")
+        with mock.patch.object(sys, "platform", "linux"):
+            got = _extract_ffi_archive(archive, dest_dir, "libaria_ffi.so")
+        self.assertEqual(os.path.basename(got), "libaria_ffi.so")
+        with open(got, "rb") as f:
+            self.assertEqual(f.read(), b"dummy-ffi")
+        with mock.patch.dict(os.environ, {"ARIA_COMPUTE_HOME": home.name}, clear=True):
+            with mock.patch.object(sys, "platform", "linux"):
+                with mock.patch("aria_engine._default_lib_path", return_value=None):
+                    with mock.patch("aria_engine._http_get_bytes") as http:
+                        self.assertEqual(ensure_ffi_lib(), got)
+                        http.assert_not_called()
+                        self.assertEqual(_cached_ffi_path(), got)
+
+    def test_ensure_downloads_latest_stable(self):
+        home = tempfile.TemporaryDirectory()
+        self.addCleanup(home.cleanup)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tf:
+            info = tarfile.TarInfo("libaria_ffi.so")
+            data = b"from-release"
+            info.size = len(data)
+            tf.addfile(info, io.BytesIO(data))
+        archive_bytes = buf.getvalue()
+        releases = [
+            {
+                "tag_name": "v0.7.1",
+                "draft": False,
+                "prerelease": False,
+                "assets": [
+                    {
+                        "name": "libaria_ffi_0.7.1_linux_x86_64.tar.gz",
+                        "browser_download_url": "https://example.invalid/lib.tar.gz",
+                    }
+                ],
+            }
+        ]
+
+        def fake_http(url, dest=None):
+            if "api.github.com" in url or "gitee.com" in url:
+                return json.dumps(releases).encode()
+            if dest:
+                os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+                with open(dest, "wb") as f:
+                    f.write(archive_bytes)
+                return b""
+            return archive_bytes
+
+        with mock.patch.dict(os.environ, {"ARIA_COMPUTE_HOME": home.name}, clear=True):
+            with mock.patch.object(sys, "platform", "linux"):
+                with mock.patch("aria_engine.platform.system", return_value="Linux"):
+                    with mock.patch("aria_engine.platform.machine", return_value="x86_64"):
+                        with mock.patch("aria_engine._default_lib_path", return_value=None):
+                            with mock.patch("aria_engine._http_get_bytes", side_effect=fake_http):
+                                got = ensure_ffi_lib()
+        self.assertEqual(os.path.basename(got), "libaria_ffi.so")
+        with open(got, "rb") as f:
+            self.assertEqual(f.read(), b"from-release")
 
 
 if __name__ == "__main__":

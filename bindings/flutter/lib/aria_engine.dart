@@ -272,6 +272,198 @@ Future<String> downloadModel(String model,
   }
 }
 
+const _sdkUa = 'aria-engine-sdk/0.1.0';
+
+String _ffiLibName() {
+  if (Platform.isWindows) return 'aria_ffi.dll';
+  if (Platform.isMacOS || Platform.isIOS) return 'libaria_ffi.dylib';
+  return 'libaria_ffi.so';
+}
+
+String _libDir() => '${_ariaHome()}/lib';
+
+String? _cachedFfiPath() {
+  final p = '${_libDir()}/${_ffiLibName()}';
+  return File(p).existsSync() ? p : null;
+}
+
+String ffiAssetOs({String? system, String? machine}) {
+  final sys = (system ?? Platform.operatingSystem).toLowerCase();
+  var mach = (machine ?? '').toLowerCase();
+  if (mach.isEmpty) {
+    try {
+      final r = Process.runSync('uname', ['-m']);
+      if (r.exitCode == 0) mach = (r.stdout as String).trim().toLowerCase();
+    } catch (_) {}
+  }
+  if ((sys == 'linux' || sys == 'android') &&
+      (mach == 'x86_64' || mach == 'amd64')) {
+    return 'linux_x86_64';
+  }
+  if ((sys == 'linux' || sys == 'android') &&
+      (mach == 'aarch64' || mach == 'arm64')) {
+    return 'linux_arm64';
+  }
+  if (sys == 'macos' || sys == 'ios' || sys == 'darwin') return 'macos';
+  if (sys.startsWith('win') && (mach == 'x86_64' || mach == 'amd64' || mach.isEmpty)) {
+    return 'windows_x86_64';
+  }
+  throw StateError('unsupported platform $sys/$mach for libaria_ffi');
+}
+
+String _stripV(String tag) {
+  final t = tag.trim();
+  if (t.startsWith('v') || t.startsWith('V')) return t.substring(1);
+  return t;
+}
+
+(int, int, int)? _parseSemver(String tag) {
+  final core = _stripV(tag).split('-').first.split('+').first;
+  final parts = core.split('.');
+  if (parts.isEmpty || int.tryParse(parts[0]) == null) return null;
+  return (
+    int.parse(parts[0]),
+    parts.length > 1 ? int.tryParse(parts[1]) ?? 0 : 0,
+    parts.length > 2 ? int.tryParse(parts[2]) ?? 0 : 0,
+  );
+}
+
+String selectLatestStable(List releases) {
+  String? bestTag;
+  var bestKey = (-1, -1, -1);
+  for (final rel in releases) {
+    final map = rel as Map<String, dynamic>;
+    if (map['draft'] == true || map['prerelease'] == true) continue;
+    final tag = '${map['tag_name'] ?? map['tag'] ?? ''}';
+    final parsed = _parseSemver(tag);
+    if (parsed == null) continue;
+    if (parsed.$1 > bestKey.$1 ||
+        (parsed.$1 == bestKey.$1 && parsed.$2 > bestKey.$2) ||
+        (parsed.$1 == bestKey.$1 && parsed.$2 == bestKey.$2 && parsed.$3 > bestKey.$3)) {
+      bestKey = parsed;
+      bestTag = tag;
+    }
+  }
+  if (bestTag == null) {
+    throw StateError('no stable release found for libaria_ffi');
+  }
+  return _stripV(bestTag);
+}
+
+String _upgradeOrg(String? site) {
+  final cfg = _configYmlScalar('upgrade_url');
+  if (cfg != null && cfg.isNotEmpty) return cfg.replaceAll(RegExp(r'/$'), '');
+  final hint = (site ?? _configYmlScalar('site_url') ?? _defaultSite).toLowerCase();
+  if (hint.contains('ariacompute.cn') || hint.contains('gitee.com')) {
+    return 'https://gitee.com/ariacompute';
+  }
+  return 'https://github.com/ariacompute';
+}
+
+String _releasesApiUrl(String org) {
+  final owner = org.replaceAll(RegExp(r'/$'), '').split('/').last;
+  if (org.toLowerCase().contains('gitee.com')) {
+    return 'https://gitee.com/api/v5/repos/$owner/engine/releases?per_page=30';
+  }
+  return 'https://api.github.com/repos/$owner/engine/releases?per_page=30';
+}
+
+Future<List<int>> _httpGetBytes(String url, {String? dest}) async {
+  final client = HttpClient();
+  try {
+    final req = await client.getUrl(Uri.parse(url));
+    req.headers.set(HttpHeaders.userAgentHeader, _sdkUa);
+    final resp = await req.close();
+    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+      await resp.drain();
+      throw HttpException('HTTP ${resp.statusCode}', uri: Uri.parse(url));
+    }
+    final bytes = await resp.fold<List<int>>(<int>[], (p, e) => p..addAll(e));
+    if (dest != null) {
+      await File(dest).parent.create(recursive: true);
+      await File(dest).writeAsBytes(bytes);
+    }
+    return bytes;
+  } finally {
+    client.close();
+  }
+}
+
+String extractFfiArchive(String archive, String destDir, {String? want}) {
+  final name = want ?? _ffiLibName();
+  final tarBytes = gzip.decode(File(archive).readAsBytesSync());
+  var offset = 0;
+  while (offset + 512 <= tarBytes.length) {
+    final header = tarBytes.sublist(offset, offset + 512);
+    if (header.every((b) => b == 0)) break;
+    final entryName =
+        String.fromCharCodes(header.sublist(0, 100)).replaceAll('\x00', '');
+    final sizeStr =
+        String.fromCharCodes(header.sublist(124, 136)).replaceAll('\x00', '').trim();
+    final size = int.tryParse(sizeStr, radix: 8) ?? 0;
+    final typeFlag = header[156];
+    offset += 512;
+    final isFile = typeFlag == 0 || typeFlag == 48;
+    final base = entryName.split('/').last;
+    if (isFile && base == name) {
+      Directory(destDir).createSync(recursive: true);
+      final dest = '$destDir/$name';
+      File(dest).writeAsBytesSync(tarBytes.sublist(offset, offset + size));
+      try {
+        Process.runSync('chmod', ['755', dest]);
+      } catch (_) {}
+      return dest;
+    }
+    offset += ((size + 511) ~/ 512) * 512;
+  }
+  throw StateError('$name not found in $archive');
+}
+
+/// Return a path to libaria_ffi, downloading the latest stable Release if needed.
+Future<String> ensureFfiLib({String? site}) async {
+  final env = Platform.environment['ARIA_FFI_LIB'];
+  if (env != null && File(env).existsSync()) return env;
+  final cached = _cachedFfiPath();
+  if (cached != null) return cached;
+
+  final org = _upgradeOrg(site);
+  final raw = await _httpGetBytes(_releasesApiUrl(org));
+  final releases = jsonDecode(utf8.decode(raw));
+  if (releases is! List) {
+    throw StateError('unexpected releases payload from $org');
+  }
+  final ver = selectLatestStable(releases);
+  final assetName = 'libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz';
+  String? url;
+  for (final rel in releases) {
+    final map = rel as Map<String, dynamic>;
+    final tag = '${map['tag_name'] ?? map['tag'] ?? ''}';
+    if (_stripV(tag) != ver) continue;
+    final assets = map['assets'] as List? ?? [];
+    for (final asset in assets) {
+      final a = asset as Map<String, dynamic>;
+      if (a['name'] == assetName) {
+        url = (a['browser_download_url'] ?? a['direct_asset_url']) as String?;
+        break;
+      }
+    }
+    if (url != null) break;
+  }
+  if (url == null) {
+    throw StateError('release asset not found: $assetName');
+  }
+  final staging = Directory('${_ariaHome()}/tmp/ffi-$ver');
+  if (staging.existsSync()) staging.deleteSync(recursive: true);
+  staging.createSync(recursive: true);
+  final archive = '${staging.path}/$assetName';
+  try {
+    await _httpGetBytes(url, dest: archive);
+    return extractFfiArchive(archive, _libDir(), want: _ffiLibName());
+  } finally {
+    if (staging.existsSync()) staging.deleteSync(recursive: true);
+  }
+}
+
 class AriaEngine {
   late final DynamicLibrary _lib;
   late final Pointer _handle;
@@ -279,7 +471,12 @@ class AriaEngine {
   AriaEngine(String bundlePath, {String? libPath}) {
     final path = libPath ??
         Platform.environment['ARIA_FFI_LIB'] ??
-        (Platform.isMacOS ? 'libaria_ffi.dylib' : 'libaria_ffi.so');
+        _cachedFfiPath() ??
+        (Platform.isWindows
+            ? 'aria_ffi.dll'
+            : Platform.isMacOS
+                ? 'libaria_ffi.dylib'
+                : 'libaria_ffi.so');
     _lib = DynamicLibrary.open(path);
     final init = _lib.lookupFunction<AriaInitC, AriaInitDart>('aria_model_init');
     final p = bundlePath.toNativeUtf8();
@@ -299,13 +496,16 @@ class AriaEngine {
       String? modelscopeApiToken,
       String site = _defaultSite,
       String? libPath}) async {
-    if (_isLocalRef(modelRef)) return AriaEngine(modelRef, libPath: libPath);
+    final resolvedLib = libPath ?? await ensureFfiLib(site: site);
+    if (_isLocalRef(modelRef)) {
+      return AriaEngine(modelRef, libPath: resolvedLib);
+    }
     final bundle = await downloadModel(modelRef,
         token: token,
         hfToken: hfToken,
         modelscopeApiToken: modelscopeApiToken,
         site: site);
-    return AriaEngine(bundle, libPath: libPath);
+    return AriaEngine(bundle, libPath: resolvedLib);
   }
 
   String complete(String messagesJson,

@@ -1,6 +1,7 @@
 # AriaEngine (Swift)
 
 XCFramework / module map over `libaria_ffi`. CocoaPods name: `AriaEngine`.
+`AriaEngine.open` installs `libaria_ffi` into `~/.ariacompute/lib/` when missing (same Releases asset as `aria-engine upgrade`). `ARIA_FFI_LIB` remains an optional override.
 
 ```swift
 import AriaEngine

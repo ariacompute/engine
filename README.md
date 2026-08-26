@@ -291,8 +291,10 @@ On each GitHub Release, [`.github/workflows/release.yml`](.github/workflows/rele
 | `libaria_ffi_<ver>_macos.tar.gz` | `libaria_ffi.dylib` |
 | `libaria_ffi_<ver>_windows_x86_64.tar.gz` | `aria_ffi.dll` (+ optional import libs) |
 
+Language SDKs auto-install the matching archive into `~/.ariacompute/lib/` on first `Engine.open` / equivalent if the library is not already on `ARIA_FFI_LIB`, bundled in the package, or cached. `aria-engine download` only fetches the model bundle (the CLI binary does not dlopen FFI).
+
 ```bash
-# Example: Linux x86_64
+# Example: Linux x86_64 (manual unpack; SDKs do this automatically)
 tar -xzf libaria_ffi_0.7.1_linux_x86_64.tar.gz
 export ARIA_FFI_LIB="$PWD/libaria_ffi.so"
 # optional: export LD_LIBRARY_PATH="$PWD:${LD_LIBRARY_PATH:-}"
@@ -302,11 +304,11 @@ Point bindings at a local Aria bundle (`weight.bin` + `config.json` + tokenizer)
 
 ### Examples
 
-**Python** (loads `libaria_ffi` via `ARIA_FFI_LIB`):
+**Python** (auto-installs `libaria_ffi`; `ARIA_FFI_LIB` optional):
 
 ```bash
-export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 pip install aria-engine
+# optional override: export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 ```
 
 ```python
@@ -339,8 +341,8 @@ with Engine(
 **TypeScript / Node** (`@ariacompute/engine-ts`):
 
 ```bash
-export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 npm install @ariacompute/engine-ts
+# optional override: export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 ```
 
 ```ts
@@ -373,8 +375,8 @@ engMs.close();
 **Go** (cgo; link against `libaria_ffi`):
 
 ```bash
-export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 export CGO_ENABLED=1
+# optional: export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 # Ensure the linker can find the library (or use -L via cgo in the module).
 go get github.com/ariacompute/engine/bindings/go@latest
 ```

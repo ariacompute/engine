@@ -1,19 +1,24 @@
 package com.ariacompute.engine
 
 import java.io.File
+import java.io.FileInputStream
 import java.net.URI
 import java.net.http.HttpClient
 import java.net.http.HttpRequest
 import java.net.http.HttpResponse
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
+import java.util.zip.GZIPInputStream
+import org.json.JSONArray
 import org.json.JSONObject
 
 /** Kotlin/JVM + Android JNI wrapper over libaria_ffi. */
 class AriaEngine(bundlePath: String) : AutoCloseable {
-    private var handle: Long = nativeInit(bundlePath)
+    private var handle: Long = 0L
 
     init {
+        loadNative()
+        handle = nativeInit(bundlePath)
         if (handle == 0L) throw IllegalStateException(nativeLastError() ?: "init failed")
     }
 
@@ -43,15 +48,31 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
     private external fun nativeLastError(): String?
 
     companion object {
-        init {
+        @Volatile
+        private var nativeLoaded = false
+
+        @Synchronized
+        internal fun loadNative(site: String = DEFAULT_SITE) {
+            if (nativeLoaded) return
+            val env = System.getenv("ARIA_FFI_LIB")
+            if (!env.isNullOrEmpty() && File(env).isFile) {
+                System.load(File(env).absolutePath)
+                nativeLoaded = true
+                return
+            }
             try {
                 System.loadLibrary("aria_ffi")
+                nativeLoaded = true
+                return
             } catch (_: UnsatisfiedLinkError) {
-                // Host tests may System.load(ARIA_FFI_LIB) before constructing.
+                // Fall through to ~/.ariacompute/lib or Releases download.
             }
+            System.load(File(ensureFfiLib(site)).absolutePath)
+            nativeLoaded = true
         }
 
         private const val DEFAULT_SITE = "https://ariacompute.com"
+        private const val SDK_UA = "aria-engine-sdk/0.1.0"
 
         private fun ariaHome(): String {
             val override = System.getenv("ARIA_COMPUTE_HOME")
@@ -99,6 +120,185 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
 
         private fun isLocalRef(ref: String): Boolean =
             ref.contains('/') || ref.contains('\\') || File(ref).exists()
+
+        internal fun ffiLibName(osName: String = System.getProperty("os.name") ?: ""): String {
+            val n = osName.lowercase()
+            return when {
+                n.contains("win") -> "aria_ffi.dll"
+                n.contains("mac") || n.contains("darwin") -> "libaria_ffi.dylib"
+                else -> "libaria_ffi.so"
+            }
+        }
+
+        private fun libDir(): String = ariaHome() + File.separator + "lib"
+
+        private fun cachedFfiPath(): String? {
+            val p = File(libDir(), ffiLibName())
+            return if (p.isFile) p.absolutePath else null
+        }
+
+        internal fun ffiAssetOs(
+            osName: String = System.getProperty("os.name") ?: "",
+            arch: String = System.getProperty("os.arch") ?: "",
+        ): String {
+            val os = osName.lowercase()
+            val a = arch.lowercase()
+            if (os.contains("linux") && (a == "amd64" || a == "x86_64")) return "linux_x86_64"
+            if (os.contains("linux") && (a == "aarch64" || a == "arm64")) return "linux_arm64"
+            if (os.contains("mac") || os.contains("darwin")) return "macos"
+            if (os.contains("win") && (a == "amd64" || a == "x86_64")) return "windows_x86_64"
+            throw IllegalStateException("unsupported platform $osName/$arch for libaria_ffi")
+        }
+
+        private fun stripV(tag: String): String {
+            val t = tag.trim()
+            return if (t.startsWith("v") || t.startsWith("V")) t.substring(1) else t
+        }
+
+        private fun parseSemver(tag: String): Triple<Int, Int, Int>? {
+            val core = stripV(tag).split("-", limit = 2)[0].split("+", limit = 2)[0]
+            val parts = core.split(".")
+            if (parts.isEmpty() || parts[0].toIntOrNull() == null) return null
+            return Triple(
+                parts[0].toInt(),
+                parts.getOrNull(1)?.toIntOrNull() ?: 0,
+                parts.getOrNull(2)?.toIntOrNull() ?: 0,
+            )
+        }
+
+        internal fun selectLatestStable(releases: JSONArray): String {
+            var bestTag: String? = null
+            var best = Triple(-1, -1, -1)
+            for (i in 0 until releases.length()) {
+                val rel = releases.getJSONObject(i)
+                if (rel.optBoolean("draft") || rel.optBoolean("prerelease")) continue
+                val tag = rel.optString("tag_name").ifEmpty { rel.optString("tag") }
+                val parsed = parseSemver(tag) ?: continue
+                if (parsed.first > best.first ||
+                    (parsed.first == best.first && parsed.second > best.second) ||
+                    (parsed.first == best.first && parsed.second == best.second && parsed.third > best.third)
+                ) {
+                    best = parsed
+                    bestTag = tag
+                }
+            }
+            if (bestTag == null) throw IllegalStateException("no stable release found for libaria_ffi")
+            return stripV(bestTag)
+        }
+
+        private fun upgradeOrg(site: String): String {
+            configYmlScalar("upgrade_url")?.let { return it.trimEnd('/') }
+            val hint = (site.ifEmpty { configYmlScalar("site_url") ?: DEFAULT_SITE }).lowercase()
+            return if (hint.contains("ariacompute.cn") || hint.contains("gitee.com")) {
+                "https://gitee.com/ariacompute"
+            } else {
+                "https://github.com/ariacompute"
+            }
+        }
+
+        private fun releasesApiUrl(org: String): String {
+            val owner = org.trimEnd('/').substringAfterLast('/')
+            return if (org.lowercase().contains("gitee.com")) {
+                "https://gitee.com/api/v5/repos/$owner/engine/releases?per_page=30"
+            } else {
+                "https://api.github.com/repos/$owner/engine/releases?per_page=30"
+            }
+        }
+
+        private fun httpGetBytes(url: String, dest: File? = null): ByteArray {
+            val client = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NORMAL).build()
+            val req = HttpRequest.newBuilder(URI.create(url))
+                .header("User-Agent", SDK_UA)
+                .GET()
+                .build()
+            if (dest != null) {
+                dest.parentFile?.mkdirs()
+                val resp = client.send(req, HttpResponse.BodyHandlers.ofFile(dest.toPath()))
+                if (resp.statusCode() !in 200..299) {
+                    dest.delete()
+                    throw RuntimeException("HTTP ${resp.statusCode()} $url")
+                }
+                return ByteArray(0)
+            }
+            val resp = client.send(req, HttpResponse.BodyHandlers.ofByteArray())
+            if (resp.statusCode() !in 200..299) {
+                throw RuntimeException("HTTP ${resp.statusCode()} $url")
+            }
+            return resp.body()
+        }
+
+        internal fun extractFfiArchive(archive: File, destDir: File, want: String = ffiLibName()): String {
+            GZIPInputStream(FileInputStream(archive)).use { gzip ->
+                val tar = gzip.readBytes()
+                var offset = 0
+                while (offset + 512 <= tar.size) {
+                    val allZero = (0 until 512).all { tar[offset + it].toInt() == 0 }
+                    if (allZero) break
+                    val nameBytes = tar.copyOfRange(offset, offset + 100)
+                    val entryName = String(nameBytes, Charsets.UTF_8).substringBefore('\u0000')
+                    val sizeStr = String(tar.copyOfRange(offset + 124, offset + 136), Charsets.US_ASCII)
+                        .substringBefore('\u0000').trim()
+                    val size = sizeStr.toLongOrNull(8) ?: 0L
+                    val typeFlag = tar[offset + 156].toInt()
+                    offset += 512
+                    val isFile = typeFlag == 0 || typeFlag == '0'.code
+                    val base = File(entryName).name
+                    if (isFile && base == want) {
+                        destDir.mkdirs()
+                        val dest = File(destDir, want)
+                        dest.writeBytes(tar.copyOfRange(offset, offset + size.toInt()))
+                        dest.setExecutable(true)
+                        return dest.absolutePath
+                    }
+                    val padded = ((size + 511) / 512) * 512
+                    offset += padded.toInt()
+                }
+            }
+            throw IllegalStateException("$want not found in ${archive.path}")
+        }
+
+        @JvmStatic
+        @JvmOverloads
+        fun ensureFfiLib(site: String = DEFAULT_SITE): String {
+            val env = System.getenv("ARIA_FFI_LIB")
+            if (!env.isNullOrEmpty() && File(env).isFile) return env
+            cachedFfiPath()?.let { return it }
+
+            val org = upgradeOrg(site)
+            val raw = httpGetBytes(releasesApiUrl(org))
+            val releases = JSONArray(String(raw, Charsets.UTF_8))
+            val ver = selectLatestStable(releases)
+            val assetName = "libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz"
+            var url: String? = null
+            for (i in 0 until releases.length()) {
+                val rel = releases.getJSONObject(i)
+                val tag = rel.optString("tag_name").ifEmpty { rel.optString("tag") }
+                if (stripV(tag) != ver) continue
+                val assets = rel.optJSONArray("assets") ?: continue
+                for (j in 0 until assets.length()) {
+                    val asset = assets.getJSONObject(j)
+                    if (asset.optString("name") == assetName) {
+                        url = asset.optString("browser_download_url").ifEmpty {
+                            asset.optString("direct_asset_url")
+                        }
+                        break
+                    }
+                }
+                if (!url.isNullOrEmpty()) break
+            }
+            if (url.isNullOrEmpty()) throw IllegalStateException("release asset not found: $assetName")
+
+            val staging = File(ariaHome(), "tmp${File.separator}ffi-$ver")
+            staging.deleteRecursively()
+            staging.mkdirs()
+            return try {
+                val archive = File(staging, assetName)
+                httpGetBytes(url, archive)
+                extractFfiArchive(archive, File(libDir()), ffiLibName())
+            } finally {
+                staging.deleteRecursively()
+            }
+        }
 
         private const val DEFAULT_SDK = "v1.0"
         private val HUB_REQUIRED = listOf("config.json", "weight.bin")
@@ -315,6 +515,7 @@ class AriaEngine(bundlePath: String) : AutoCloseable {
             hfToken: String = "",
             modelscopeApiToken: String = "",
         ): AriaEngine {
+            loadNative(site)
             if (isLocalRef(modelRef)) return AriaEngine(modelRef)
             val bundle = downloadModel(modelRef, token, site, hfToken, modelscopeApiToken)
             return AriaEngine(bundle)

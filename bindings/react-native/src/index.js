@@ -261,6 +261,163 @@ async function downloadModel(model, tokenOrOpts, site = DEFAULT_SITE) {
   }
 }
 
+const SDK_UA = 'aria-engine-sdk/0.1.0';
+const zlib = require('zlib');
+
+function ffiLibName(platform = process.platform) {
+  if (platform === 'win32' || String(platform).toLowerCase().startsWith('win')) return 'aria_ffi.dll';
+  if (platform === 'darwin') return 'libaria_ffi.dylib';
+  return 'libaria_ffi.so';
+}
+
+function libDir() {
+  const path = require('path');
+  return path.join(ariaHome(), 'lib');
+}
+
+function cachedFfiPath(platform = process.platform) {
+  const path = require('path');
+  const fs = require('fs');
+  const candidate = path.join(libDir(), ffiLibName(platform));
+  return fs.existsSync(candidate) ? candidate : undefined;
+}
+
+function ffiAssetOs(platform = process.platform, arch = process.arch) {
+  const p = String(platform).toLowerCase();
+  const a = String(arch).toLowerCase();
+  if (p === 'linux' && (a === 'x64' || a === 'x86_64' || a === 'amd64')) return 'linux_x86_64';
+  if (p === 'linux' && (a === 'arm64' || a === 'aarch64')) return 'linux_arm64';
+  if (p === 'darwin' || p === 'macos') return 'macos';
+  if ((p === 'win32' || p.startsWith('win')) && (a === 'x64' || a === 'x86_64' || a === 'amd64')) {
+    return 'windows_x86_64';
+  }
+  throw new Error(`unsupported platform ${platform}/${arch} for libaria_ffi`);
+}
+
+function stripV(tag) {
+  const t = String(tag).trim();
+  return t.startsWith('v') || t.startsWith('V') ? t.slice(1) : t;
+}
+
+function selectLatestStable(releases) {
+  let bestTag;
+  let bestKey = [-1, -1, -1];
+  for (const rel of releases) {
+    if (rel.draft || rel.prerelease) continue;
+    const tag = String(rel.tag_name || rel.tag || '');
+    const core = stripV(tag).split('-')[0].split('+')[0];
+    const parts = core.split('.');
+    if (!parts.length || !/^\d+$/.test(parts[0])) continue;
+    const parsed = [
+      Number(parts[0]),
+      parts[1] && /^\d+$/.test(parts[1]) ? Number(parts[1]) : 0,
+      parts[2] && /^\d+$/.test(parts[2]) ? Number(parts[2]) : 0,
+    ];
+    if (
+      parsed[0] > bestKey[0] ||
+      (parsed[0] === bestKey[0] && parsed[1] > bestKey[1]) ||
+      (parsed[0] === bestKey[0] && parsed[1] === bestKey[1] && parsed[2] > bestKey[2])
+    ) {
+      bestKey = parsed;
+      bestTag = tag;
+    }
+  }
+  if (!bestTag) throw new Error('no stable release found for libaria_ffi');
+  return stripV(bestTag);
+}
+
+function upgradeOrg(site) {
+  const cfg = configYmlScalar('upgrade_url');
+  if (cfg) return cfg.replace(/\/$/, '');
+  const hint = String(site || configYmlScalar('site_url') || DEFAULT_SITE).toLowerCase();
+  if (hint.includes('ariacompute.cn') || hint.includes('gitee.com')) {
+    return 'https://gitee.com/ariacompute';
+  }
+  return 'https://github.com/ariacompute';
+}
+
+function releasesApiUrl(org) {
+  const owner = org.replace(/\/$/, '').split('/').pop() || 'ariacompute';
+  if (org.toLowerCase().includes('gitee.com')) {
+    return `https://gitee.com/api/v5/repos/${owner}/engine/releases?per_page=30`;
+  }
+  return `https://api.github.com/repos/${owner}/engine/releases?per_page=30`;
+}
+
+function extractFfiArchive(archive, destDir, want = ffiLibName()) {
+  const fs = require('fs');
+  const path = require('path');
+  const tar = zlib.gunzipSync(fs.readFileSync(archive));
+  let offset = 0;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((b) => b === 0)) break;
+    const name = header.subarray(0, 100).toString('utf8').replace(/\0.*$/, '');
+    const sizeOctal = header.subarray(124, 136).toString('utf8').replace(/\0/g, '').trim();
+    const size = Number.parseInt(sizeOctal, 8) || 0;
+    const typeFlag = header[156];
+    offset += 512;
+    const isFile = typeFlag === 0 || typeFlag === 48;
+    if (isFile && path.basename(name) === want) {
+      fs.mkdirSync(destDir, { recursive: true });
+      const dest = path.join(destDir, want);
+      fs.writeFileSync(dest, tar.subarray(offset, offset + size));
+      try {
+        fs.chmodSync(dest, 0o755);
+      } catch {
+        /* windows */
+      }
+      return dest;
+    }
+    offset += Math.ceil(size / 512) * 512;
+  }
+  throw new Error(`${want} not found in ${archive}`);
+}
+
+async function httpGetBytes(url) {
+  const resp = await fetch(url, { headers: { 'User-Agent': SDK_UA }, redirect: 'follow' });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${url}`);
+  return Buffer.from(await resp.arrayBuffer());
+}
+
+async function ensureFfiLib(site) {
+  const fs = require('fs');
+  const path = require('path');
+  const env = process.env.ARIA_FFI_LIB;
+  if (env && fs.existsSync(env)) return env;
+  const cached = cachedFfiPath();
+  if (cached) return cached;
+  const org = upgradeOrg(site);
+  const raw = await httpGetBytes(releasesApiUrl(org));
+  const releases = JSON.parse(raw.toString('utf8'));
+  if (!Array.isArray(releases)) throw new Error('unexpected releases payload');
+  const ver = selectLatestStable(releases);
+  const assetName = `libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
+  let url;
+  for (const rel of releases) {
+    const tag = String(rel.tag_name || rel.tag || '');
+    if (stripV(tag) !== ver) continue;
+    for (const asset of rel.assets || []) {
+      if (asset.name === assetName) {
+        url = asset.browser_download_url || asset.direct_asset_url;
+        break;
+      }
+    }
+    if (url) break;
+  }
+  if (!url) throw new Error(`release asset not found: ${assetName}`);
+  const staging = path.join(ariaHome(), 'tmp', `ffi-${ver}`);
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.mkdirSync(staging, { recursive: true });
+  const archive = path.join(staging, assetName);
+  try {
+    fs.writeFileSync(archive, await httpGetBytes(url));
+    return extractFfiArchive(archive, libDir(), ffiLibName());
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+
 export class AriaEngine {
   constructor(bundlePath) {
     this.bundlePath = bundlePath;
@@ -268,6 +425,7 @@ export class AriaEngine {
   }
 
   static async open(modelRef, opts = {}) {
+    await ensureFfiLib(opts.site);
     if (isLocalRef(modelRef)) return new AriaEngine(modelRef);
     const bundle = await downloadModel(modelRef, opts);
     return new AriaEngine(bundle);

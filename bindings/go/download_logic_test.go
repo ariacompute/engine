@@ -1,8 +1,11 @@
 package aria
 
 import (
+	"archive/tar"
+	"compress/gzip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -172,4 +175,114 @@ func TestResolveHubTokenNamedAndConfig(t *testing.T) {
 	if got := resolveHubToken("modelscope", DownloadOptions{HFToken: "hf_only"}); got != "ms_from_yml" {
 		t.Fatalf("wrong-region named token should be ignored, got %q", got)
 	}
+}
+
+func TestFfiAssetOS(t *testing.T) {
+	got, err := ffiAssetOSFor("linux", "amd64")
+	if err != nil || got != "linux_x86_64" {
+		t.Fatalf("got %q %v", got, err)
+	}
+	got, err = ffiAssetOSFor("linux", "arm64")
+	if err != nil || got != "linux_arm64" {
+		t.Fatalf("got %q %v", got, err)
+	}
+	got, err = ffiAssetOSFor("darwin", "arm64")
+	if err != nil || got != "macos" {
+		t.Fatalf("got %q %v", got, err)
+	}
+	got, err = ffiAssetOSFor("windows", "amd64")
+	if err != nil || got != "windows_x86_64" {
+		t.Fatalf("got %q %v", got, err)
+	}
+	if _, err := ffiAssetOSFor("linux", "ppc64le"); err == nil {
+		t.Fatal("expected error for ppc64le")
+	}
+}
+
+func TestSelectLatestStable(t *testing.T) {
+	releases := []ghRelease{
+		{TagName: "v0.7.1"},
+		{TagName: "v0.8.0-rc1", Prerelease: true},
+		{TagName: "v0.7.2"},
+		{TagName: "v0.9.0", Draft: true},
+	}
+	got, err := selectLatestStable(releases)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "0.7.2" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestUpgradeOrgFromSite(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ARIA_COMPUTE_HOME", home)
+	if got := upgradeOrg("https://ariacompute.com"); got != "https://github.com/ariacompute" {
+		t.Fatalf("got %q", got)
+	}
+	if got := upgradeOrg("https://ariacompute.cn"); got != "https://gitee.com/ariacompute" {
+		t.Fatalf("got %q", got)
+	}
+}
+
+func TestExtractFfiAndCachedSkip(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("ARIA_COMPUTE_HOME", home)
+	if runtime.GOOS != "linux" {
+		t.Skip("linux .so fixture")
+	}
+	srcDir := t.TempDir()
+	lib := filepath.Join(srcDir, "libaria_ffi.so")
+	if err := os.WriteFile(lib, []byte("dummy-ffi"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	archive := filepath.Join(home, "libaria_ffi_0.1.0_linux_x86_64.tar.gz")
+	if err := packTarGz(archive, srcDir, "libaria_ffi.so"); err != nil {
+		t.Fatal(err)
+	}
+	destDir := filepath.Join(home, "lib")
+	got, err := extractFfiArchive(archive, destDir, "libaria_ffi.so")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if filepath.Base(got) != "libaria_ffi.so" {
+		t.Fatalf("got %q", got)
+	}
+	raw, err := os.ReadFile(got)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != "dummy-ffi" {
+		t.Fatalf("content %q", raw)
+	}
+	cached, err := EnsureFfiLib("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached != got {
+		t.Fatalf("want cached %q got %q", got, cached)
+	}
+}
+
+func packTarGz(archive, srcDir, name string) error {
+	f, err := os.Create(archive)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	gw := gzip.NewWriter(f)
+	defer gw.Close()
+	tw := tar.NewWriter(gw)
+	defer tw.Close()
+	body, err := os.ReadFile(filepath.Join(srcDir, name))
+	if err != nil {
+		return err
+	}
+	hdr := &tar.Header{Name: name, Mode: 0755, Size: int64(len(body))}
+	if err := tw.WriteHeader(hdr); err != nil {
+		return err
+	}
+	_, err = tw.Write(body)
+	return err
 }

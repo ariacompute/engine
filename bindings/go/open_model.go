@@ -21,6 +21,9 @@ func OpenModel(ref, token, site string) (*Engine, error) {
 
 // OpenModelOpts is OpenModel with explicit hf_token / modelscope_api_token.
 func OpenModelOpts(ref string, opts DownloadOptions) (*Engine, error) {
+	if _, err := EnsureFfiLib(opts.Site); err != nil {
+		return nil, err
+	}
 	if strings.ContainsAny(ref, "/\\") || fileExists(ref) {
 		return Open(ref)
 	}

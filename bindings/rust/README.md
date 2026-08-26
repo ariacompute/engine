@@ -14,7 +14,9 @@ let mut eng = Engine::open("/path/to/bundle")?;
 let g = eng.complete("hi", &GenerateOpts { max_tokens: 16, temperature: 0.0 })?;
 ```
 
-Publish: `cargo publish -p ariacompute-engine` (via [`.github/workflows/publish-cargo.yml`](../../.github/workflows/publish-cargo.yml) on GitHub Release).
+`Engine::open_model` also installs `libaria_ffi` into `~/.ariacompute/lib/` when
+missing (same Releases asset as `aria-engine upgrade`), so other language
+bindings can reuse it. Native `Engine::open` does not dlopen that library.
 
 ## Auto-download by model name
 

@@ -283,6 +283,8 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 
 **按模型名下载：** 与 `aria-engine download` 相同，仅本区公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。**不**请求 Dashboard zip meta。Hub 凭证字段与 `aria-engine auth` 相同：`hf_token`（`.com`）/ `modelscope_api_token`（`.cn`）。调用时可显式传入；未传则读 `~/.ariacompute/config.yml`。**不**读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。Dashboard `sk-`/`bfvk-` token 不作为 hub Bearer。公开模型无需 token。缓存 `~/.ariacompute/models/{model}`；已有有效 bundle 则跳过下载。
 
+**libaria_ffi：** SDK 加载模型前须保证本机动态库可用。解析顺序：`ARIA_FFI_LIB`（若已设置则用之）→ 语言包捆绑路径 → `~/.ariacompute/lib/`（与 `aria-engine upgrade` 相同目录）。若均不存在，从本区 Releases 下载最新正式版 `libaria_ffi_{ver}_{os}.tar.gz`（config.yml `upgrade_url` 优先；否则 `.com`→`https://github.com/ariacompute`，`.cn`→`https://gitee.com/ariacompute`），解压到 `~/.ariacompute/lib/`。已缓存则跳过。失败须明确报错，禁止静默。Rust 原生 `Engine::open` 不 dlopen 该库，但仍走同一安装路径以便其它绑定复用。`aria-engine download` / `serve` 为原生二进制，不经过此路径。
+
 **测试：** 共享 `cases.json`（lifecycle / chat / stream / tools / embed / ASR）；`cargo test -p ariacompute-ffi`；`./scripts/run-binding-tests.sh`。Flutter/RN：iOS+Android device-farm/emulator CI（`.github/workflows/bindings-mobile.yml`）。
 
 **发布：** GitHub Release 触发 `release.yml`：CLI 资产 + 尝试发布 Maven / CocoaPods / npm / pub.dev / crates.io / PyPI；**publish fail-pass**（不阻断 CLI/资产上传）。版本 = tag 去 `v`。

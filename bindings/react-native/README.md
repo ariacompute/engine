@@ -8,6 +8,8 @@ console.log(await eng.complete([{ role: 'user', content: 'hi' }]));
 
 npm publish name: `@ariacompute/engine-rn`. Device-farm CI: `.github/workflows/bindings-mobile.yml`.
 
+`AriaEngine.open` installs `libaria_ffi` into `~/.ariacompute/lib/` when it is not already on `ARIA_FFI_LIB` or in that cache (same Releases asset as `aria-engine upgrade`).
+
 ## Auto-download by model name
 
 `AriaEngine.open(modelRef, { token, site })` accepts a local bundle path **or**

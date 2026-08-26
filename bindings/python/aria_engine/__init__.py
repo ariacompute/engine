@@ -8,6 +8,9 @@ import sys
 from ctypes import c_char_p, c_int, c_size_t, c_void_p, POINTER, c_ubyte
 from typing import Any, Optional
 from urllib.request import Request, urlopen
+import platform
+import shutil
+import tarfile
 
 __version__ = "0.1.0"
 
@@ -32,15 +35,14 @@ def _default_lib_path(package_dir: Optional[str] = None) -> Optional[str]:
     return candidate if os.path.isfile(candidate) else None
 
 
-def _load_lib(path: Optional[str] = None):
-    """Resolve the FFI library: explicit path > ARIA_FFI_LIB env > bundled lib."""
+def _load_lib(path: Optional[str] = None, site: Optional[str] = None):
+    """Resolve the FFI library: explicit path > ARIA_FFI_LIB env > bundled lib >
+    ``~/.ariacompute/lib`` (same as ``aria-engine upgrade``) > download latest Release.
+    """
     if not path:
-        path = os.environ.get("ARIA_FFI_LIB") or _default_lib_path()
+        path = os.environ.get("ARIA_FFI_LIB") or _default_lib_path() or _cached_ffi_path()
     if not path:
-        raise RuntimeError(
-            "Cannot locate libaria_ffi. Install the aria-engine wheel (bundles the "
-            "library) or set ARIA_FFI_LIB to libaria_ffi.so / .dylib / .dll"
-        )
+        path = ensure_ffi_lib(site=site)
     return ctypes.CDLL(path)
 
 
@@ -49,6 +51,176 @@ def _aria_home() -> str:
     if override:
         return override
     return os.path.join(os.path.expanduser("~"), ".ariacompute")
+
+
+def _ffi_lib_name(plat: Optional[str] = None) -> str:
+    p = plat or sys.platform
+    return _LIB_NAMES.get(p, "libaria_ffi.so")
+
+
+def _lib_dir() -> str:
+    return os.path.join(_aria_home(), "lib")
+
+
+def _cached_ffi_path() -> Optional[str]:
+    candidate = os.path.join(_lib_dir(), _ffi_lib_name())
+    return candidate if os.path.isfile(candidate) else None
+
+
+def _ffi_asset_os(system: Optional[str] = None, machine: Optional[str] = None) -> str:
+    """Match ``aria-engine upgrade`` asset suffixes."""
+    system = (system or platform.system()).lower()
+    machine = (machine or platform.machine()).lower()
+    if system == "linux" and machine in ("x86_64", "amd64"):
+        return "linux_x86_64"
+    if system == "linux" and machine in ("aarch64", "arm64"):
+        return "linux_arm64"
+    if system in ("darwin", "macos"):
+        return "macos"
+    if system.startswith("win") and machine in ("x86_64", "amd64"):
+        return "windows_x86_64"
+    raise RuntimeError(f"unsupported platform {system}/{machine} for libaria_ffi")
+
+
+def _strip_v(tag: str) -> str:
+    t = tag.strip()
+    if t[:1] in "vV":
+        return t[1:]
+    return t
+
+
+def _parse_semver(tag: str) -> Optional[tuple[int, int, int]]:
+    core = _strip_v(tag).split("-", 1)[0].split("+", 1)[0]
+    parts = core.split(".")
+    if not parts or not parts[0].isdigit():
+        return None
+    major = int(parts[0])
+    minor = int(parts[1]) if len(parts) > 1 and parts[1].isdigit() else 0
+    patch = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else 0
+    return (major, minor, patch)
+
+
+def _select_latest_stable(releases: list) -> str:
+    best_tag = None
+    best_key = (-1, -1, -1)
+    for rel in releases:
+        if rel.get("draft") or rel.get("prerelease"):
+            continue
+        tag = str(rel.get("tag_name") or rel.get("tag") or "")
+        parsed = _parse_semver(tag)
+        if parsed and parsed > best_key:
+            best_key = parsed
+            best_tag = tag
+    if not best_tag:
+        raise RuntimeError("no stable release found for libaria_ffi")
+    return _strip_v(best_tag)
+
+
+def _upgrade_org(site: Optional[str] = None) -> str:
+    cfg = _config_yml_scalar("upgrade_url")
+    if cfg:
+        return cfg.rstrip("/")
+    hint = (site or _config_yml_scalar("site_url") or DEFAULT_SITE).lower()
+    if "ariacompute.cn" in hint or "gitee.com" in hint:
+        return "https://gitee.com/ariacompute"
+    return "https://github.com/ariacompute"
+
+
+def _releases_api_url(org: str) -> str:
+    owner = org.rstrip("/").rsplit("/", 1)[-1] or "ariacompute"
+    if "gitee.com" in org.lower():
+        return f"https://gitee.com/api/v5/repos/{owner}/engine/releases?per_page=30"
+    return f"https://api.github.com/repos/{owner}/engine/releases?per_page=30"
+
+
+def _http_get_bytes(url: str, dest: Optional[str] = None) -> bytes:
+    req = Request(url, headers={"User-Agent": f"aria-engine-sdk/{__version__}"})
+    with urlopen(req, timeout=600) as resp:  # nosec - release/hub URL
+        data = resp.read() if dest is None else None
+        if dest is not None:
+            os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+            with open(dest, "wb") as out:
+                while True:
+                    chunk = resp.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    out.write(chunk)
+            return b""
+        return data or b""
+
+
+def _extract_ffi_archive(archive: str, dest_dir: str, lib_name: Optional[str] = None) -> str:
+    want = lib_name or _ffi_lib_name()
+    with tarfile.open(archive, "r:gz") as tf:
+        for member in tf.getmembers():
+            if not member.isfile():
+                continue
+            if os.path.basename(member.name) != want:
+                continue
+            src = tf.extractfile(member)
+            if src is None:
+                continue
+            os.makedirs(dest_dir, exist_ok=True)
+            dest = os.path.join(dest_dir, want)
+            with open(dest, "wb") as out:
+                shutil.copyfileobj(src, out)
+            try:
+                os.chmod(dest, 0o755)
+            except OSError:
+                pass
+            return dest
+    raise RuntimeError(f"{want} not found in {archive}")
+
+
+def ensure_ffi_lib(site: Optional[str] = None) -> str:
+    """Return a path to libaria_ffi, downloading the latest Release if needed."""
+    env = os.environ.get("ARIA_FFI_LIB")
+    if env and os.path.isfile(env):
+        return env
+    bundled = _default_lib_path()
+    if bundled:
+        return bundled
+    cached = _cached_ffi_path()
+    if cached:
+        return cached
+
+    org = _upgrade_org(site)
+    raw = _http_get_bytes(_releases_api_url(org))
+    try:
+        releases = json.loads(raw.decode("utf-8"))
+    except ValueError as e:
+        raise RuntimeError(f"invalid releases JSON from {org}") from e
+    if not isinstance(releases, list):
+        raise RuntimeError(f"unexpected releases payload from {org}")
+    ver = _select_latest_stable(releases)
+    asset_os = _ffi_asset_os()
+    asset_name = f"libaria_ffi_{ver}_{asset_os}.tar.gz"
+    url = None
+    for rel in releases:
+        tag = str(rel.get("tag_name") or rel.get("tag") or "")
+        if _strip_v(tag) != ver:
+            continue
+        for asset in rel.get("assets") or []:
+            if asset.get("name") == asset_name:
+                url = asset.get("browser_download_url") or asset.get("direct_asset_url")
+                break
+        if url:
+            break
+    if not url:
+        raise RuntimeError(f"release asset not found: {asset_name}")
+
+    staging = os.path.join(_aria_home(), "tmp", f"ffi-{ver}")
+    if os.path.isdir(staging):
+        shutil.rmtree(staging)
+    os.makedirs(staging, exist_ok=True)
+    archive = os.path.join(staging, asset_name)
+    try:
+        _http_get_bytes(url, dest=archive)
+        dest = _extract_ffi_archive(archive, _lib_dir(), _ffi_lib_name())
+    finally:
+        if os.path.isdir(staging):
+            shutil.rmtree(staging, ignore_errors=True)
+    return dest
 
 
 def _parse_bundle_name(model: str):
@@ -328,7 +500,7 @@ class Engine:
         hf_token: Optional[str] = None,
         modelscope_api_token: Optional[str] = None,
     ):
-        self._lib = lib or _load_lib()
+        self._lib = lib or _load_lib(site=site)
         self._lib.aria_model_init.restype = c_void_p
         self._lib.aria_model_init.argtypes = [c_char_p]
         self._lib.aria_model_destroy.argtypes = [c_void_p]

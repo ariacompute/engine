@@ -404,12 +404,236 @@ pub fn download_model_auth(
     result
 }
 
+const SDK_UA: &str = "aria-engine-sdk/0.1.0";
+
+fn ffi_lib_name() -> &'static str {
+    if cfg!(windows) {
+        "aria_ffi.dll"
+    } else if cfg!(target_os = "macos") {
+        "libaria_ffi.dylib"
+    } else {
+        "libaria_ffi.so"
+    }
+}
+
+fn lib_dir() -> Result<PathBuf, DownloadError> {
+    Ok(aria_home()?.join("lib"))
+}
+
+fn cached_ffi_path() -> Result<Option<PathBuf>, DownloadError> {
+    let p = lib_dir()?.join(ffi_lib_name());
+    Ok(if p.is_file() { Some(p) } else { None })
+}
+
+pub(crate) fn ffi_asset_os(os: &str, arch: &str) -> Result<&'static str, DownloadError> {
+    match (os, arch) {
+        ("linux", "x86_64") => Ok("linux_x86_64"),
+        ("linux", "aarch64") => Ok("linux_arm64"),
+        ("macos", _) => Ok("macos"),
+        ("windows", "x86_64") => Ok("windows_x86_64"),
+        _ => Err(DownloadError::Request(format!(
+            "unsupported platform {os}/{arch} for libaria_ffi"
+        ))),
+    }
+}
+
+fn strip_v(tag: &str) -> &str {
+    let t = tag.trim();
+    t.strip_prefix('v').or_else(|| t.strip_prefix('V')).unwrap_or(t)
+}
+
+fn parse_semver(tag: &str) -> Option<(u64, u64, u64)> {
+    let core = strip_v(tag).split(['-', '+']).next().unwrap_or("");
+    let mut parts = core.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().unwrap_or("0").parse().ok()?;
+    let patch = parts.next().unwrap_or("0").parse().ok()?;
+    Some((major, minor, patch))
+}
+
+pub(crate) fn select_latest_stable(releases: &[serde_json::Value]) -> Result<String, DownloadError> {
+    let mut best_tag: Option<&str> = None;
+    let mut best_key = (0u64, 0u64, 0u64);
+    let mut found = false;
+    for rel in releases {
+        if rel.get("draft").and_then(|v| v.as_bool()).unwrap_or(false)
+            || rel.get("prerelease").and_then(|v| v.as_bool()).unwrap_or(false)
+        {
+            continue;
+        }
+        let tag = rel
+            .get("tag_name")
+            .or_else(|| rel.get("tag"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if let Some(parsed) = parse_semver(tag) {
+            if !found || parsed > best_key {
+                best_key = parsed;
+                best_tag = Some(tag);
+                found = true;
+            }
+        }
+    }
+    best_tag
+        .map(|t| strip_v(t).to_string())
+        .ok_or_else(|| DownloadError::Request("no stable release found for libaria_ffi".into()))
+}
+
+fn upgrade_org(site: Option<&str>) -> String {
+    if let Some(cfg) = config_yml_scalar("upgrade_url") {
+        return cfg.trim_end_matches('/').to_string();
+    }
+    let from_cfg = config_yml_scalar("site_url");
+    let hint = site
+        .or(from_cfg.as_deref())
+        .unwrap_or(DEFAULT_SITE)
+        .to_ascii_lowercase();
+    if hint.contains("ariacompute.cn") || hint.contains("gitee.com") {
+        "https://gitee.com/ariacompute".into()
+    } else {
+        "https://github.com/ariacompute".into()
+    }
+}
+
+fn releases_api_url(org: &str) -> String {
+    let owner = org.trim_end_matches('/').rsplit('/').next().unwrap_or("ariacompute");
+    if org.to_ascii_lowercase().contains("gitee.com") {
+        format!("https://gitee.com/api/v5/repos/{owner}/engine/releases?per_page=30")
+    } else {
+        format!("https://api.github.com/repos/{owner}/engine/releases?per_page=30")
+    }
+}
+
+fn http_get_bytes(url: &str) -> Result<Vec<u8>, DownloadError> {
+    let agent = ureq::AgentBuilder::new()
+        .timeout(Duration::from_secs(600))
+        .build();
+    let resp = agent
+        .get(url)
+        .set("User-Agent", SDK_UA)
+        .call()
+        .map_err(|e| DownloadError::Request(e.to_string()))?;
+    let mut reader = resp.into_reader();
+    let mut buf = Vec::new();
+    reader
+        .read_to_end(&mut buf)
+        .map_err(|e| DownloadError::Stream(e.to_string()))?;
+    Ok(buf)
+}
+
+pub(crate) fn extract_ffi_archive(
+    archive: &Path,
+    dest_dir: &Path,
+    want: &str,
+) -> Result<PathBuf, DownloadError> {
+    let file = std::fs::File::open(archive)?;
+    let dec = flate2::read::GzDecoder::new(file);
+    let mut ar = tar::Archive::new(dec);
+    for entry in ar.entries()? {
+        let mut entry = entry?;
+        let name = entry.path()?;
+        let base = name
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or("");
+        if base != want {
+            continue;
+        }
+        std::fs::create_dir_all(dest_dir)?;
+        let dest = dest_dir.join(want);
+        {
+            let mut out = std::fs::File::create(&dest)?;
+            std::io::copy(&mut entry, &mut out)?;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mut perms = std::fs::metadata(&dest)?.permissions();
+            perms.set_mode(0o755);
+            std::fs::set_permissions(&dest, perms)?;
+        }
+        return Ok(dest);
+    }
+    Err(DownloadError::Request(format!(
+        "{} not found in {}",
+        want,
+        archive.display()
+    )))
+}
+
+/// Return a path to libaria_ffi, downloading the latest stable Release if needed.
+pub fn ensure_ffi_lib(site: Option<&str>) -> Result<PathBuf, DownloadError> {
+    if let Ok(env) = std::env::var("ARIA_FFI_LIB") {
+        let p = PathBuf::from(&env);
+        if p.is_file() {
+            return Ok(p);
+        }
+    }
+    if let Some(cached) = cached_ffi_path()? {
+        return Ok(cached);
+    }
+
+    let org = upgrade_org(site);
+    let raw = http_get_bytes(&releases_api_url(&org))?;
+    let releases: Vec<serde_json::Value> = serde_json::from_slice(&raw)
+        .map_err(|e| DownloadError::Request(format!("invalid releases JSON from {org}: {e}")))?;
+    let ver = select_latest_stable(&releases)?;
+    let asset_os = ffi_asset_os(std::env::consts::OS, std::env::consts::ARCH)?;
+    let asset_name = format!("libaria_ffi_{ver}_{asset_os}.tar.gz");
+    let mut url = None;
+    for rel in &releases {
+        let tag = rel
+            .get("tag_name")
+            .or_else(|| rel.get("tag"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        if strip_v(tag) != ver {
+            continue;
+        }
+        if let Some(assets) = rel.get("assets").and_then(|v| v.as_array()) {
+            for asset in assets {
+                if asset.get("name").and_then(|v| v.as_str()) == Some(asset_name.as_str()) {
+                    url = asset
+                        .get("browser_download_url")
+                        .or_else(|| asset.get("direct_asset_url"))
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string());
+                    break;
+                }
+            }
+        }
+        if url.is_some() {
+            break;
+        }
+    }
+    let url = url.ok_or_else(|| DownloadError::Request(format!("release asset not found: {asset_name}")))?;
+
+    let staging = aria_home()?.join("tmp").join(format!("ffi-{ver}"));
+    if staging.exists() {
+        std::fs::remove_dir_all(&staging)?;
+    }
+    std::fs::create_dir_all(&staging)?;
+    let archive = staging.join(&asset_name);
+    let result = (|| {
+        let bytes = http_get_bytes(&url)?;
+        if let Some(parent) = archive.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::write(&archive, bytes)?;
+        let dir = lib_dir()?;
+        extract_ffi_archive(&archive, &dir, ffi_lib_name())
+    })();
+    let _ = std::fs::remove_dir_all(&staging);
+    result
+}
+
+#[cfg(test)]
+pub(crate) static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::Mutex;
-
-    static ENV_LOCK: Mutex<()> = Mutex::new(());
+    use super::ENV_LOCK;
 
     #[test]
     fn preferred_hub_follows_site_tld() {
@@ -499,6 +723,59 @@ mod tests {
             resolve_hub_token("huggingface", "sk-bf-not-hub", None, None).as_deref(),
             Some("hf_from_yml")
         );
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+    }
+
+    #[test]
+    fn ffi_asset_os_matches_upgrade() {
+        assert_eq!(ffi_asset_os("linux", "x86_64").unwrap(), "linux_x86_64");
+        assert_eq!(ffi_asset_os("linux", "aarch64").unwrap(), "linux_arm64");
+        assert_eq!(ffi_asset_os("macos", "aarch64").unwrap(), "macos");
+        assert_eq!(ffi_asset_os("windows", "x86_64").unwrap(), "windows_x86_64");
+        assert!(ffi_asset_os("linux", "powerpc64").is_err());
+    }
+
+    #[test]
+    fn select_latest_stable_skips_draft_and_prerelease() {
+        let releases = serde_json::json!([
+            {"tag_name": "v0.7.1", "draft": false, "prerelease": false},
+            {"tag_name": "v0.8.0-rc1", "draft": false, "prerelease": true},
+            {"tag_name": "v0.7.2", "draft": false, "prerelease": false},
+            {"tag_name": "v0.9.0", "draft": true, "prerelease": false}
+        ]);
+        let arr = releases.as_array().unwrap();
+        assert_eq!(select_latest_stable(arr).unwrap(), "0.7.2");
+    }
+
+    #[test]
+    fn extract_ffi_and_cached_skip() {
+        let _guard = ENV_LOCK.lock().unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", tmp.path());
+        let src_dir = tmp.path().join("src");
+        std::fs::create_dir_all(&src_dir).unwrap();
+        let want = if cfg!(windows) {
+            "aria_ffi.dll"
+        } else if cfg!(target_os = "macos") {
+            "libaria_ffi.dylib"
+        } else {
+            "libaria_ffi.so"
+        };
+        std::fs::write(src_dir.join(want), b"dummy-ffi").unwrap();
+        let archive = tmp.path().join("libaria_ffi.tar.gz");
+        {
+            let f = std::fs::File::create(&archive).unwrap();
+            let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
+            let mut builder = tar::Builder::new(enc);
+            builder.append_path_with_name(src_dir.join(want), want).unwrap();
+            builder.finish().unwrap();
+        }
+        let dest_dir = tmp.path().join("lib");
+        let got = extract_ffi_archive(&archive, &dest_dir, want).unwrap();
+        assert_eq!(got.file_name().unwrap(), want);
+        assert_eq!(std::fs::read(&got).unwrap(), b"dummy-ffi");
+        let cached = ensure_ffi_lib(None).unwrap();
+        assert_eq!(cached, got);
         std::env::remove_var("ARIA_COMPUTE_HOME");
     }
 }

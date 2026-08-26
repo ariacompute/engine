@@ -2,7 +2,7 @@
 
 Maven coordinates: `com.ariacompute:engine`.
 
-JNI must load `libaria_ffi`. Implement `native*` methods in a small JNI `.so` that forwards to `aria.h`, or use JNA.
+JNI must load `libaria_ffi`. `AriaEngine.open` / construction installs it into `~/.ariacompute/lib/` when it is not already on `ARIA_FFI_LIB` or loadable via `System.loadLibrary`. Implement `native*` methods in a small JNI `.so` that forwards to `aria.h`, or use JNA.
 
 ```kotlin
 AriaEngine("/path/to/bundle").use { eng ->

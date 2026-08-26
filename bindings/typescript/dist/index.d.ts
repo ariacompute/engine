@@ -53,6 +53,13 @@ export declare function hubFileUrls(source: "huggingface" | "modelscope", model:
  * Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
  * Dashboard is not used. Skips the download when a valid bundle is already cached. */
 export declare function downloadModel(model: string, tokenOrOpts?: string | OpenOptions, site?: string): Promise<string>;
+export declare function ffiLibName(platform?: string): string;
+export declare function cachedFfiPath(platform?: string): string | undefined;
+export declare function ffiAssetOs(platform?: string, arch?: string): string;
+export declare function selectLatestStable(releases: Array<Record<string, unknown>>): string;
+export declare function extractFfiArchive(archive: string, destDir: string, want?: string): string;
+/** Return a path to libaria_ffi, downloading the latest stable Release if needed. */
+export declare function ensureFfiLib(site?: string): Promise<string>;
 export declare function isLocalRef(modelRef: string): boolean;
 export declare class Engine {
     private lib;

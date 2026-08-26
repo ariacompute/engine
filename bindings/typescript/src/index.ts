@@ -1,8 +1,10 @@
+import { spawnSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { pipeline } from "node:stream/promises";
 import { Readable } from "node:stream";
+import * as zlib from "node:zlib";
 
 export interface GenerateOptions {
   max_tokens?: number;
@@ -299,9 +301,212 @@ export async function downloadModel(
   }
 }
 
-function loadLib(ffiLib?: string): any {
-  const libPath = ffiLib || process.env.ARIA_FFI_LIB;
-  if (!libPath) throw new Error("aria FFI lib not found; set ARIA_FFI_LIB or pass ffiLib");
+const SDK_UA = "aria-engine-sdk/0.1.0";
+
+export function ffiLibName(platform: string = process.platform): string {
+  if (platform === "win32" || platform.toLowerCase().startsWith("win")) return "aria_ffi.dll";
+  if (platform === "darwin") return "libaria_ffi.dylib";
+  return "libaria_ffi.so";
+}
+
+function libDir(): string {
+  return path.join(ariaHome(), "lib");
+}
+
+export function cachedFfiPath(platform: string = process.platform): string | undefined {
+  const candidate = path.join(libDir(), ffiLibName(platform));
+  return fs.existsSync(candidate) ? candidate : undefined;
+}
+
+function bundledFfiPath(): string | undefined {
+  const candidate = path.join(__dirname, "lib", ffiLibName());
+  return fs.existsSync(candidate) ? candidate : undefined;
+}
+
+export function ffiAssetOs(platform: string = process.platform, arch: string = process.arch): string {
+  const p = platform.toLowerCase();
+  const a = arch.toLowerCase();
+  if (p === "linux" && (a === "x64" || a === "x86_64" || a === "amd64")) return "linux_x86_64";
+  if (p === "linux" && (a === "arm64" || a === "aarch64")) return "linux_arm64";
+  if (p === "darwin" || p === "macos") return "macos";
+  if ((p === "win32" || p.startsWith("win")) && (a === "x64" || a === "x86_64" || a === "amd64")) {
+    return "windows_x86_64";
+  }
+  throw new Error(`unsupported platform ${platform}/${arch} for libaria_ffi`);
+}
+
+function stripV(tag: string): string {
+  const t = tag.trim();
+  return t.startsWith("v") || t.startsWith("V") ? t.slice(1) : t;
+}
+
+function parseSemver(tag: string): [number, number, number] | undefined {
+  const core = stripV(tag).split("-", 1)[0].split("+", 1)[0];
+  const parts = core.split(".");
+  if (!parts.length || !/^\d+$/.test(parts[0])) return undefined;
+  return [
+    Number(parts[0]),
+    parts[1] && /^\d+$/.test(parts[1]) ? Number(parts[1]) : 0,
+    parts[2] && /^\d+$/.test(parts[2]) ? Number(parts[2]) : 0,
+  ];
+}
+
+export function selectLatestStable(releases: Array<Record<string, unknown>>): string {
+  let bestTag: string | undefined;
+  let bestKey: [number, number, number] = [-1, -1, -1];
+  for (const rel of releases) {
+    if (rel.draft || rel.prerelease) continue;
+    const tag = String(rel.tag_name || rel.tag || "");
+    const parsed = parseSemver(tag);
+    if (!parsed) continue;
+    if (
+      parsed[0] > bestKey[0] ||
+      (parsed[0] === bestKey[0] && parsed[1] > bestKey[1]) ||
+      (parsed[0] === bestKey[0] && parsed[1] === bestKey[1] && parsed[2] > bestKey[2])
+    ) {
+      bestKey = parsed;
+      bestTag = tag;
+    }
+  }
+  if (!bestTag) throw new Error("no stable release found for libaria_ffi");
+  return stripV(bestTag);
+}
+
+function upgradeOrg(site?: string): string {
+  const cfg = configYmlScalar("upgrade_url");
+  if (cfg) return cfg.replace(/\/$/, "");
+  const hint = (site || configYmlScalar("site_url") || DEFAULT_SITE).toLowerCase();
+  if (hint.includes("ariacompute.cn") || hint.includes("gitee.com")) {
+    return "https://gitee.com/ariacompute";
+  }
+  return "https://github.com/ariacompute";
+}
+
+function releasesApiUrl(org: string): string {
+  const owner = org.replace(/\/$/, "").split("/").pop() || "ariacompute";
+  if (org.toLowerCase().includes("gitee.com")) {
+    return `https://gitee.com/api/v5/repos/${owner}/engine/releases?per_page=30`;
+  }
+  return `https://api.github.com/repos/${owner}/engine/releases?per_page=30`;
+}
+
+export function extractFfiArchive(archive: string, destDir: string, want: string = ffiLibName()): string {
+  const tar = zlib.gunzipSync(fs.readFileSync(archive));
+  let offset = 0;
+  while (offset + 512 <= tar.length) {
+    const header = tar.subarray(offset, offset + 512);
+    if (header.every((b) => b === 0)) break;
+    const name = header.subarray(0, 100).toString("utf8").replace(/\0.*$/, "");
+    const sizeOctal = header.subarray(124, 136).toString("utf8").replace(/\0/g, "").trim();
+    const size = Number.parseInt(sizeOctal, 8) || 0;
+    const typeFlag = header[156];
+    offset += 512;
+    const isFile = typeFlag === 0 || typeFlag === 48; // '\0' or '0'
+    if (isFile && path.basename(name) === want) {
+      fs.mkdirSync(destDir, { recursive: true });
+      const dest = path.join(destDir, want);
+      fs.writeFileSync(dest, tar.subarray(offset, offset + size));
+      try {
+        fs.chmodSync(dest, 0o755);
+      } catch {
+        /* windows */
+      }
+      return dest;
+    }
+    offset += Math.ceil(size / 512) * 512;
+  }
+  throw new Error(`${want} not found in ${archive}`);
+}
+
+function httpGetBytesSync(url: string): Buffer {
+  const script =
+    'fetch(process.env.ARIA_FFI_URL,{headers:{"User-Agent":"aria-engine-sdk/0.1.0"},redirect:"follow"}).then(async r=>{if(!r.ok){process.stderr.write("HTTP "+r.status);process.exit(1)}process.stdout.write(Buffer.from(await r.arrayBuffer()))}).catch(e=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})';
+  const r = spawnSync(process.execPath, ["-e", script], {
+    env: { ...process.env, ARIA_FFI_URL: url },
+    encoding: "buffer",
+    maxBuffer: 256 * 1024 * 1024,
+  });
+  if (r.status !== 0) {
+    throw new Error(`download failed: ${(r.stderr && r.stderr.toString()) || "exit " + r.status}`);
+  }
+  return r.stdout as Buffer;
+}
+
+async function httpGetBytes(url: string): Promise<Buffer> {
+  const resp = await fetch(url, { headers: { "User-Agent": SDK_UA }, redirect: "follow" });
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${url}`);
+  return Buffer.from(await resp.arrayBuffer());
+}
+
+function installFfiFromReleases(raw: Buffer, archiveBytes: (assetUrl: string) => Buffer): string {
+  let releases: Array<Record<string, unknown>>;
+  try {
+    releases = JSON.parse(raw.toString("utf8"));
+  } catch {
+    throw new Error("invalid releases JSON");
+  }
+  if (!Array.isArray(releases)) throw new Error("unexpected releases payload");
+  const ver = selectLatestStable(releases);
+  const assetName = `libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
+  let url: string | undefined;
+  for (const rel of releases) {
+    const tag = String(rel.tag_name || rel.tag || "");
+    if (stripV(tag) !== ver) continue;
+    const assets = (rel.assets as Array<Record<string, string>> | undefined) || [];
+    for (const asset of assets) {
+      if (asset.name === assetName) {
+        url = asset.browser_download_url || asset.direct_asset_url;
+        break;
+      }
+    }
+    if (url) break;
+  }
+  if (!url) throw new Error(`release asset not found: ${assetName}`);
+  const staging = path.join(ariaHome(), "tmp", `ffi-${ver}`);
+  fs.rmSync(staging, { recursive: true, force: true });
+  fs.mkdirSync(staging, { recursive: true });
+  const archive = path.join(staging, assetName);
+  try {
+    fs.writeFileSync(archive, archiveBytes(url));
+    return extractFfiArchive(archive, libDir(), ffiLibName());
+  } finally {
+    fs.rmSync(staging, { recursive: true, force: true });
+  }
+}
+
+/** Return a path to libaria_ffi, downloading the latest stable Release if needed. */
+export async function ensureFfiLib(site?: string): Promise<string> {
+  const env = process.env.ARIA_FFI_LIB;
+  if (env && fs.existsSync(env)) return env;
+  const bundled = bundledFfiPath();
+  if (bundled) return bundled;
+  const cached = cachedFfiPath();
+  if (cached) return cached;
+  const org = upgradeOrg(site);
+  const raw = await httpGetBytes(releasesApiUrl(org));
+  return installFfiFromReleases(raw, (assetUrl) => httpGetBytesSync(assetUrl));
+}
+
+function ensureFfiLibSync(site?: string): string {
+  const env = process.env.ARIA_FFI_LIB;
+  if (env && fs.existsSync(env)) return env;
+  const bundled = bundledFfiPath();
+  if (bundled) return bundled;
+  const cached = cachedFfiPath();
+  if (cached) return cached;
+  const org = upgradeOrg(site);
+  const raw = httpGetBytesSync(releasesApiUrl(org));
+  return installFfiFromReleases(raw, httpGetBytesSync);
+}
+
+function loadLib(ffiLib?: string, site?: string): any {
+  const libPath =
+    ffiLib ||
+    process.env.ARIA_FFI_LIB ||
+    bundledFfiPath() ||
+    cachedFfiPath() ||
+    ensureFfiLibSync(site);
+  if (!libPath) throw new Error("Cannot locate libaria_ffi");
   const koffiNS = require("koffi") as unknown as { load: (p: string) => any };
   return koffiNS.load(libPath);
 }
@@ -322,7 +527,7 @@ export class Engine {
 
   /** Construct from a local bundle directory. */
   constructor(bundle: string, opts: OpenOptions = {}) {
-    this.lib = loadLib(opts.ffiLib);
+    this.lib = loadLib(opts.ffiLib, opts.site);
     this.fnInit = this.lib.func("aria_model_init", "void*", ["str"]);
     this.fnDestroy = this.lib.func("aria_model_destroy", "void", ["void*"]);
     this.fnComplete = this.lib.func("aria_complete", "int", ["void*", "str", "str", "str", "void*", "size_t"]);
@@ -339,6 +544,7 @@ export class Engine {
   /** Auto-detect: a value containing a separator or already on disk is a local
    * path; otherwise it is a model name downloaded from the regional public hub. */
   static async open(modelRef: string, opts: OpenOptions = {}): Promise<Engine> {
+    await ensureFfiLib(opts.site);
     if (isLocalRef(modelRef)) return new Engine(modelRef, opts);
     const bundle = await downloadModel(modelRef, opts);
     return new Engine(bundle, opts);

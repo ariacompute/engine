@@ -291,8 +291,10 @@ cargo test -p ariacompute-ffi -p ariacompute-engine
 | `libaria_ffi_<ver>_macos.tar.gz` | `libaria_ffi.dylib` |
 | `libaria_ffi_<ver>_windows_x86_64.tar.gz` | `aria_ffi.dll`（及可选 import lib） |
 
+各语言 SDK 在首次 `Engine.open` / 等价入口时，若 `ARIA_FFI_LIB`、语言包捆绑路径、`~/.ariacompute/lib/` 均不存在，会自动下载对应归档并解压到 `~/.ariacompute/lib/`。`aria-engine download` 只拉模型 bundle（CLI 二进制不 dlopen FFI）。
+
 ```bash
-# 示例：Linux x86_64
+# 示例：Linux x86_64（手动解压；SDK 会自动完成）
 tar -xzf libaria_ffi_0.7.1_linux_x86_64.tar.gz
 export ARIA_FFI_LIB="$PWD/libaria_ffi.so"
 # 可选：export LD_LIBRARY_PATH="$PWD:${LD_LIBRARY_PATH:-}"
@@ -302,11 +304,11 @@ export ARIA_FFI_LIB="$PWD/libaria_ffi.so"
 
 ### 示例
 
-**Python**（通过 `ARIA_FFI_LIB` 加载 `libaria_ffi`）：
+**Python**（自动安装 `libaria_ffi`；`ARIA_FFI_LIB` 可覆盖）：
 
 ```bash
-export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 pip install aria-engine
+# 可选覆盖：export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 ```
 
 ```python
@@ -339,8 +341,8 @@ with Engine(
 **TypeScript / Node**（`@ariacompute/engine-ts`）：
 
 ```bash
-export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 npm install @ariacompute/engine-ts
+# 可选覆盖：export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 ```
 
 ```ts
@@ -373,8 +375,8 @@ engMs.close();
 **Go**（cgo；链接 `libaria_ffi`）：
 
 ```bash
-export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 export CGO_ENABLED=1
+# 可选：export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 # 确保链接器能找到该库（或在模块 cgo 中指定 -L）。
 go get github.com/ariacompute/engine/bindings/go@latest
 ```

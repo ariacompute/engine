@@ -150,3 +150,71 @@ test("downloadModel cached bundle skips network", async () => {
     process.env.ARIA_COMPUTE_HOME = prev;
   }
 });
+
+test("ffiAssetOs matches upgrade suffixes", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { ffiAssetOs } = mod;
+  assert.equal(ffiAssetOs("linux", "x64"), "linux_x86_64");
+  assert.equal(ffiAssetOs("linux", "arm64"), "linux_arm64");
+  assert.equal(ffiAssetOs("darwin", "arm64"), "macos");
+  assert.equal(ffiAssetOs("win32", "x64"), "windows_x86_64");
+  assert.throws(() => ffiAssetOs("linux", "ppc64"));
+});
+
+test("selectLatestStable skips draft and prerelease", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { selectLatestStable } = mod;
+  assert.equal(
+    selectLatestStable([
+      { tag_name: "v0.7.1", draft: false, prerelease: false },
+      { tag_name: "v0.8.0-rc1", draft: false, prerelease: true },
+      { tag_name: "v0.7.2", draft: false, prerelease: false },
+      { tag_name: "v0.9.0", draft: true, prerelease: false },
+    ]),
+    "0.7.2",
+  );
+});
+
+test("extractFfiArchive and cached ensureFfiLib skip network", async () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { extractFfiArchive, ensureFfiLib, ffiLibName } = mod;
+  if (process.platform !== "linux") {
+    test.skip("linux .so fixture");
+    return;
+  }
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "aria-ffi-"));
+  const prev = process.env.ARIA_COMPUTE_HOME;
+  process.env.ARIA_COMPUTE_HOME = home;
+  try {
+    const src = fs.mkdtempSync(path.join(os.tmpdir(), "aria-ffi-src-"));
+    const want = ffiLibName();
+    fs.writeFileSync(path.join(src, want), "dummy-ffi");
+    const archive = path.join(home, "lib.tar.gz");
+    const { spawnSync } = await import("node:child_process");
+    const r = spawnSync("tar", ["-czf", archive, "-C", src, want], { encoding: "utf8" });
+    if (r.status !== 0) {
+      test.skip("tar not available");
+      return;
+    }
+    const destDir = path.join(home, "lib");
+    const got = extractFfiArchive(archive, destDir, want);
+    assert.equal(path.basename(got), want);
+    assert.equal(fs.readFileSync(got, "utf8"), "dummy-ffi");
+    const cached = await ensureFfiLib();
+    assert.equal(cached, got);
+  } finally {
+    process.env.ARIA_COMPUTE_HOME = prev;
+  }
+});

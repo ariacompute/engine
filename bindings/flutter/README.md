@@ -16,7 +16,7 @@ print(eng.complete('[{"role":"user","content":"hi"}]'));
 eng.dispose();
 ```
 
-JNI/FFI must load `libaria_ffi` (`ARIA_FFI_LIB` or `libPath`).
+JNI/FFI must load `libaria_ffi`. `AriaEngine.open` installs it into `~/.ariacompute/lib/` when missing (`ARIA_FFI_LIB` / `libPath` still override).
 
 ## Auto-download by model name
 

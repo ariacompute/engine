@@ -249,11 +249,196 @@ public final class AriaEngine {
         }
     }
 
+    // MARK: - libaria_ffi
+
+    private static let sdkUA = "aria-engine-sdk/0.1.0"
+
+    private static func ffiLibName() -> String {
+        #if os(Windows)
+        return "aria_ffi.dll"
+        #elseif os(macOS) || os(iOS)
+        return "libaria_ffi.dylib"
+        #else
+        return "libaria_ffi.so"
+        #endif
+    }
+
+    private static func libDir() -> String {
+        (ariaHome() as NSString).appendingPathComponent("lib")
+    }
+
+    private static func cachedFfiPath() -> String? {
+        let p = (libDir() as NSString).appendingPathComponent(ffiLibName())
+        return FileManager.default.fileExists(atPath: p) ? p : nil
+    }
+
+    static func ffiAssetOS() throws -> String {
+        #if os(macOS) || os(iOS)
+        return "macos"
+        #elseif os(Windows)
+        return "windows_x86_64"
+        #elseif os(Linux)
+        #if arch(arm64)
+        return "linux_arm64"
+        #else
+        return "linux_x86_64"
+        #endif
+        #else
+        throw AriaDownloadError.requestFailed(0, "unsupported platform for libaria_ffi")
+        #endif
+    }
+
+    static func stripV(_ tag: String) -> String {
+        let t = tag.trimmingCharacters(in: .whitespaces)
+        if t.hasPrefix("v") || t.hasPrefix("V") { return String(t.dropFirst()) }
+        return t
+    }
+
+    static func selectLatestStable(_ releases: [[String: Any]]) throws -> String {
+        var bestTag: String?
+        var best = (-1, -1, -1)
+        for rel in releases {
+            if (rel["draft"] as? Bool) == true || (rel["prerelease"] as? Bool) == true { continue }
+            let tag = (rel["tag_name"] as? String) ?? (rel["tag"] as? String) ?? ""
+            let core = stripV(tag).split(separator: "-").first.map(String.init) ?? ""
+            let parts = core.split(separator: ".").map { Int($0) ?? 0 }
+            guard !parts.isEmpty else { continue }
+            let parsed = (parts[0], parts.count > 1 ? parts[1] : 0, parts.count > 2 ? parts[2] : 0)
+            if parsed.0 > best.0 || (parsed.0 == best.0 && parsed.1 > best.1) || (parsed.0 == best.0 && parsed.1 == best.1 && parsed.2 > best.2) {
+                best = parsed
+                bestTag = tag
+            }
+        }
+        guard let bestTag else {
+            throw AriaDownloadError.requestFailed(0, "no stable release found for libaria_ffi")
+        }
+        return stripV(bestTag)
+    }
+
+    private static func upgradeOrg(_ site: String) -> String {
+        if let cfg = configYMLScalar("upgrade_url"), !cfg.isEmpty {
+            return cfg.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+        }
+        let hint = (site.isEmpty ? (configYMLScalar("site_url") ?? "https://ariacompute.com") : site).lowercased()
+        if hint.contains("ariacompute.cn") || hint.contains("gitee.com") {
+            return "https://gitee.com/ariacompute"
+        }
+        return "https://github.com/ariacompute"
+    }
+
+    private static func releasesAPIURL(_ org: String) -> String {
+        let owner = org.split(separator: "/").last.map(String.init) ?? "ariacompute"
+        if org.lowercased().contains("gitee.com") {
+            return "https://gitee.com/api/v5/repos/\(owner)/engine/releases?per_page=30"
+        }
+        return "https://api.github.com/repos/\(owner)/engine/releases?per_page=30"
+    }
+
+    private static func httpGetData(_ url: String) throws -> Data {
+        try awaitWith { done in
+            var req = URLRequest(url: URL(string: url)!)
+            req.setValue(sdkUA, forHTTPHeaderField: "User-Agent")
+            URLSession.shared.dataTask(with: req) { data, resp, err in
+                if let err { done(.failure(err)); return }
+                let code = (resp as? HTTPURLResponse)?.statusCode ?? 0
+                if code != 200 {
+                    done(.failure(AriaDownloadError.requestFailed(code, url)))
+                    return
+                }
+                done(.success(data ?? Data()))
+            }.resume()
+        }
+    }
+
+    static func extractFfiArchive(archive: String, destDir: String, want: String) throws -> String {
+        try FileManager.default.createDirectory(atPath: destDir, withIntermediateDirectories: true)
+        #if os(iOS)
+        throw AriaDownloadError.requestFailed(0, "\(want) missing; embed libaria_ffi in the app bundle or set ARIA_FFI_LIB")
+        #else
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        proc.arguments = ["-xzf", archive, "-C", destDir]
+        try proc.run()
+        proc.waitUntilExit()
+        if proc.terminationStatus != 0 {
+            throw AriaDownloadError.requestFailed(Int(proc.terminationStatus), "tar extract failed")
+        }
+        let dest = (destDir as NSString).appendingPathComponent(want)
+        if FileManager.default.fileExists(atPath: dest) { return dest }
+        if let enumerator = FileManager.default.enumerator(atPath: destDir) {
+            for case let name as String in enumerator {
+                if (name as NSString).lastPathComponent == want {
+                    let found = (destDir as NSString).appendingPathComponent(name)
+                    let target = (destDir as NSString).appendingPathComponent(want)
+                    if found != target {
+                        try? FileManager.default.removeItem(atPath: target)
+                        try FileManager.default.copyItem(atPath: found, toPath: target)
+                    }
+                    return target
+                }
+            }
+        }
+        throw AriaDownloadError.requestFailed(0, "\(want) not found in \(archive)")
+        #endif
+    }
+
+    /// Return a path to libaria_ffi, downloading the latest stable Release if needed.
+    @discardableResult
+    public static func ensureFfiLib(site: String = "https://ariacompute.com") throws -> String {
+        if let env = ProcessInfo.processInfo.environment["ARIA_FFI_LIB"],
+           FileManager.default.fileExists(atPath: env) {
+            return env
+        }
+        if let cached = cachedFfiPath() { return cached }
+        #if os(iOS)
+        throw AriaDownloadError.requestFailed(0, "libaria_ffi not found; embed it in the app bundle or set ARIA_FFI_LIB")
+        #endif
+
+        let org = upgradeOrg(site)
+        let raw = try httpGetData(releasesAPIURL(org))
+        guard let releases = try JSONSerialization.jsonObject(with: raw) as? [[String: Any]] else {
+            throw AriaDownloadError.requestFailed(0, "invalid releases JSON from \(org)")
+        }
+        let ver = try selectLatestStable(releases)
+        let assetName = "libaria_ffi_\(ver)_\(try ffiAssetOS()).tar.gz"
+        var url: String?
+        for rel in releases {
+            let tag = (rel["tag_name"] as? String) ?? (rel["tag"] as? String) ?? ""
+            if stripV(tag) != ver { continue }
+            let assets = rel["assets"] as? [[String: Any]] ?? []
+            for asset in assets {
+                if (asset["name"] as? String) == assetName {
+                    url = (asset["browser_download_url"] as? String) ?? (asset["direct_asset_url"] as? String)
+                    break
+                }
+            }
+            if url != nil { break }
+        }
+        guard let url else {
+            throw AriaDownloadError.requestFailed(0, "release asset not found: \(assetName)")
+        }
+        let staging = (ariaHome() as NSString)
+            .appendingPathComponent("tmp")
+            .appendingPathComponent("ffi-\(ver)")
+        try? FileManager.default.removeItem(atPath: staging)
+        try FileManager.default.createDirectory(atPath: staging, withIntermediateDirectories: true)
+        let archive = (staging as NSString).appendingPathComponent(assetName)
+        do {
+            let bytes = try httpGetData(url)
+            try bytes.write(to: URL(fileURLWithPath: archive))
+            return try extractFfiArchive(archive: archive, destDir: libDir(), want: ffiLibName())
+        } catch {
+            try? FileManager.default.removeItem(atPath: staging)
+            throw error
+        }
+    }
+
     // MARK: - Init
 
     public init(bundlePath: String) throws {
         // Link libaria_ffi and call aria_model_init via bridging header / module map.
         // Stub for host documentation; wire C calls when XCFramework is linked.
+        _ = try Self.ensureFfiLib()
         self.handle = nil
         if bundlePath.isEmpty { throw NSError(domain: "Aria", code: 1) }
     }
@@ -268,6 +453,7 @@ public final class AriaEngine {
         hfToken: String = "",
         modelscopeApiToken: String = ""
     ) throws -> AriaEngine {
+        _ = try ensureFfiLib(site: site)
         if isLocalRef(ref) {
             return try AriaEngine(bundlePath: ref)
         }

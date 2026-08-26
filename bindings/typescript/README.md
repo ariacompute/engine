@@ -1,9 +1,10 @@
 # @ariacompute/engine-ts
 
 ```bash
-export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 npm i @ariacompute/engine-ts
 ```
+
+`libaria_ffi` is resolved as `ARIA_FFI_LIB` → package-bundled `dist/lib/` → `~/.ariacompute/lib/` (same as `aria-engine upgrade`). If none exist, `Engine.open` downloads the latest stable `libaria_ffi_{ver}_{os}.tar.gz` from regional Releases. `ARIA_FFI_LIB` remains an optional override.
 
 ```ts
 import { Engine } from "@ariacompute/engine-ts";

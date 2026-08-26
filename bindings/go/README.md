@@ -11,6 +11,8 @@ go test -tags aria_ffi ./...
 
 Go modules are consumed via the Git release tag (`proxy.golang.org`); no separate registry job.
 
+`Open` / `OpenModel` also install `libaria_ffi` into `~/.ariacompute/lib/` when it is not already on `ARIA_FFI_LIB` or in that cache directory (same Releases asset as `aria-engine upgrade`). Set `ARIA_LIBDIR` / `LD_LIBRARY_PATH` so the cgo-linked binary can load it, or keep using a locally built `target/debug`.
+
 ## Auto-download by model name
 
 `aria.OpenModel(modelRef, token, site)` accepts a local bundle path **or** an
