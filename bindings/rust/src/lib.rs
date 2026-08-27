@@ -7,7 +7,11 @@ pub use aria_ffi::{
 pub use aria_inference::{EngineError, GenerateOpts, Generation, Session, SessionBuilder};
 
 mod download;
+mod auth;
 pub use download::{download_model, download_model_auth, ensure_ffi_lib, DownloadError};
+pub use auth::{
+    apply_auth, fill_auth_urls, AuthConfig, AuthError, AuthUpdates, CN_CLOUD, CN_SITE, CN_UPGRADE,
+};
 
 /// Options controlling model auto-download from the regional public hub.
 #[derive(Default, Clone)]
@@ -24,23 +28,58 @@ pub struct OpenOptions {
 
 /// High-level convenience over `Session`.
 pub struct Engine {
-    session: Session,
+    session: Option<Session>,
+    auth: AuthConfig,
+    generic_token: Option<String>,
 }
 
 impl Engine {
-    /// Open a local Aria quant bundle directory (path only; no download).
-    pub fn open(bundle_path: impl AsRef<std::path::Path>) -> Result<Self, EngineError> {
-        let session = SessionBuilder::new().model(bundle_path).build()?;
-        Ok(Self { session })
+    /// Empty construct. Call [`auth`](Self::auth) then [`open`](Self::open) to download/load.
+    pub fn new() -> Self {
+        Self {
+            session: None,
+            auth: AuthConfig::default(),
+            generic_token: None,
+        }
     }
 
-    /// Open a model by reference. If `model_ref` looks like a local path
-    /// (contains a separator or exists on disk) it is loaded directly;
-    /// otherwise it is treated as a model name and auto-downloaded from the
-    /// regional public hub into `~/.ariacompute/models/{model}` before loading.
-    pub fn open_model(model_ref: &str, opts: &OpenOptions) -> Result<Self, OpenError> {
+    /// Set Config / Run fields on this instance only. Does not write config.yml.
+    pub fn auth(&mut self, updates: &AuthUpdates) -> Result<&mut Self, AuthError> {
+        self.auth = apply_auth(&self.auth, updates)?;
+        Ok(self)
+    }
+
+    pub fn auth_status(&self) -> &AuthConfig {
+        &self.auth
+    }
+
+    /// Reset instance defaults. Does not delete ~/.ariacompute/config.yml.
+    pub fn auth_clear(&mut self) -> &mut Self {
+        self.auth = AuthConfig::default();
+        self
+    }
+
+    /// Open a local Aria quant bundle directory (path only; no download).
+    pub fn from_bundle(bundle_path: impl AsRef<std::path::Path>) -> Result<Self, EngineError> {
+        let session = SessionBuilder::new().model(bundle_path).build()?;
+        Ok(Self {
+            session: Some(session),
+            auth: AuthConfig::default(),
+            generic_token: None,
+        })
+    }
+
+    /// Open a local Aria quant bundle directory (path only; no download).
+    pub fn open(bundle_path: impl AsRef<std::path::Path>) -> Result<Self, EngineError> {
+        Self::from_bundle(bundle_path)
+    }
+
+    fn load_ref(&mut self, model_ref: &str, opts: &OpenOptions) -> Result<(), OpenError> {
         let _ = ensure_ffi_lib(opts.site.as_deref())?;
-        let path = if model_ref.contains('/') || model_ref.contains('\\') || std::path::Path::new(model_ref).exists() {
+        let path = if model_ref.contains('/')
+            || model_ref.contains('\\')
+            || std::path::Path::new(model_ref).exists()
+        {
             std::path::PathBuf::from(model_ref)
         } else {
             download_model_auth(
@@ -56,21 +95,81 @@ impl Engine {
             .model(&path)
             .build()
             .map_err(OpenError::Engine)?;
-        Ok(Self { session })
+        self.session = Some(session);
+        Ok(())
+    }
+
+    /// Download (if needed) and load a model using instance auth.
+    pub fn open_named(&mut self, model_ref: &str) -> Result<&mut Self, OpenError> {
+        let opts = OpenOptions {
+            token: self.generic_token.clone(),
+            hf_token: if self.auth.hf_token.is_empty() {
+                None
+            } else {
+                Some(self.auth.hf_token.clone())
+            },
+            modelscope_api_token: if self.auth.modelscope_api_token.is_empty() {
+                None
+            } else {
+                Some(self.auth.modelscope_api_token.clone())
+            },
+            site: if self.auth.site_url.is_empty() {
+                None
+            } else {
+                Some(self.auth.site_url.clone())
+            },
+        };
+        self.load_ref(model_ref, &opts)?;
+        Ok(self)
+    }
+
+    /// Open a model by reference. If `model_ref` looks like a local path
+    /// (contains a separator or exists on disk) it is loaded directly;
+    /// otherwise it is treated as a model name and auto-downloaded from the
+    /// regional public hub into `~/.ariacompute/models/{model}` before loading.
+    pub fn open_model(model_ref: &str, opts: &OpenOptions) -> Result<Self, OpenError> {
+        let mut eng = Self::new();
+        let mut updates = AuthUpdates::default();
+        updates.site_url = opts.site.clone();
+        updates.hf_token = opts.hf_token.clone();
+        updates.modelscope_api_token = opts.modelscope_api_token.clone();
+        eng.generic_token = opts.token.clone();
+        let _ = eng.auth(&updates);
+        eng.load_ref(model_ref, opts)?;
+        Ok(eng)
+    }
+
+    fn session_mut(&mut self) -> Result<&mut Session, EngineError> {
+        self.session
+            .as_mut()
+            .ok_or_else(|| EngineError::InvalidParam("engine not opened".into()))
+    }
+
+    fn session_ref(&self) -> Result<&Session, EngineError> {
+        self.session
+            .as_ref()
+            .ok_or_else(|| EngineError::InvalidParam("engine not opened".into()))
     }
 
     pub fn complete(&mut self, prompt: &str, opts: &GenerateOpts) -> Result<Generation, EngineError> {
         let turns = [aria_inference::ChatTurn::new("user", prompt)];
-        let tokens = self.session.encode_chat(&turns);
-        self.session.generate(&tokens, opts)
+        let session = self.session_mut()?;
+        let tokens = session.encode_chat(&turns);
+        session.generate(&tokens, opts)
     }
 
     pub fn embed(&self, text: &str) -> Result<Vec<f32>, EngineError> {
-        self.session.embed_text(text)
+        self.session_ref()?.embed_text(text)
     }
 
     pub fn transcribe(&self, pcm: &[u8]) -> Result<String, EngineError> {
-        self.session.transcribe_pcm16le(pcm)
+        self.session_ref()?.transcribe_pcm16le(pcm)
+    }
+}
+
+impl Default for Engine {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -124,5 +223,133 @@ mod tests {
             .unwrap();
         assert!(!g.text.is_empty());
         std::env::remove_var("ARIA_COMPUTE_HOME");
+    }
+
+    #[test]
+    fn auth_instance_all_fields() {
+        let mut eng = Engine::new();
+        eng.auth(&AuthUpdates {
+            cloud_api_key: Some("sk-test".into()),
+            cloud_url: Some(CN_CLOUD.into()),
+            site_url: Some(crate::auth::CN_SITE.into()),
+            upgrade_url: Some(crate::auth::CN_UPGRADE.into()),
+            hybrid_mode: Some("cost".into()),
+            hybrid_execution: Some("device".into()),
+            hybrid_semantic: Some(false),
+            hybrid_semantic_timeout_ms: Some(250),
+            hybrid_semantic_cache_size: Some(16),
+            compute: Some("cpu".into()),
+            hf_token: Some("hf_abc".into()),
+            modelscope_api_token: Some("ms_xyz".into()),
+        })
+        .unwrap();
+        let st = eng.auth_status();
+        assert_eq!(st.cloud_api_key, "sk-test");
+        assert_eq!(st.hybrid_mode, "cost");
+        assert_eq!(st.hybrid_execution, "device");
+        assert!(!st.hybrid_semantic);
+        assert_eq!(st.hybrid_semantic_timeout_ms, 250);
+        assert_eq!(st.compute, "cpu");
+        assert_eq!(st.hf_token, "hf_abc");
+        assert_eq!(st.modelscope_api_token, "ms_xyz");
+        assert_eq!(st.site_url, crate::auth::CN_SITE);
+    }
+
+    #[test]
+    fn auth_partial_merge() {
+        let mut eng = Engine::new();
+        eng.auth(&AuthUpdates {
+            hf_token: Some("hf_one".into()),
+            hybrid_mode: Some("intelligence".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        eng.auth(&AuthUpdates {
+            compute: Some("cuda".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let st = eng.auth_status();
+        assert_eq!(st.hf_token, "hf_one");
+        assert_eq!(st.hybrid_mode, "intelligence");
+        assert_eq!(st.compute, "cuda");
+    }
+
+    #[test]
+    fn auth_invalid_enum_leaves_state() {
+        let mut eng = Engine::new();
+        eng.auth(&AuthUpdates {
+            hybrid_mode: Some("cost".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(eng
+            .auth(&AuthUpdates {
+                hybrid_mode: Some("nope".into()),
+                ..Default::default()
+            })
+            .is_err());
+        assert_eq!(eng.auth_status().hybrid_mode, "cost");
+    }
+
+    #[test]
+    fn auth_clear_resets_instance() {
+        let mut eng = Engine::new();
+        eng.auth(&AuthUpdates {
+            hf_token: Some("hf_x".into()),
+            hybrid_mode: Some("cost".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        eng.auth_clear();
+        let st = eng.auth_status();
+        assert_eq!(st.hf_token, "");
+        assert_eq!(st.hybrid_mode, "balance");
+    }
+
+    #[test]
+    fn auth_fills_urls_from_site_tld() {
+        let mut eng = Engine::new();
+        eng.auth(&AuthUpdates {
+            site_url: Some("https://ariacompute.cn".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        let st = eng.auth_status();
+        assert_eq!(st.cloud_url, CN_CLOUD);
+        assert_eq!(st.upgrade_url, crate::auth::CN_UPGRADE);
+    }
+
+    #[test]
+    fn auth_does_not_write_config_yml() {
+        let _guard = crate::download::ENV_LOCK.lock().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", home.path());
+        let mut eng = Engine::new();
+        eng.auth(&AuthUpdates {
+            cloud_api_key: Some("sk-test".into()),
+            site_url: Some("https://ariacompute.com".into()),
+            hf_token: Some("hf_x".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert!(!home.path().join("config.yml").is_file());
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+    }
+
+    #[test]
+    fn auth_detect_urls_from_key_mocked() {
+        crate::auth::set_probe_dashboard(|site, _key| site.contains("ariacompute.cn"));
+        let mut eng = Engine::new();
+        let result = eng.auth(&AuthUpdates {
+            cloud_api_key: Some("sk-region".into()),
+            ..Default::default()
+        });
+        crate::auth::reset_probe_dashboard();
+        result.unwrap();
+        let st = eng.auth_status();
+        assert_eq!(st.site_url, crate::auth::CN_SITE);
+        assert_eq!(st.cloud_url, CN_CLOUD);
+        assert_eq!(st.upgrade_url, crate::auth::CN_UPGRADE);
     }
 }

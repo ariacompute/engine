@@ -20,10 +20,13 @@ ModelScope; `site` defaults to `https://ariacompute.com`) into
 `~/.ariacompute/models/{model}` and then loads it. Dashboard is not used. A
 Dashboard `sk-` / `bfvk-` token is ignored for hub auth. Token is optional for
 public models. Gated files: pass `hfToken` / `modelscopeApiToken` (same as
-`aria-engine auth`); if omitted, reads `~/.ariacompute/config.yml`. A valid
-cached bundle is reused without re-downloading.
+`aria-engine auth`); if omitted, reads `~/.ariacompute/config.yml`. Instance
+`auth` is in-memory only (does not write that file). A valid cached bundle is
+reused without re-downloading.
 
 ```js
 const eng = await AriaEngine.open("gemma-4-e2b-it_q4");
-const gated = await AriaEngine.open("gemma-4-e2b-it_q4", { hfToken: "hf_..." });
+const gated = new AriaEngine();
+gated.auth({ hf_token: "hf_..." });
+await gated.open("gemma-4-e2b-it_q4");
 ```

@@ -35,3 +35,7 @@ wheelhouse/
 # Gradle (Kotlin Maven publish)
 bindings/kotlin/.gradle/
 bindings/kotlin/build/
+
+# Flutter/Dart (pub get, flutter test)
+bindings/flutter/.dart_tool/
+bindings/flutter/build/

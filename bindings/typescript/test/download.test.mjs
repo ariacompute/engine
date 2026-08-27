@@ -222,3 +222,140 @@ test("extractFfiArchive and cached ensureFfiLib skip network", async () => {
     else process.env.ARIA_FFI_LIB = prevLib;
   }
 });
+
+test("auth instance all fields roundtrip", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { Engine, CN_SITE, CN_CLOUD, CN_UPGRADE } = mod;
+  const eng = new Engine();
+  eng.auth({
+    cloud_api_key: "sk-test",
+    cloud_url: CN_CLOUD,
+    site_url: CN_SITE,
+    upgrade_url: CN_UPGRADE,
+    hybrid_mode: "cost",
+    hybrid_execution: "device",
+    hybrid_semantic: false,
+    hybrid_semantic_timeout_ms: 250,
+    hybrid_semantic_cache_size: 16,
+    compute: "cpu",
+    hf_token: "hf_abc",
+    modelscope_api_token: "ms_xyz",
+  });
+  const st = eng.authStatus();
+  assert.equal(st.cloud_api_key, "sk-test");
+  assert.equal(st.hybrid_mode, "cost");
+  assert.equal(st.hybrid_execution, "device");
+  assert.equal(st.hybrid_semantic, false);
+  assert.equal(st.hybrid_semantic_timeout_ms, 250);
+  assert.equal(st.hybrid_semantic_cache_size, 16);
+  assert.equal(st.compute, "cpu");
+  assert.equal(st.hf_token, "hf_abc");
+  assert.equal(st.modelscope_api_token, "ms_xyz");
+  assert.equal(st.site_url, CN_SITE);
+});
+
+test("auth instance partial merge", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { Engine } = mod;
+  const eng = new Engine();
+  eng.auth({ hf_token: "hf_one", hybrid_mode: "intelligence" });
+  eng.auth({ compute: "cuda" });
+  const st = eng.authStatus();
+  assert.equal(st.hf_token, "hf_one");
+  assert.equal(st.hybrid_mode, "intelligence");
+  assert.equal(st.compute, "cuda");
+});
+
+test("auth invalid enum leaves state", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { Engine } = mod;
+  const eng = new Engine();
+  eng.auth({ hybrid_mode: "cost" });
+  assert.throws(() => eng.auth({ hybrid_mode: "nope" }));
+  assert.equal(eng.authStatus().hybrid_mode, "cost");
+});
+
+test("auth clear resets instance", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { Engine } = mod;
+  const eng = new Engine();
+  eng.auth({ hf_token: "hf_x", hybrid_mode: "cost" });
+  eng.authClear();
+  const st = eng.authStatus();
+  assert.equal(st.hf_token, "");
+  assert.equal(st.hybrid_mode, "balance");
+});
+
+test("auth fills urls from site tld", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { Engine, CN_CLOUD, CN_UPGRADE } = mod;
+  const eng = new Engine();
+  eng.auth({ site_url: "https://ariacompute.cn" });
+  const st = eng.authStatus();
+  assert.equal(st.cloud_url, CN_CLOUD);
+  assert.equal(st.upgrade_url, CN_UPGRADE);
+});
+
+test("auth does not write config.yml", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const { Engine } = mod;
+  const prev = process.env.ARIA_COMPUTE_HOME;
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "aria-auth-"));
+  process.env.ARIA_COMPUTE_HOME = home;
+  try {
+    const eng = new Engine();
+    eng.auth({
+      cloud_api_key: "sk-test",
+      site_url: "https://ariacompute.com",
+      hf_token: "hf_x",
+    });
+    assert.equal(fs.existsSync(path.join(home, "config.yml")), false);
+  } finally {
+    if (prev === undefined) delete process.env.ARIA_COMPUTE_HOME;
+    else process.env.ARIA_COMPUTE_HOME = prev;
+  }
+});
+
+test("auth detect urls from key mocked", () => {
+  const mod = loadDownload();
+  if (!mod) {
+    test.skip("build typescript first");
+    return;
+  }
+  const prev = mod.authHooks.probeDashboard;
+  mod.authHooks.probeDashboard = (site) => String(site).includes("ariacompute.cn");
+  try {
+    const eng = new mod.Engine();
+    eng.auth({ cloud_api_key: "sk-region" });
+    const st = eng.authStatus();
+    assert.equal(st.site_url, mod.CN_SITE);
+    assert.equal(st.cloud_url, mod.CN_CLOUD);
+    assert.equal(st.upgrade_url, mod.CN_UPGRADE);
+  } finally {
+    mod.authHooks.probeDashboard = prev;
+  }
+});

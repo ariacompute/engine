@@ -30,7 +30,7 @@ test -e "$ARIA_FFI_LIB"
 
 if command -v python3 >/dev/null; then
   echo "== python =="
-  (cd bindings/python && PYTHONPATH=. python3 -m unittest tests.test_binding -v)
+  (cd bindings/python && PYTHONPATH=. python3 -m unittest discover -s tests -t . -v)
 fi
 
 if command -v go >/dev/null; then
@@ -46,6 +46,11 @@ if command -v npm >/dev/null && [[ -f bindings/typescript/package.json ]]; then
     npm run build
     npm test
   )
+fi
+
+if command -v node >/dev/null && [[ -f bindings/react-native/package.json ]]; then
+  echo "== react-native auth =="
+  (cd bindings/react-native && node --test test/auth.test.cjs)
 fi
 
 echo "done (mobile Swift/Kotlin/Flutter/RN: see bindings/*/README and bindings-mobile.yml)"

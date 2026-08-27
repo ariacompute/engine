@@ -24,6 +24,12 @@
     {"id": "download_hub_token_from_config", "intent": "config.yml hf_token / modelscope_api_token", "assert": "SDK uses the regional field from ~/.ariacompute/config.yml when call args are empty"},
     {"id": "download_named_hub_token", "intent": "Explicit hf_token or modelscope_api_token", "assert": "named field for the active hub is sent; the other region field is ignored"},
     {"id": "ensure_ffi_lib_cached", "intent": "libaria_ffi already in ~/.ariacompute/lib", "assert": "SDK loads that path; no Releases download"},
-    {"id": "ensure_ffi_lib_from_release", "intent": "No ARIA_FFI_LIB / bundled / cache", "assert": "downloads latest stable libaria_ffi_{ver}_{os}.tar.gz into ~/.ariacompute/lib (GitHub .com / Gitee .cn)"}
+    {"id": "ensure_ffi_lib_from_release", "intent": "No ARIA_FFI_LIB / bundled / cache", "assert": "downloads latest stable libaria_ffi_{ver}_{os}.tar.gz into ~/.ariacompute/lib (GitHub .com / Gitee .cn)"},
+    {"id": "auth_instance_all_fields", "intent": "Engine.auth sets all §3.4.1 fields in memory", "assert": "auth_status returns those values"},
+    {"id": "auth_instance_partial_merge", "intent": "Second auth omits some fields", "assert": "omitted fields keep previous instance values"},
+    {"id": "auth_invalid_enum", "intent": "Illegal hybrid_mode / execution / compute", "assert": "error; instance state unchanged"},
+    {"id": "auth_clear_resets_instance", "intent": "auth_clear", "assert": "instance back to defaults; config.yml untouched"},
+    {"id": "auth_fills_urls_from_site_tld", "intent": "auth(site_url=.cn) without other URLs", "assert": "cloud_url gateway.ariacompute.cn and upgrade_url gitee.com/ariacompute in memory"},
+    {"id": "auth_does_not_write_config_yml", "intent": "auth on empty Engine", "assert": "no config.yml created or modified under ARIA_COMPUTE_HOME"}
   ]
 }

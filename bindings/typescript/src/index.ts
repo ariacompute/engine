@@ -49,6 +49,142 @@ export interface OpenOptions {
 }
 
 const DEFAULT_SITE = "https://ariacompute.com";
+export const INTL_CLOUD = "https://gateway.ariacompute.com";
+export const INTL_SITE = "https://ariacompute.com";
+export const INTL_UPGRADE = "https://github.com/ariacompute";
+export const CN_CLOUD = "https://gateway.ariacompute.cn";
+export const CN_SITE = "https://ariacompute.cn";
+export const CN_UPGRADE = "https://gitee.com/ariacompute";
+
+export interface AuthConfig {
+  cloud_api_key: string;
+  cloud_url: string;
+  site_url: string;
+  upgrade_url: string;
+  hybrid_mode: string;
+  hybrid_execution: string;
+  hybrid_semantic: boolean;
+  hybrid_semantic_timeout_ms: number;
+  hybrid_semantic_cache_size: number;
+  compute: string;
+  hf_token: string;
+  modelscope_api_token: string;
+}
+
+export function defaultAuthConfig(): AuthConfig {
+  return {
+    cloud_api_key: "",
+    cloud_url: "",
+    site_url: "",
+    upgrade_url: "",
+    hybrid_mode: "balance",
+    hybrid_execution: "hybrid",
+    hybrid_semantic: true,
+    hybrid_semantic_timeout_ms: 800,
+    hybrid_semantic_cache_size: 512,
+    compute: "auto",
+    hf_token: "",
+    modelscope_api_token: "",
+  };
+}
+
+function gatewayRegion(url: string): "cn" | "intl" | undefined {
+  const lower = (url || "").toLowerCase();
+  if (lower.includes("ariacompute.cn") || lower.includes("gitee.com/ariacompute")) return "cn";
+  if (lower.includes("ariacompute.com") || lower.includes("github.com/ariacompute")) return "intl";
+  return undefined;
+}
+
+function pairUrls(region: "cn" | "intl"): [string, string, string] {
+  return region === "cn" ? [CN_CLOUD, CN_SITE, CN_UPGRADE] : [INTL_CLOUD, INTL_SITE, INTL_UPGRADE];
+}
+
+export function fillAuthUrls(cfg: AuthConfig): AuthConfig {
+  const out = { ...cfg };
+  const region =
+    gatewayRegion(out.site_url) || gatewayRegion(out.cloud_url) || gatewayRegion(out.upgrade_url);
+  if (!region) return out;
+  const [cloud, site, upgrade] = pairUrls(region);
+  if (!out.cloud_url) out.cloud_url = cloud;
+  if (!out.site_url) out.site_url = site;
+  if (!out.upgrade_url) out.upgrade_url = upgrade;
+  return out;
+}
+
+function localePrefersCn(): boolean {
+  const lang = `${process.env.LANG || ""}${process.env.LC_ALL || ""}`.toLowerCase();
+  return lang.includes("zh") || lang.includes(".cn") || lang.startsWith("cn");
+}
+
+function defaultProbeDashboard(siteUrl: string, apiKey: string): boolean {
+  const url = `${(siteUrl || "").replace(/\/$/, "")}/api/dashboard/models`;
+  const script =
+    'fetch(process.env.ARIA_PROBE_URL,{headers:{"User-Agent":"aria-engine-sdk/0.1.0","Authorization":"Bearer "+process.env.ARIA_PROBE_KEY},redirect:"follow"}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))';
+  const r = spawnSync(process.execPath, ["-e", script], {
+    env: { ...process.env, ARIA_PROBE_URL: url, ARIA_PROBE_KEY: apiKey },
+    timeout: 10000,
+  });
+  return r.status === 0;
+}
+
+/** Replace `authHooks.probeDashboard` in tests to avoid a real Dashboard probe. */
+export const authHooks = {
+  probeDashboard: defaultProbeDashboard as (siteUrl: string, apiKey: string) => boolean,
+};
+
+export function detectGatewayPair(apiKey: string): [string, string, string] {
+  const key = (apiKey || "").trim();
+  const first = localePrefersCn() ? "cn" : "intl";
+  const second = first === "cn" ? "intl" : "cn";
+  for (const region of [first, second] as const) {
+    const [cloud, site, upgrade] = pairUrls(region);
+    if (key && authHooks.probeDashboard(site, key)) return [cloud, site, upgrade];
+  }
+  return pairUrls(first);
+}
+
+export function applyAuth(existing: AuthConfig, updates: Partial<AuthConfig>): AuthConfig {
+  const out: AuthConfig = { ...existing };
+  for (const [k, v] of Object.entries(updates)) {
+    if (v === undefined) continue;
+    (out as any)[k] = v;
+  }
+  if (!["cost", "balance", "intelligence"].includes(out.hybrid_mode)) {
+    throw new Error(`invalid hybrid_mode: ${out.hybrid_mode}`);
+  }
+  if (!["hybrid", "device", "cloud"].includes(out.hybrid_execution)) {
+    throw new Error(`invalid hybrid_execution: ${out.hybrid_execution}`);
+  }
+  if (!["auto", "cpu", "cuda"].includes(out.compute)) {
+    throw new Error(`invalid compute: ${out.compute}`);
+  }
+  const timeout = Number(out.hybrid_semantic_timeout_ms);
+  const cache = Number(out.hybrid_semantic_cache_size);
+  if (!Number.isInteger(timeout) || !Number.isInteger(cache) || timeout <= 0 || cache <= 0) {
+    throw new Error("hybrid_semantic_timeout_ms / cache_size must be positive integers");
+  }
+  out.hybrid_semantic = Boolean(out.hybrid_semantic);
+  out.hybrid_semantic_timeout_ms = timeout;
+  out.hybrid_semantic_cache_size = cache;
+  for (const key of [
+    "cloud_api_key",
+    "cloud_url",
+    "site_url",
+    "upgrade_url",
+    "hf_token",
+    "modelscope_api_token",
+  ] as const) {
+    out[key] = out[key] == null ? "" : String(out[key]);
+  }
+  const filled = fillAuthUrls(out);
+  if (filled.cloud_api_key && !(filled.cloud_url && filled.site_url && filled.upgrade_url)) {
+    const [cloud, site, upgrade] = detectGatewayPair(filled.cloud_api_key);
+    if (!filled.cloud_url) filled.cloud_url = cloud;
+    if (!filled.site_url) filled.site_url = site;
+    if (!filled.upgrade_url) filled.upgrade_url = upgrade;
+  }
+  return filled;
+}
 const DEFAULT_SDK = "v1.0";
 const HUB_REQUIRED = ["config.json", "weight.bin"] as const;
 const HUB_OPTIONAL = [
@@ -516,18 +652,48 @@ export function isLocalRef(modelRef: string): boolean {
 }
 
 export class Engine {
-  private lib: any;
-  private handle: unknown;
+  private lib: any = null;
+  private handle: unknown = null;
   private fnInit: any;
   private fnDestroy: any;
   private fnComplete: any;
   private fnEmbed: any;
   private fnTranscribe: any;
   private fnLastError: any;
+  private cfg: AuthConfig = defaultAuthConfig();
+  private opts: OpenOptions = {};
 
-  /** Construct from a local bundle directory. */
-  constructor(bundle: string, opts: OpenOptions = {}) {
-    this.lib = loadLib(opts.ffiLib, opts.site);
+  /** Empty construct, or a local bundle directory. */
+  constructor(bundle?: string, opts: OpenOptions = {}) {
+    this.opts = opts;
+    if (opts.site || opts.hfToken || opts.modelscopeApiToken) {
+      this.auth({
+        site_url: opts.site,
+        hf_token: opts.hfToken,
+        modelscope_api_token: opts.modelscopeApiToken,
+      });
+    }
+    if (bundle) this.bindAndInit(bundle, opts.ffiLib);
+  }
+
+  /** Set Config / Run fields on this instance only. Does not write config.yml. */
+  auth(updates: Partial<AuthConfig>): this {
+    this.cfg = applyAuth(this.cfg, updates);
+    return this;
+  }
+
+  authStatus(): AuthConfig {
+    return { ...this.cfg };
+  }
+
+  /** Reset instance defaults. Does not delete ~/.ariacompute/config.yml. */
+  authClear(): this {
+    this.cfg = defaultAuthConfig();
+    return this;
+  }
+
+  private bindAndInit(bundle: string, ffiLib?: string): void {
+    this.lib = loadLib(ffiLib || this.opts.ffiLib, this.cfg.site_url || this.opts.site);
     this.fnInit = this.lib.func("aria_model_init", "void*", ["str"]);
     this.fnDestroy = this.lib.func("aria_model_destroy", "void", ["void*"]);
     this.fnComplete = this.lib.func("aria_complete", "int", ["void*", "str", "str", "str", "void*", "size_t"]);
@@ -541,13 +707,27 @@ export class Engine {
     }
   }
 
+  /** Download (if needed) and load a model using instance auth. */
+  async open(modelRef: string): Promise<this> {
+    await ensureFfiLib(this.cfg.site_url || this.opts.site);
+    const openOpts: OpenOptions = {
+      ...this.opts,
+      site: this.cfg.site_url || this.opts.site,
+      hfToken: this.cfg.hf_token || this.opts.hfToken,
+      modelscopeApiToken: this.cfg.modelscope_api_token || this.opts.modelscopeApiToken,
+    };
+    const bundle = isLocalRef(modelRef) ? modelRef : await downloadModel(modelRef, openOpts);
+    if (this.handle) this.close();
+    this.bindAndInit(bundle, this.opts.ffiLib);
+    return this;
+  }
+
   /** Auto-detect: a value containing a separator or already on disk is a local
    * path; otherwise it is a model name downloaded from the regional public hub. */
   static async open(modelRef: string, opts: OpenOptions = {}): Promise<Engine> {
-    await ensureFfiLib(opts.site);
-    if (isLocalRef(modelRef)) return new Engine(modelRef, opts);
-    const bundle = await downloadModel(modelRef, opts);
-    return new Engine(bundle, opts);
+    const eng = new Engine(undefined, opts);
+    await eng.open(modelRef);
+    return eng;
   }
 
   complete(messages: Turn[], opts: GenerateOptions = {}): CompleteResult {
@@ -603,7 +783,7 @@ export class Engine {
   }
 
   close(): void {
-    if (this.handle) this.fnDestroy(this.handle);
+    if (this.handle && this.fnDestroy) this.fnDestroy(this.handle);
     this.handle = null;
   }
 }

@@ -8,6 +8,8 @@ public enum AriaDownloadError: Error {
 
 public final class AriaEngine {
     private var handle: OpaquePointer?
+    private var cfg = AuthConfig()
+    private var genericToken = ""
 
     // MARK: - Model name resolution
 
@@ -435,12 +437,53 @@ public final class AriaEngine {
 
     // MARK: - Init
 
+    /// Empty construct. Call `auth` then `open` to download/load.
+    public init() {}
+
     public init(bundlePath: String) throws {
         // Link libaria_ffi and call aria_model_init via bridging header / module map.
         // Stub for host documentation; wire C calls when XCFramework is linked.
         _ = try Self.ensureFfiLib()
         self.handle = nil
         if bundlePath.isEmpty { throw NSError(domain: "Aria", code: 1) }
+    }
+
+    /// Set Config / Run fields on this instance only. Does not write config.yml.
+    @discardableResult
+    public func auth(_ updates: AuthUpdates) throws -> AriaEngine {
+        cfg = try applyAuth(cfg, updates)
+        return self
+    }
+
+    public func authStatus() -> AuthConfig { cfg }
+
+    /// Reset instance defaults. Does not delete ~/.ariacompute/config.yml.
+    @discardableResult
+    public func authClear() -> AriaEngine {
+        cfg = AuthConfig()
+        return self
+    }
+
+    /// Download (if needed) and load a model using instance auth.
+    @discardableResult
+    public func open(_ ref: String) throws -> AriaEngine {
+        let site = cfg.siteUrl.isEmpty ? "https://ariacompute.com" : cfg.siteUrl
+        _ = try Self.ensureFfiLib(site: site)
+        let bundle: String
+        if Self.isLocalRef(ref) {
+            bundle = ref
+        } else {
+            bundle = try Self.downloadModel(
+                ref,
+                token: genericToken,
+                site: site,
+                hfToken: cfg.hfToken,
+                modelscopeApiToken: cfg.modelscopeApiToken
+            )
+        }
+        self.handle = nil
+        if bundle.isEmpty { throw NSError(domain: "Aria", code: 1) }
+        return self
     }
 
     /// Open a model by reference. A value containing a separator or already on
@@ -453,12 +496,13 @@ public final class AriaEngine {
         hfToken: String = "",
         modelscopeApiToken: String = ""
     ) throws -> AriaEngine {
-        _ = try ensureFfiLib(site: site)
-        if isLocalRef(ref) {
-            return try AriaEngine(bundlePath: ref)
+        let eng = AriaEngine()
+        eng.genericToken = token
+        if !site.isEmpty || !hfToken.isEmpty || !modelscopeApiToken.isEmpty {
+            try eng.auth(AuthUpdates(siteUrl: site.isEmpty ? nil : site, hfToken: hfToken.isEmpty ? nil : hfToken, modelscopeApiToken: modelscopeApiToken.isEmpty ? nil : modelscopeApiToken))
         }
-        let bundle = try downloadModel(ref, token: token, site: site, hfToken: hfToken, modelscopeApiToken: modelscopeApiToken)
-        return try AriaEngine(bundlePath: bundle)
+        try eng.open(ref)
+        return eng
     }
 
     public func complete(messagesJson: String, optionsJson: String, toolsJson: String = "[]") throws -> String {

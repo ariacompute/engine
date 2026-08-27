@@ -8,6 +8,10 @@
  * `~/.ariacompute/models/{model}`, then loads via native init.
  */
 import { NativeModules } from 'react-native';
+import {
+  defaultAuthConfig,
+  applyAuth,
+} from './auth.js';
 
 const AriaEngineModule = NativeModules.AriaEngine;
 
@@ -421,14 +425,49 @@ async function ensureFfiLib(site) {
 export class AriaEngine {
   constructor(bundlePath) {
     this.bundlePath = bundlePath;
+    this.cfg = defaultAuthConfig();
+    this.opts = {};
     // NativeModules.AriaEngine.init(bundlePath) when linked.
   }
 
-  static async open(modelRef, opts = {}) {
+  auth(updates) {
+    this.cfg = applyAuth(this.cfg, updates);
+    return this;
+  }
+
+  authStatus() {
+    return { ...this.cfg };
+  }
+
+  authClear() {
+    this.cfg = defaultAuthConfig();
+    return this;
+  }
+
+  async open(modelRef) {
+    const opts = {
+      ...this.opts,
+      site: this.cfg.site_url || this.opts.site,
+      hfToken: this.cfg.hf_token || this.opts.hfToken,
+      modelscopeApiToken: this.cfg.modelscope_api_token || this.opts.modelscopeApiToken,
+    };
     await ensureFfiLib(opts.site);
-    if (isLocalRef(modelRef)) return new AriaEngine(modelRef);
-    const bundle = await downloadModel(modelRef, opts);
-    return new AriaEngine(bundle);
+    this.bundlePath = isLocalRef(modelRef) ? modelRef : await downloadModel(modelRef, opts);
+    return this;
+  }
+
+  static async open(modelRef, opts = {}) {
+    const eng = new AriaEngine();
+    eng.opts = opts;
+    if (opts.site || opts.hfToken || opts.modelscopeApiToken) {
+      eng.auth({
+        site_url: opts.site,
+        hf_token: opts.hfToken,
+        modelscope_api_token: opts.modelscopeApiToken,
+      });
+    }
+    await eng.open(modelRef);
+    return eng;
   }
 
   async complete(messages, options = { max_tokens: 16 }, tools = []) {

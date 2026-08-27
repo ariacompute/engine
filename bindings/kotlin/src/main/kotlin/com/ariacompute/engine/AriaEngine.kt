@@ -13,13 +13,71 @@ import org.json.JSONArray
 import org.json.JSONObject
 
 /** Kotlin/JVM + Android JNI wrapper over libaria_ffi. */
-class AriaEngine(bundlePath: String) : AutoCloseable {
+class AriaEngine : AutoCloseable {
     private var handle: Long = 0L
+    private var cfg: AuthConfig = defaultAuthConfig()
+    private var genericToken: String = ""
 
-    init {
+    constructor()
+
+    constructor(bundlePath: String) {
         loadNative()
+        initBundle(bundlePath)
+    }
+
+    private fun initBundle(bundlePath: String) {
         handle = nativeInit(bundlePath)
         if (handle == 0L) throw IllegalStateException(nativeLastError() ?: "init failed")
+    }
+
+    fun auth(
+        cloudApiKey: String? = null,
+        cloudUrl: String? = null,
+        siteUrl: String? = null,
+        upgradeUrl: String? = null,
+        hybridMode: String? = null,
+        hybridExecution: String? = null,
+        hybridSemantic: Boolean? = null,
+        hybridSemanticTimeoutMs: Int? = null,
+        hybridSemanticCacheSize: Int? = null,
+        compute: String? = null,
+        hfToken: String? = null,
+        modelscopeApiToken: String? = null,
+    ): AriaEngine {
+        cfg = applyAuthFields(
+            cfg,
+            cloudApiKey, cloudUrl, siteUrl, upgradeUrl,
+            hybridMode, hybridExecution, hybridSemantic,
+            hybridSemanticTimeoutMs, hybridSemanticCacheSize,
+            compute, hfToken, modelscopeApiToken,
+        )
+        return this
+    }
+
+    fun authStatus(): AuthConfig = cfg.copy()
+
+    fun authClear(): AriaEngine {
+        cfg = defaultAuthConfig()
+        return this
+    }
+
+    /** Download (if needed) and load a model using instance auth. */
+    fun open(modelRef: String): AriaEngine {
+        val site = cfg.siteUrl.ifEmpty { DEFAULT_SITE }
+        loadNative(site)
+        val bundle = if (isLocalRef(modelRef)) modelRef else downloadModel(
+            modelRef,
+            genericToken,
+            site,
+            cfg.hfToken,
+            cfg.modelscopeApiToken,
+        )
+        if (handle != 0L) {
+            nativeDestroy(handle)
+            handle = 0L
+        }
+        initBundle(bundle)
+        return this
     }
 
     fun complete(messagesJson: String, optionsJson: String = """{"max_tokens":16}""", toolsJson: String = "[]"): String {

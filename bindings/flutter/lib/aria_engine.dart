@@ -2,6 +2,9 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
+import 'auth.dart';
+
+export 'auth.dart';
 
 typedef AriaInitC = Pointer Function(Pointer<Utf8>);
 typedef AriaInitDart = Pointer Function(Pointer<Utf8>);
@@ -465,11 +468,71 @@ Future<String> ensureFfiLib({String? site}) async {
 }
 
 class AriaEngine {
-  late final DynamicLibrary _lib;
-  late final Pointer _handle;
+  DynamicLibrary? _lib;
+  Pointer? _handle;
+  AuthConfig _cfg = defaultAuthConfig();
+  String? _token;
+  String? _libPath;
 
-  AriaEngine(String bundlePath, {String? libPath}) {
+  /// Empty construct, or a local bundle directory.
+  AriaEngine([String? bundlePath, {String? libPath}]) {
+    _libPath = libPath;
+    if (bundlePath != null) {
+      _bindAndInit(bundlePath, libPath: libPath);
+    }
+  }
+
+  bool _prefersCn() {
+    final lang =
+        '${Platform.environment['LANG'] ?? ''}${Platform.environment['LC_ALL'] ?? ''}'
+            .toLowerCase();
+    return lang.contains('zh') ||
+        lang.contains('.cn') ||
+        lang.startsWith('cn');
+  }
+
+  /// Set Config / Run fields on this instance only. Does not write config.yml.
+  AriaEngine auth(
+      {String? cloudApiKey,
+      String? cloudUrl,
+      String? siteUrl,
+      String? upgradeUrl,
+      String? hybridMode,
+      String? hybridExecution,
+      bool? hybridSemantic,
+      int? hybridSemanticTimeoutMs,
+      int? hybridSemanticCacheSize,
+      String? compute,
+      String? hfToken,
+      String? modelscopeApiToken}) {
+    _cfg = applyAuth(_cfg,
+        cloudApiKey: cloudApiKey,
+        cloudUrl: cloudUrl,
+        siteUrl: siteUrl,
+        upgradeUrl: upgradeUrl,
+        hybridMode: hybridMode,
+        hybridExecution: hybridExecution,
+        hybridSemantic: hybridSemantic,
+        hybridSemanticTimeoutMs: hybridSemanticTimeoutMs,
+        hybridSemanticCacheSize: hybridSemanticCacheSize,
+        compute: compute,
+        hfToken: hfToken,
+        modelscopeApiToken: modelscopeApiToken,
+        prefersCn: _prefersCn());
+    return this;
+  }
+
+  Map<String, Object> authStatus() => _cfg.toMap();
+
+  /// Reset instance defaults. Does not delete ~/.ariacompute/config.yml.
+  AriaEngine authClear() {
+    _cfg = defaultAuthConfig();
+    return this;
+  }
+
+  void _bindAndInit(String bundlePath, {String? libPath}) {
     final path = libPath ??
+        _libPath ??
         Platform.environment['ARIA_FFI_LIB'] ??
         _cachedFfiPath() ??
         (Platform.isWindows
@@ -478,13 +541,30 @@ class AriaEngine {
                 ? 'libaria_ffi.dylib'
                 : 'libaria_ffi.so');
     _lib = DynamicLibrary.open(path);
-    final init = _lib.lookupFunction<AriaInitC, AriaInitDart>('aria_model_init');
+    final init = _lib!.lookupFunction<AriaInitC, AriaInitDart>('aria_model_init');
     final p = bundlePath.toNativeUtf8();
     _handle = init(p);
     malloc.free(p);
-    if (_handle.address == 0) {
+    if (_handle!.address == 0) {
       throw StateError('aria_model_init failed');
     }
+  }
+
+  /// Download (if needed) and load a model using instance auth.
+  Future<AriaEngine> openUsingAuth(String modelRef, {String? libPath}) async {
+    final site = _cfg.siteUrl.isEmpty ? _defaultSite : _cfg.siteUrl;
+    final resolvedLib = libPath ?? _libPath ?? await ensureFfiLib(site: site);
+    final bundle = _isLocalRef(modelRef)
+        ? modelRef
+        : await downloadModel(modelRef,
+            token: _token,
+            hfToken: _cfg.hfToken.isEmpty ? null : _cfg.hfToken,
+            modelscopeApiToken:
+                _cfg.modelscopeApiToken.isEmpty ? null : _cfg.modelscopeApiToken,
+            site: site);
+    if (_handle != null) dispose();
+    _bindAndInit(bundle, libPath: resolvedLib);
+    return this;
   }
 
   /// Open a model by reference. A value containing a separator or already on
@@ -496,27 +576,35 @@ class AriaEngine {
       String? modelscopeApiToken,
       String site = _defaultSite,
       String? libPath}) async {
-    final resolvedLib = libPath ?? await ensureFfiLib(site: site);
-    if (_isLocalRef(modelRef)) {
-      return AriaEngine(modelRef, libPath: resolvedLib);
+    final eng = AriaEngine(libPath: libPath);
+    eng._token = token;
+    if (site != _defaultSite || hfToken != null || modelscopeApiToken != null) {
+      eng.auth(
+          siteUrl: site == _defaultSite ? null : site,
+          hfToken: hfToken,
+          modelscopeApiToken: modelscopeApiToken);
+      if (site != _defaultSite && eng._cfg.siteUrl.isEmpty) {
+        eng.auth(siteUrl: site);
+      }
     }
-    final bundle = await downloadModel(modelRef,
-        token: token,
-        hfToken: hfToken,
-        modelscopeApiToken: modelscopeApiToken,
-        site: site);
-    return AriaEngine(bundle, libPath: resolvedLib);
+    await eng.openUsingAuth(modelRef, libPath: libPath);
+    return eng;
   }
 
   String complete(String messagesJson,
       {String optionsJson = '{"max_tokens":16}', String toolsJson = '[]'}) {
+    final lib = _lib;
+    final handle = _handle;
+    if (lib == null || handle == null) {
+      throw StateError('engine not opened');
+    }
     final complete =
-        _lib.lookupFunction<AriaCompleteC, AriaCompleteDart>('aria_complete');
+        lib.lookupFunction<AriaCompleteC, AriaCompleteDart>('aria_complete');
     final out = malloc<Uint8>(256 * 1024).cast<Utf8>();
     final m = messagesJson.toNativeUtf8();
     final o = optionsJson.toNativeUtf8();
     final t = toolsJson.toNativeUtf8();
-    final rc = complete(_handle, m, o, t, out, 256 * 1024);
+    final rc = complete(handle, m, o, t, out, 256 * 1024);
     malloc.free(m);
     malloc.free(o);
     malloc.free(t);
@@ -530,8 +618,18 @@ class AriaEngine {
   }
 
   void dispose() {
+    final lib = _lib;
+    final handle = _handle;
+    if (lib == null || handle == null) return;
     final destroy =
-        _lib.lookupFunction<AriaDestroyC, AriaDestroyDart>('aria_model_destroy');
-    destroy(_handle);
+        lib.lookupFunction<AriaDestroyC, AriaDestroyDart>('aria_model_destroy');
+    destroy(handle);
+    _handle = null;
   }
+}
+
+/// Instance `open` lives on an extension so it does not clash with [AriaEngine.open].
+extension AriaEngineAuthOpen on AriaEngine {
+  Future<AriaEngine> open(String modelRef, {String? libPath}) =>
+      openUsingAuth(modelRef, libPath: libPath);
 }

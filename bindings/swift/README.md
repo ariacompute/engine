@@ -21,9 +21,12 @@ loaded directly; otherwise the SDK downloads it from the regional public hub
 and then loads it. Dashboard is not used. A Dashboard `sk-` / `bfvk-` token is
 ignored for hub auth. Token is optional for public models. Gated files: pass
 `hfToken` / `modelscopeApiToken` (same as `aria-engine auth`); if omitted, reads
-`~/.ariacompute/config.yml`. A valid cached bundle is reused without re-downloading.
+`~/.ariacompute/config.yml`. Instance `auth` is in-memory only (does not write
+that file). A valid cached bundle is reused without re-downloading.
 
 ```swift
 let eng = try AriaEngine.open("gemma-4-e2b-it_q4")
-let gated = try AriaEngine.open("gemma-4-e2b-it_q4", hfToken: "hf_...")
+let gated = AriaEngine()
+try gated.auth(AuthUpdates(hfToken: "hf_..."))
+try gated.open("gemma-4-e2b-it_q4")
 ```

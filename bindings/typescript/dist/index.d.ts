@@ -38,6 +38,34 @@ export interface OpenOptions {
     /** Explicit path to the FFI library. */
     ffiLib?: string;
 }
+export declare const INTL_CLOUD = "https://gateway.ariacompute.com";
+export declare const INTL_SITE = "https://ariacompute.com";
+export declare const INTL_UPGRADE = "https://github.com/ariacompute";
+export declare const CN_CLOUD = "https://gateway.ariacompute.cn";
+export declare const CN_SITE = "https://ariacompute.cn";
+export declare const CN_UPGRADE = "https://gitee.com/ariacompute";
+export interface AuthConfig {
+    cloud_api_key: string;
+    cloud_url: string;
+    site_url: string;
+    upgrade_url: string;
+    hybrid_mode: string;
+    hybrid_execution: string;
+    hybrid_semantic: boolean;
+    hybrid_semantic_timeout_ms: number;
+    hybrid_semantic_cache_size: number;
+    compute: string;
+    hf_token: string;
+    modelscope_api_token: string;
+}
+export declare function defaultAuthConfig(): AuthConfig;
+export declare function fillAuthUrls(cfg: AuthConfig): AuthConfig;
+/** Replace `authHooks.probeDashboard` in tests to avoid a real Dashboard probe. */
+export declare const authHooks: {
+    probeDashboard: (siteUrl: string, apiKey: string) => boolean;
+};
+export declare function detectGatewayPair(apiKey: string): [string, string, string];
+export declare function applyAuth(existing: AuthConfig, updates: Partial<AuthConfig>): AuthConfig;
 /** Parse `slug`/`quant` from a model name such as `gemma-4-e2b-it_q4`. */
 export declare function parseBundleName(model: string): {
     slug: string;
@@ -70,8 +98,18 @@ export declare class Engine {
     private fnEmbed;
     private fnTranscribe;
     private fnLastError;
-    /** Construct from a local bundle directory. */
-    constructor(bundle: string, opts?: OpenOptions);
+    private cfg;
+    private opts;
+    /** Empty construct, or a local bundle directory. */
+    constructor(bundle?: string, opts?: OpenOptions);
+    /** Set Config / Run fields on this instance only. Does not write config.yml. */
+    auth(updates: Partial<AuthConfig>): this;
+    authStatus(): AuthConfig;
+    /** Reset instance defaults. Does not delete ~/.ariacompute/config.yml. */
+    authClear(): this;
+    private bindAndInit;
+    /** Download (if needed) and load a model using instance auth. */
+    open(modelRef: string): Promise<this>;
     /** Auto-detect: a value containing a separator or already on disk is a local
      * path; otherwise it is a model name downloaded from the regional public hub. */
     static open(modelRef: string, opts?: OpenOptions): Promise<Engine>;

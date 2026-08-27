@@ -267,3 +267,10 @@
 - [x] `upgrade_url` 优先；否则 `.com` GitHub / `.cn` Gitee。已缓存跳过。失败明确报错
 - [x] 单测：asset os / 选最新 stable / tar 解压 / 缓存跳过；`cases.json` `ensure_ffi_lib_*`
 
+## SDK 实例 auth（requirements §3.7）
+
+### T82 — 八语言 Engine 实例内存配置（不写 config.yml）
+- [x] `auth` / `auth_status` / `auth_clear`：§3.4.1 全部 12 字段；部分合并；非法枚举不改状态
+- [x] 空构造 → `auth` → `open`；实例字段优先，空则回退读 yml；**禁止**回写 `config.yml`
+- [x] 单测：roundtrip / 部分合并 / 非法枚举 / clear / TLD 补 URL / 不写 yml；`cases.json` `auth_*`
+

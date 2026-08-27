@@ -35,10 +35,14 @@ with Engine("/path/to/bundle") as eng:
 with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
 
-# Gated Hugging Face files:
-with Engine("gemma-4-e2b-it_q4", hf_token="hf_...") as eng:
-    print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
+# Gated Hugging Face files (instance auth; does not write config.yml):
+eng = Engine()
+eng.auth(hf_token="hf_...")
+eng.open("gemma-4-e2b-it_q4")
+print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
 ```
+
+`Engine.auth` sets Config / Run fields on **that instance only**. CLI `aria-engine auth` still writes `~/.ariacompute/config.yml`; the SDK never does. Empty fields still fall back to reading that file for hub download. Also: `eng.auth_status()`, `eng.auth_clear()`.
 
 ## 动态库查找顺序
 

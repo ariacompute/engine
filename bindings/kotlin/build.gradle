@@ -21,6 +21,7 @@ kotlin {
 
 dependencies {
     implementation 'org.json:json:20240303'
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
 }
 
 // Maven Central (Central Portal) publishing via vanniktech plugin.

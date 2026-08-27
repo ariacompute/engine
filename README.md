@@ -271,7 +271,7 @@ C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `ari
 
 ### Auto-download by model name
 
-Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard. Gated hub files use the same fields as `aria-engine auth`: pass `hf_token` (`.com`) or `modelscope_api_token` (`.cn`); if omitted, the SDK reads `~/.ariacompute/config.yml`. Dashboard `sk-`/`bfvk-` tokens are ignored. Env `HF_TOKEN` / `MODELSCOPE_API_TOKEN` are not used. Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
+Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard. Gated hub files use the same fields as `aria-engine auth` via instance `auth` (empty construct → `auth` → `open`); this is in-memory only and **never** writes `config.yml` (CLI `aria-engine auth` still does). Empty instance fields still fall back to reading `~/.ariacompute/config.yml`. Dashboard `sk-`/`bfvk-` tokens are ignored. Env `HF_TOKEN` / `MODELSCOPE_API_TOKEN` are not used. Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
@@ -327,15 +327,15 @@ with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
     # also: eng.embed("hi"), eng.transcribe(pcm_bytes)
 
-# Gated hub files — same fields as `aria-engine auth` (else ~/.ariacompute/config.yml):
-with Engine("gemma-4-e2b-it_q4", hf_token="hf_...") as eng:  # .com → Hugging Face
-    print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
-with Engine(
-    "gemma-4-e2b-it_q4",
-    modelscope_api_token="ms_...",
-    site="https://ariacompute.cn",
-) as eng:  # .cn → ModelScope
-    print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
+# Gated hub files — instance auth (does not write ~/.ariacompute/config.yml):
+eng = Engine()
+eng.auth(hf_token="hf_...")  # .com → Hugging Face
+eng.open("gemma-4-e2b-it_q4")
+print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
+eng_ms = Engine()
+eng_ms.auth(modelscope_api_token="ms_...", site_url="https://ariacompute.cn")
+eng_ms.open("gemma-4-e2b-it_q4")
+print(eng_ms.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
 
 **TypeScript / Node** (`@ariacompute/engine-ts`):
@@ -362,12 +362,13 @@ const eng2 = await Engine.open("gemma-4-e2b-it_q4");
 console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
 eng2.close();
 
-// Gated hub files — same fields as `aria-engine auth` (else ~/.ariacompute/config.yml):
-const engHf = await Engine.open("gemma-4-e2b-it_q4", { hfToken: "hf_..." }); // .com
-const engMs = await Engine.open("gemma-4-e2b-it_q4", {
-  modelscopeApiToken: "ms_...",
-  site: "https://ariacompute.cn",
-}); // .cn
+// Gated hub files — instance auth (does not write ~/.ariacompute/config.yml):
+const engHf = new Engine();
+engHf.auth({ hf_token: "hf_..." }); // .com
+await engHf.open("gemma-4-e2b-it_q4");
+const engMs = new Engine();
+engMs.auth({ modelscope_api_token: "ms_...", site_url: "https://ariacompute.cn" });
+await engMs.open("gemma-4-e2b-it_q4");
 engHf.close();
 engMs.close();
 ```
@@ -413,17 +414,22 @@ func main() {
 	defer eng2.Close()
 	_ = eng2
 
-	// Gated hub files — same fields as `aria-engine auth` (else ~/.ariacompute/config.yml):
-	engHf, err := aria.OpenModelOpts("gemma-4-e2b-it_q4", aria.DownloadOptions{HFToken: "hf_..."}) // .com
-	if err != nil {
+	// Gated hub files — instance auth (does not write ~/.ariacompute/config.yml):
+	engHf := aria.NewEngine()
+	hf := "hf_..."
+	if err := engHf.Auth(aria.AuthUpdates{HFToken: &hf}); err != nil {
+		panic(err)
+	}
+	if err := engHf.Open("gemma-4-e2b-it_q4"); err != nil {
 		panic(err)
 	}
 	defer engHf.Close()
-	engMs, err := aria.OpenModelOpts("gemma-4-e2b-it_q4", aria.DownloadOptions{
-		ModelScopeAPIToken: "ms_...",
-		Site:               "https://ariacompute.cn",
-	}) // .cn
-	if err != nil {
+	engMs := aria.NewEngine()
+	ms, site := "ms_...", "https://ariacompute.cn"
+	if err := engMs.Auth(aria.AuthUpdates{ModelScopeAPIToken: &ms, SiteURL: &site}); err != nil {
+		panic(err)
+	}
+	if err := engMs.Open("gemma-4-e2b-it_q4"); err != nil {
 		panic(err)
 	}
 	defer engMs.Close()
@@ -439,7 +445,7 @@ cargo add ariacompute-engine
 ```
 
 ```rust
-use aria_engine::{Engine, GenerateOpts, OpenOptions};
+use aria_engine::{AuthUpdates, Engine, GenerateOpts, OpenOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut eng = Engine::open("/path/to/aria-bundle")?;
@@ -454,17 +460,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let g2 = eng2.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?;
     println!("{}", g2.text);
 
-    // Gated hub files — same fields as `aria-engine auth` (else ~/.ariacompute/config.yml):
-    let mut eng_hf = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions {
-        hf_token: Some("hf_...".into()), // .com → Hugging Face
-        ..Default::default()
-    })?;
+    // Gated hub files — instance auth (does not write ~/.ariacompute/config.yml):
+    let mut eng_hf = Engine::new();
+    eng_hf.auth(&AuthUpdates { hf_token: Some("hf_...".into()), ..Default::default() })?;
+    eng_hf.open_named("gemma-4-e2b-it_q4")?;
     println!("{}", eng_hf.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?.text);
-    let mut eng_ms = Engine::open_model("gemma-4-e2b-it_q4", &OpenOptions {
-        modelscope_api_token: Some("ms_...".into()), // .cn → ModelScope
-        site: Some("https://ariacompute.cn".into()),
+    let mut eng_ms = Engine::new();
+    eng_ms.auth(&AuthUpdates {
+        modelscope_api_token: Some("ms_...".into()),
+        site_url: Some("https://ariacompute.cn".into()),
         ..Default::default()
     })?;
+    eng_ms.open_named("gemma-4-e2b-it_q4")?;
     println!("{}", eng_ms.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?.text);
     Ok(())
 }
