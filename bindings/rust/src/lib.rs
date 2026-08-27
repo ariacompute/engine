@@ -129,10 +129,12 @@ impl Engine {
     /// regional public hub into `~/.ariacompute/models/{model}` before loading.
     pub fn open_model(model_ref: &str, opts: &OpenOptions) -> Result<Self, OpenError> {
         let mut eng = Self::new();
-        let mut updates = AuthUpdates::default();
-        updates.site_url = opts.site.clone();
-        updates.hf_token = opts.hf_token.clone();
-        updates.modelscope_api_token = opts.modelscope_api_token.clone();
+        let updates = AuthUpdates {
+            site_url: opts.site.clone(),
+            hf_token: opts.hf_token.clone(),
+            modelscope_api_token: opts.modelscope_api_token.clone(),
+            ..Default::default()
+        };
         eng.generic_token = opts.token.clone();
         let _ = eng.auth(&updates);
         eng.load_ref(model_ref, opts)?;

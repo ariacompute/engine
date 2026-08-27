@@ -474,8 +474,8 @@ class AriaEngine {
   String? _token;
   String? _libPath;
 
-  /// Empty construct, or a local bundle directory.
-  AriaEngine([String? bundlePath, {String? libPath}]) {
+  /// Empty construct, or a local bundle directory. Second argument is FFI lib path.
+  AriaEngine([String? bundlePath, String? libPath]) {
     _libPath = libPath;
     if (bundlePath != null) {
       _bindAndInit(bundlePath, libPath: libPath);
@@ -576,7 +576,7 @@ class AriaEngine {
       String? modelscopeApiToken,
       String site = _defaultSite,
       String? libPath}) async {
-    final eng = AriaEngine(libPath: libPath);
+    final eng = AriaEngine(null, libPath);
     eng._token = token;
     if (site != _defaultSite || hfToken != null || modelscopeApiToken != null) {
       eng.auth(

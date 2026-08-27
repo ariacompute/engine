@@ -62,6 +62,7 @@ class AriaEngine : AutoCloseable {
     }
 
     /** Download (if needed) and load a model using instance auth. */
+    @JvmName("openNamed")
     fun open(modelRef: String): AriaEngine {
         val site = cfg.siteUrl.ifEmpty { DEFAULT_SITE }
         loadNative(site)
