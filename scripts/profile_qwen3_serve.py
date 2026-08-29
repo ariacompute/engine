@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Profile aria-engine serve load + generate (H200 / local).
 
-`hybrid_execution=device` only disables cloud handoff. Local GEMM is selected
-with `--compute auto|cpu|cuda` (orthogonal). This script POSTs the same Hello
+`hybrid_execution` is removed; local GEMM is selected
+with `--compute auto|cpu|cuda`. This script POSTs the same Hello
 chat used by diag_qwen3_chat.py, then reads GET /v1/engine/profile.
 
 Examples (from engine repo root):
@@ -114,7 +114,7 @@ def main() -> int:
     p.add_argument(
         "--spawn",
         action="store_true",
-        help="start aria-engine serve with --profile --hybrid-execution device",
+        help="start aria-engine serve with --profile",
     )
     p.add_argument("--report", default="./out/engine_profile_qwen3.json")
     args = p.parse_args()
@@ -126,8 +126,6 @@ def main() -> int:
             args.model,
             "--bind",
             args.bind,
-            "--hybrid-execution",
-            "device",
             "--compute",
             args.compute,
             "--profile",

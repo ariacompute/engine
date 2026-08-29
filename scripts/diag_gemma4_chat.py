@@ -11,7 +11,7 @@ engine unpacked hub codebook tables correctly.
 
 H200 example (from engine repo root):
 
-  ./aria-engine serve gemma-4-e2b-it_q4 --bind 127.0.0.1:8080 --hybrid-execution device
+  ./aria-engine serve gemma-4-e2b-it_q4 --bind 127.0.0.1:8080
   python scripts/diag_gemma4_chat.py \\
     --url http://127.0.0.1:8080 \\
     --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \\

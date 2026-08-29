@@ -31,24 +31,16 @@ class AriaEngine : AutoCloseable {
     }
 
     fun auth(
-        cloudApiKey: String? = null,
-        cloudUrl: String? = null,
+        router: String? = null,
         siteUrl: String? = null,
         upgradeUrl: String? = null,
-        hybridMode: String? = null,
-        hybridExecution: String? = null,
-        hybridSemantic: Boolean? = null,
-        hybridSemanticTimeoutMs: Int? = null,
-        hybridSemanticCacheSize: Int? = null,
         compute: String? = null,
         hfToken: String? = null,
         modelscopeApiToken: String? = null,
     ): AriaEngine {
         cfg = applyAuthFields(
             cfg,
-            cloudApiKey, cloudUrl, siteUrl, upgradeUrl,
-            hybridMode, hybridExecution, hybridSemantic,
-            hybridSemanticTimeoutMs, hybridSemanticCacheSize,
+            router, siteUrl, upgradeUrl,
             compute, hfToken, modelscopeApiToken,
         )
         return this

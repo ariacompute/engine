@@ -69,16 +69,16 @@ jobs:
           if n != 1:
               sys.exit(f"workspace.package version not found (n={n})")
           text, n = re.subn(
-              r'((?:ariacompute-(?:kernel|graph|inference|ffi)|aria-hybrid) = \{ path = "[^"]+", version = )"[^"]+"',
+              r'((?:ariacompute-(?:kernel|graph|inference|ffi)) = \{ path = "[^"]+", version = )"[^"]+"',
               rf'\1"{version}"',
               text,
           )
-          if n != 5:
-              sys.exit(f"expected 5 path+version workspace deps, got {n}")
+          if n != 4:
+              sys.exit(f"expected 4 path+version workspace deps, got {n}")
           open(path, "w").write(text)
           print(f"Injected workspace version={version}")
           PY
-          grep -nE '^(version = |ariacompute-(kernel|graph|inference|ffi) = |aria-hybrid = )' Cargo.toml
+          grep -nE '^(version = |ariacompute-(kernel|graph|inference|ffi) = )' Cargo.toml
       - name: Check crates.io token
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

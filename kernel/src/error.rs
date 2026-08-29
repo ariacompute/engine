@@ -15,6 +15,8 @@ pub enum EngineError {
     UnsupportedFamily(String),
     #[error("cloud: {0}")]
     Cloud(String),
+    #[error("upstream: {0}")]
+    Upstream(String),
     #[error("invalid param: {0}")]
     InvalidParam(String),
     #[error("unsupported: {0}")]

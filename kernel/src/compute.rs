@@ -1,9 +1,9 @@
-//! Local compute preference (`auto|cpu|cuda`) vs hybrid execution (cloud routing).
+//! Local compute preference (`auto|cpu|cuda`) for GEMM. Not a routing switch.
 
 use crate::cuda_rt;
 use crate::{EngineError, SimdMode};
 
-/// CLI / config preference. Orthogonal to `hybrid_execution`.
+/// CLI / config preference for local GEMM.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ComputePref {
     #[default]

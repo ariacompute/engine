@@ -1,11 +1,10 @@
-use aria_hybrid::{CloudClient, ExecutionMode, ParetoMode, Router};
 use aria_kernel::ComputePref;
 use aria_openai::check;
 use aria_openai::config::{self, AriaConfig};
 use aria_openai::download;
 use aria_openai::gateway_detect;
 use aria_openai::upgrade;
-use aria_openai::{app, build_state_with_hybrid_opts, HybridRoutingOpts};
+use aria_openai::{app, build_state_with_opts, register_with_router};
 use std::env;
 use std::io::{self, BufRead, Write};
 use std::net::SocketAddr;
@@ -13,17 +12,6 @@ use std::process;
 
 /// Embedded at compile time; release builds set `ARIA_ENGINE_VERSION` from the git tag.
 const ENGINE_VERSION: &str = env!("ARIA_ENGINE_VERSION");
-
-fn parse_mode(raw: &str) -> Result<ParetoMode, String> {
-    match raw.to_ascii_lowercase().as_str() {
-        "cost" => Ok(ParetoMode::Cost),
-        "balance" => Ok(ParetoMode::Balance),
-        "intelligence" | "intel" => Ok(ParetoMode::Intelligence),
-        other => Err(format!(
-            "hybrid_mode must be cost|balance|intelligence, got {other:?}"
-        )),
-    }
-}
 
 fn print_usage() {
     eprintln!(
@@ -37,8 +25,7 @@ Usage:
   aria-engine check [model]
   aria-engine clean [model]
   aria-engine upgrade [version]
-  aria-engine serve <model> [--bind host:port] [--hybrid-mode MODE] [--hybrid-execution MODE]
-                         [--hybrid-semantic on|off] [--compute auto|cpu|cuda] [--profile]
+  aria-engine serve <model> [--bind host:port] [--router URL] [--compute auto|cpu|cuda] [--profile]
   aria-engine -h | --help | help
   aria-engine -v | --version | version
 
@@ -47,20 +34,18 @@ Cache:
   ~/.ariacompute/models/<model>/
   ~/.ariacompute/lib/   (libaria_ffi from upgrade)
 
-auth                 Prompt for API key, region hub token, hybrid prefs; detect .com/.cn from key
+auth                 Prompt for compute, hub token, optional router URL; no API key required
   --status           Show config status (keys redacted)
   --clear            Remove config.yml
-download <model>     Probe dashboard / Hugging Face / ModelScope; fetch best source
-list                 Query site catalog; mark each bundle downloaded / not downloaded
+download <model>     Fetch from the regional public hub
+list                 Scan local ~/.ariacompute/models
 check [model]        Compare local bundle files (count, names, SHA-256) to regional hub
 clean [model]        Remove one cached model or all
 upgrade [version]    Replace this CLI + libaria_ffi from GitHub/Gitee (via upgrade_url)
 serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
-  --hybrid-mode      cost | balance | intelligence (overrides config for this process)
-  --hybrid-execution hybrid | device | cloud (overrides config for this process)
-  --hybrid-semantic  on | off (semantic routing layer; overrides config for this process)
-  --compute          auto | cpu | cuda (local GEMM; orthogonal to hybrid_execution)
+  --router           aria-router management URL (process override; does not write config.yml)
+  --compute          auto | cpu | cuda (local GEMM)
   --profile          record load/generate timings; GET /v1/engine/profile
 "
     );
@@ -120,13 +105,12 @@ fn redact_secret(value: &str) -> String {
 async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--status") {
         let cfg = config::load_config()?;
-        println!("cloud_api_key: {}", redact_secret(&cfg.cloud_api_key));
         println!(
-            "cloud_url: {}",
-            if cfg.cloud_url.is_empty() {
+            "router: {}",
+            if cfg.router.is_empty() {
                 "(not set)"
             } else {
-                &cfg.cloud_url
+                &cfg.router
             }
         );
         println!(
@@ -145,12 +129,6 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 &cfg.upgrade_url
             }
         );
-        println!("hybrid_mode: {}", cfg.hybrid_mode);
-        println!("hybrid_execution: {}", cfg.hybrid_execution);
-        println!(
-            "hybrid_semantic: {} (timeout={}ms cache={})",
-            cfg.hybrid_semantic, cfg.hybrid_semantic_timeout_ms, cfg.hybrid_semantic_cache_size
-        );
         println!("compute: {}", cfg.compute);
         println!("hf_token: {}", redact_secret(&cfg.hf_token));
         println!(
@@ -168,39 +146,65 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let existing = config::load_config().unwrap_or_default();
-    let api_key = prompt("API key (sk-… / bfvk-…): ")?;
-    if api_key.is_empty() {
-        return Err("API key required".into());
-    }
-    eprintln!("detecting gateway / site from API key…");
-    let pair = gateway_detect::detect_gateway_and_site(&api_key).await;
-    eprintln!(
-        "using cloud_url={} site_url={} upgrade_url={}",
-        pair.cloud_url,
-        pair.site_url,
-        pair.upgrade_url()
-    );
-    let hybrid_mode = prompt_choice(
-        "hybrid_mode",
-        &["cost", "balance", "intelligence"],
-        "balance",
-    )?;
-    let hybrid_execution =
-        prompt_choice("hybrid_execution", &["hybrid", "device", "cloud"], "hybrid")?;
+    let site_url = prompt(&format!(
+        "site_url (default: {}): ",
+        if existing.site_url.is_empty() {
+            "https://ariacompute.com"
+        } else {
+            &existing.site_url
+        }
+    ))?;
+    let site_url = if site_url.is_empty() {
+        if existing.site_url.is_empty() {
+            "https://ariacompute.com".into()
+        } else {
+            existing.site_url.clone()
+        }
+    } else {
+        site_url
+    };
+    let pair = gateway_detect::GatewayPair::from_url(&site_url)
+        .unwrap_or(gateway_detect::GatewayPair::INTL);
+    let upgrade_url = prompt(&format!(
+        "upgrade_url (default: {}): ",
+        if existing.upgrade_url.is_empty() {
+            pair.upgrade_url()
+        } else {
+            &existing.upgrade_url
+        }
+    ))?;
+    let upgrade_url = if upgrade_url.is_empty() {
+        if existing.upgrade_url.is_empty() {
+            pair.upgrade_url().to_string()
+        } else {
+            existing.upgrade_url.clone()
+        }
+    } else {
+        upgrade_url
+    };
+    let router = prompt(&format!(
+        "router URL (optional, default: {}): ",
+        if existing.router.is_empty() {
+            "(none)"
+        } else {
+            &existing.router
+        }
+    ))?;
+    let router = if router.is_empty() {
+        existing.router.clone()
+    } else {
+        router
+    };
     let compute = prompt_choice("compute", &["auto", "cpu", "cuda"], "auto")?;
     let (hf_token, modelscope_api_token) = prompt_regional_hub_token(pair, &existing)?;
 
     let cfg = AriaConfig {
-        cloud_api_key: api_key,
-        cloud_url: pair.cloud_url.to_string(),
-        site_url: pair.site_url.to_string(),
-        upgrade_url: pair.upgrade_url().to_string(),
-        hybrid_mode,
-        hybrid_execution,
+        router,
+        site_url,
+        upgrade_url,
         compute,
         hf_token,
         modelscope_api_token,
-        ..existing
     };
     config::save_config(&cfg)?;
     println!("wrote {}", config::config_path()?.display());
@@ -208,15 +212,7 @@ async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn load_config_reconciled() -> Result<AriaConfig, Box<dyn std::error::Error>> {
-    let mut cfg = config::load_config()?;
-    if gateway_detect::reconcile_config_urls(&mut cfg).await {
-        config::save_config(&cfg)?;
-        eprintln!(
-            "updated region: cloud_url={} site_url={}",
-            cfg.cloud_url, cfg.site_url
-        );
-    }
-    Ok(cfg)
+    Ok(config::load_config()?)
 }
 
 async fn cmd_download(model: &str) -> Result<(), Box<dyn std::error::Error>> {
@@ -227,15 +223,13 @@ async fn cmd_download(model: &str) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 async fn cmd_list() -> Result<(), Box<dyn std::error::Error>> {
-    let cfg = load_config_reconciled().await?;
-    let models = download::list_models_with_catalog(&cfg).await?;
+    let models = download::list_models()?;
     if models.is_empty() {
-        println!("(no models in catalog)");
+        println!("(no local models under ~/.ariacompute/models)");
         return Ok(());
     }
-    let width = models.iter().map(|m| m.name.len()).max().unwrap_or(0);
     for m in &models {
-        println!("{:<width$}  {}", m.name, m.status, width = width);
+        println!("{m}");
     }
     Ok(())
 }
@@ -268,9 +262,7 @@ fn cmd_clean(model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
 async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut model = None;
     let mut bind = "127.0.0.1:8080".to_string();
-    let mut mode_override = None;
-    let mut exec_override = None;
-    let mut semantic_override = None;
+    let mut router_override = None;
     let mut compute_override = None;
     let mut profile = false;
     let mut i = 0;
@@ -280,29 +272,9 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 i += 1;
                 bind = args.get(i).cloned().ok_or("--bind requires host:port")?;
             }
-            "--hybrid-mode" => {
+            "--router" => {
                 i += 1;
-                mode_override = Some(
-                    args.get(i)
-                        .cloned()
-                        .ok_or("--hybrid-mode requires a value")?,
-                );
-            }
-            "--hybrid-execution" => {
-                i += 1;
-                exec_override = Some(
-                    args.get(i)
-                        .cloned()
-                        .ok_or("--hybrid-execution requires a value")?,
-                );
-            }
-            "--hybrid-semantic" => {
-                i += 1;
-                semantic_override = Some(
-                    args.get(i)
-                        .cloned()
-                        .ok_or("--hybrid-semantic requires on|off")?,
-                );
+                router_override = Some(args.get(i).cloned().ok_or("--router requires a URL")?);
             }
             "--compute" => {
                 i += 1;
@@ -331,58 +303,39 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let model_path = config::resolve_model_path(&model)?;
 
     let cfg = load_config_reconciled().await.unwrap_or_default();
-    let mode = parse_mode(mode_override.as_deref().unwrap_or(cfg.hybrid_mode.as_str()))?;
-    let execution = ExecutionMode::parse(
-        exec_override
-            .as_deref()
-            .unwrap_or(cfg.hybrid_execution.as_str()),
-    )?;
     let compute = ComputePref::parse(compute_override.as_deref().unwrap_or(cfg.compute.as_str()))?;
-    let semantic_enabled = match semantic_override.as_deref() {
-        Some("on") => true,
-        Some("off") => false,
-        Some(other) => {
-            return Err(format!("--hybrid-semantic must be on|off, got {other:?}").into());
-        }
-        None => cfg.hybrid_semantic,
-    };
-    let cloud_url = if cfg.cloud_url.is_empty() {
-        "https://gateway.ariacompute.com".to_string()
-    } else {
-        cfg.cloud_url.clone()
-    };
-    let router = Router::new()?.with_mode(mode).with_execution(execution);
-    let state = build_state_with_hybrid_opts(
+    let state = build_state_with_opts(
         model_path.to_str().ok_or("invalid model path")?,
-        router,
-        CloudClient::new(cloud_url, cfg.cloud_api_key.clone()),
         compute,
         profile,
-        HybridRoutingOpts {
-            semantic_enabled,
-            semantic_timeout_ms: cfg.hybrid_semantic_timeout_ms,
-            semantic_cache_size: cfg.hybrid_semantic_cache_size,
-        },
     )?;
-    let cloud_available = state.cloud.is_available();
+    let model_id = state.model_id.clone();
     let compute_label = state
         .session
         .lock()
         .map(|s| s.compute_label().to_string())
         .unwrap_or_else(|_| "unknown".into());
-    let effective = state
-        .router
-        .effective_routing(state.semantic_configured, cloud_available);
     let app = app(state);
     let addr: SocketAddr = bind.parse()?;
     let listener = tokio::net::TcpListener::bind(addr).await?;
+    let router_url = router_override
+        .filter(|s| !s.is_empty())
+        .or_else(|| {
+            if cfg.router.is_empty() {
+                None
+            } else {
+                Some(cfg.router.clone())
+            }
+        });
+    if let Some(url) = router_url {
+        eprintln!("registering provider {model_id} at {url}");
+        register_with_router(&url, &bind, &model_id)
+            .await
+            .map_err(|e| format!("{e}"))?;
+    }
     eprintln!(
-        "aria-openai listening on http://{addr} (model={} execution={} mode={} semantic={} cloud={} compute={})",
+        "aria-openai listening on http://{addr} (model={} compute={})",
         model_path.display(),
-        effective.execution.as_str(),
-        effective.mode_label(),
-        effective.semantic_label(),
-        cloud_available,
         compute_label
     );
     axum::serve(listener, app).await?;

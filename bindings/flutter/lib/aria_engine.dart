@@ -493,32 +493,19 @@ class AriaEngine {
 
   /// Set Config / Run fields on this instance only. Does not write config.yml.
   AriaEngine auth(
-      {String? cloudApiKey,
-      String? cloudUrl,
+      {String? router,
       String? siteUrl,
       String? upgradeUrl,
-      String? hybridMode,
-      String? hybridExecution,
-      bool? hybridSemantic,
-      int? hybridSemanticTimeoutMs,
-      int? hybridSemanticCacheSize,
       String? compute,
       String? hfToken,
       String? modelscopeApiToken}) {
     _cfg = applyAuth(_cfg,
-        cloudApiKey: cloudApiKey,
-        cloudUrl: cloudUrl,
+        router: router,
         siteUrl: siteUrl,
         upgradeUrl: upgradeUrl,
-        hybridMode: hybridMode,
-        hybridExecution: hybridExecution,
-        hybridSemantic: hybridSemantic,
-        hybridSemanticTimeoutMs: hybridSemanticTimeoutMs,
-        hybridSemanticCacheSize: hybridSemanticCacheSize,
         compute: compute,
         hfToken: hfToken,
-        modelscopeApiToken: modelscopeApiToken,
-        prefersCn: _prefersCn());
+        modelscopeApiToken: modelscopeApiToken);
     return this;
   }
 

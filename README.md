@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute inference engine: OpenAI-compatible API, Aria bundle inference, zero-copy graph, ARM NEON / scalar kernels, hybrid router.
+Aria Compute inference engine: OpenAI-compatible API, Aria bundle inference, zero-copy graph, ARM NEON / scalar kernels. Mixture-of-Models routing lives in the **router** repo (`aria-router`).
 
 ## Build / Test
 
@@ -13,20 +13,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Config / Run
 
-Credentials and hybrid prefs live in `~/.ariacompute/config.yml` (via `aria-engine auth`). 
+Credentials live in `~/.ariacompute/config.yml` (via `aria-engine auth`).
 
 | Field | Meaning | Default |
 |-------|---------|---------|
-| `cloud_api_key` | Hybrid Bearer key | _(empty → cloud errors)_ |
-| `cloud_url` | Gateway base URL (auto-detected from API key region) | — |
-| `site_url` | Site for downloads (same region as `cloud_url`) | — |
+| `router` | Optional aria-router management URL | _(empty → local-only serve)_ |
+| `site_url` | Site for hub region (`.com` / `.cn`) | — |
 | `upgrade_url` | Org root for CLI/FFI upgrades (`.com`→GitHub, `.cn`→Gitee) | — |
-| `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
-| `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
-| `hybrid_semantic` | Semantic routing layer switch (auto-off without cloud credentials) | `true` |
-| `hybrid_semantic_timeout_ms` | Semantic routing per-consult timeout | `800` |
-| `hybrid_semantic_cache_size` | Semantic decision cache capacity (TTL 60s) | `512` |
-| `compute` | `auto` / `cpu` / `cuda` (local GEMM; **not** a hybrid switch) | `auto` |
+| `compute` | `auto` / `cpu` / `cuda` (local GEMM) | `auto` |
 | `hf_token` | Hugging Face hub token (optional; `.com` gated files) | _(empty)_ |
 | `modelscope_api_token` | ModelScope hub token (optional; `.cn` gated files) | _(empty)_ |
 
@@ -48,28 +42,32 @@ aria-engine clean gemma-4-e2b-it_q4
 aria-engine upgrade
 aria-engine upgrade 0.7.2
 
-# Serve
+# Serve (local only)
 # or: serve /path/to/aria-bundle
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
-  --hybrid-mode balance \
-  --hybrid-execution hybrid \
+  --compute auto
+
+# Serve and register as a local provider on aria-router (process override; does not write config.yml)
+aria-engine serve gemma-4-e2b-it_q4 \
+  --bind 127.0.0.1:8080 \
+  --router http://127.0.0.1:8090 \
   --compute auto
 ```
 
 `download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless `aria-engine auth` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/config.yml`.
 
-`list` queries `{site_url}/api/dashboard/models` (requires `aria-engine auth`) and prints each downloadable bundle as `downloaded` / `not downloaded` (plus local-only caches).
+`list` scans local `~/.ariacompute/models` only.
 
 `check [model]` compares local file count, names, and SHA-256 against the regional hub (same source as `download`). Omit the model to check every cached bundle. Exit 1 on mismatch; `weight.bin` is hashed locally and compared to hub metadata (not re-downloaded).
 
-`serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`.
+`serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`. `--router URL` registers this process as a local provider on aria-router (does not write `config.yml`).
 
-`--hybrid-execution` only controls cloud handoff (`device` never leaves the box). `--compute auto|cpu|cuda` selects **local** GEMM: `auto` uses CUDA when `libcudart`/`libcublas` load and `cudaGetDeviceCount>0`, otherwise CPU (AVX2+FMA on x86_64, NEON on aarch64). `--compute cuda` **fails** if no NVIDIA device — it does not silently fall back. CUDA is runtime-loaded (no toolkit at compile time); on H200 you can still pass `--features cuda` as a documentation flag:
+`--compute auto|cpu|cuda` selects **local** GEMM: `auto` uses CUDA when `libcudart`/`libcublas` load and `cudaGetDeviceCount>0`, otherwise CPU (AVX2+FMA on x86_64, NEON on aarch64). `--compute cuda` **fails** if no NVIDIA device — it does not silently fall back. CUDA is runtime-loaded (no toolkit at compile time); on H200 you can still pass `--features cuda` as a documentation flag:
 
 ```bash
 cargo build -p aria-openai --release --features cuda
-aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profile
+aria-engine serve qwen3-0.6b_q4 --compute auto --profile
 ```
 
 `--profile` records load/generate timings. Read them with `GET /v1/engine/profile` or:
@@ -78,32 +76,54 @@ aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profi
 python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engine_profile_qwen3.json
 ```
 
-Routing is two orthogonal layers (local compute vs edge/cloud routing):
+`--compute auto|cpu|cuda` selects **local** GEMM. Mixture-of-Models / edge-cloud routing lives in the **router** repo (`aria-router`).
 
-```mermaid
-flowchart TD
-  req[ChatRequest]
-  exec{execution}
-  compute[compute auto cpu cuda]
-  local[Local decode]
-  cloud[Cloud handoff]
-  req --> exec
-  exec -->|device| local
-  exec -->|cloud| cloud
-  exec -->|hybrid| modeSem[mode plus semantic]
-  modeSem -->|Local| local
-  modeSem -->|CloudHandoff| cloud
-  local --> compute
-  cloud --> gw[gateway ariamodel]
+## Register with aria-router
+
+This process never routes. If `router` is set (config or `--router`), `serve` registers as a local provider before it accepts traffic:
+
+`PUT {router}/v1/router/providers` with `{name, endpoint, provider_model_id, locality}`. Failure **exits** (no silent local-only fallback). `--router` overrides `config.yml` for this process only.
+
+Use **different ports**: engine data (`--bind`) vs router management (`--mgmt-bind`, default `127.0.0.1:8080`). Clients then talk to the **router data plane**, not engine.
+
+```bash
+# 1. Router repo — data :8899, management :8090
+cd /path/to/router
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# 2. Engine repo — OpenAI on :8080, then PUT to management
+aria-engine serve gemma-4-e2b-it_q4 \
+  --bind 127.0.0.1:8080 \
+  --router http://127.0.0.1:8090 \
+  --compute auto
+
+# Persist the URL instead of passing --router each time:
+#   aria-engine auth  # optional router prompt
+#   # or in ~/.ariacompute/config.yml:
+#   # router: http://127.0.0.1:8090
+
+# 3. Chat via the gateway (concrete name = bypass; forwards to this engine)
+curl -s http://127.0.0.1:8899/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "gemma-4-e2b-it_q4",
+    "messages":[{"role":"user","content":"Hello"}],
+    "max_tokens": 32
+  }' | jq .
+
+# Semantic / agent entrypoints (aria/semantic-auto, aria/agent-auto) only
+# reach this engine if the YAML modelRefs / default_model use the same
+# registered name. Inspect the last hop:
+curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"gemma-4-e2b-it_q4","messages":[{"role":"user","content":"Hello"}]}' \
+  | grep -i x-aria-router
 ```
 
-**`compute` (`auto|cpu|cuda`) is not a hybrid switch** — it only selects GEMM for **local decode**. `execution=cloud` still loads the local bundle (privacy can fall back on-device), but a successful handoff does not use CUDA.
-
-**`execution` (`device|hybrid|cloud`)** chooses allowed backends: `device` never leaves the machine; `cloud` always handoffs (errors if unavailable; no silent local); `hybrid` picks Local vs Cloud using mode + semantic. **`mode` (`cost|balance|intelligence`) applies only under `hybrid`**: it sets the complexity cutoff and Chat policy. Cost consults the semantic layer for knowledge Chat; Balance/Intelligence send Chat straight to cloud (`rule:chat_prefer_cloud`, `model: "ariacompute/ariamodel"`). **`semantic` applies only when `execution=hybrid`, cloud credentials are present, and the switch is on.** Rules ask it for Agent / LongContext / complexity neighborhood / Cost Chat. Greetings, hard constraints, and Balance Chat-to-cloud skip it. `cloud_available=false` keeps hybrid traffic local (including Chat) and short-circuits semantic.
-
-Serve logs and `GET /v1/engine/routes` print the **effective** policy (`mode=unused` when not hybrid; `semantic=on|off|n/a` — `n/a` when the switch cannot fire). Include `FORCE_CLOUD` in the user message to force cloud (tests / demos). Client `max_tokens` is used as-is when set (local decode and cloud handoff). If omitted, local decode runs until stop or remaining context and cloud omits the field. Cloud handoff posts `model: "ariacompute/ariamodel"` to the gateway. HTTP wait cap is `DEFAULT_CLOUD_CHAT_TIMEOUT_MS` (**60s**, compile-time; not `hybrid_semantic_timeout_ms`). A full `ariamodel` reply with reasoning can take >25s.
-
-The slow path asks the cloud gateway for a structured JSON intent decision (`enable_thinking=false`, cached 60s, ≤800ms). Semantic disabled / timeout / failure silently falls back to the rule layer — never errors. Backend health scores (success/failure/timeout) feed a fallback flip; hard constraints (device/privacy) are never flipped. Inspect recent decisions and health via `GET /v1/engine/routes?n=20`; disable the semantic layer per process with `--hybrid-semantic off`.
+`x-aria-router-layer` is `bypass` for a registered bundle name, or `semantic` / `agent` for recipe entrypoints.
 
 ## OpenAI API
 
@@ -149,13 +169,13 @@ Use this pair when `/v1/chat/completions` looks like garbage (e.g. Hello → `"o
 
 | Script | What it isolates |
 |--------|------------------|
-| [`../model/scripts/diag_qwen3_chat.py`](../model/scripts/diag_qwen3_chat.py) | **Quant + template**: HF fp32 vs `reconstruct_weight` inject into the same HF graph |
+| [`model/scripts/diag_qwen3_chat.py`](https://github.com/ariacompute/model/tree/main/scripts/diag_qwen3_chat.py) | **Quant + template**: HF fp32 vs `reconstruct_weight` inject into the same HF graph |
 | [`scripts/diag_qwen3_chat.py`](scripts/diag_qwen3_chat.py) | **Engine graph**: this server vs the model JSON (`--peer-report`) |
 
 **1. Model teacher** (sibling `model` repo; GPU recommended; tokenizer from `--hf`, not the bundle):
 
 ```bash
-# from ../model
+# from model
 pip install torch transformers
 python scripts/diag_qwen3_chat.py \
   --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
@@ -168,18 +188,17 @@ python scripts/diag_qwen3_chat.py \
 
 Read `chat.fp32` vs `chat.reconstruct`, plus `template_string_match` / `prompt_ids_match`. A reconstruct greeting such as `"Hello! How can I assist you today?"` with `exact_prefix_len >= 4` means the **bundle is usable in HF**; leftover engine garbage is not a quant bug.
 
-**2. Engine** (serve the **same** bundle, no cloud handoff):
+**2. Engine** (serve the **same** bundle):
 
 ```bash
-# from this repo; keep --hybrid-execution device so hybrid cannot mask local decode
+# from this repo
 ./aria-engine serve qwen3-0.6b_q4 \
   --bind 127.0.0.1:8080 \
-  --hybrid-execution device \
   --compute auto --profile
 python scripts/diag_qwen3_chat.py \
   --url http://127.0.0.1:8080 \
   --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
-  --peer-report ../model/out/model_diag_qwen3.json \
+  --peer-report /path/to/model/out/model_diag_qwen3.json \
   --report ./out/engine_diag_qwen3.json
 ```
 
@@ -193,7 +212,7 @@ python scripts/diag_qwen3_chat.py \
 | reconstruct greedy already diverges from fp32 (`QUANT:…`) | codebook / Hadamard / inject |
 | reconstruct chat looks ok, engine `content` does not (`ENGINE_GRAPH`) | Rust forward (HDM, embed row gather, RoPE, QK-norm, …) |
 
-Teacher for the engine is **HF + reconstruct inject**, not raw fp32. More detail: [`../model/README.md`](../model/README.md) (Quality audit).
+Teacher for the engine is **HF + reconstruct inject**, not raw fp32.
 
 ## Gemma-4 chat diagnostic
 
@@ -201,13 +220,13 @@ Use this pair when `gemma-4-e2b-it_q4` `/v1/chat/completions` is garbage (engine
 
 | Script | What it isolates |
 |--------|------------------|
-| [`../model/scripts/diag_gemma4_chat.py`](../model/scripts/diag_gemma4_chat.py) | **Quant + template**: HF fp32 vs `reconstruct_weight` inject into the same HF graph |
+| [`model/scripts/diag_gemma4_chat.py`](https://github.com/ariacompute/model/tree/main/scripts/diag_gemma4_chat.py) | **Quant + template**: HF fp32 vs `reconstruct_weight` inject into the same HF graph |
 | [`scripts/diag_gemma4_chat.py`](scripts/diag_gemma4_chat.py) | **Engine graph**: this server vs the model JSON (`--peer-report`) |
 
 **1. Model teacher** (sibling `model` repo; GPU recommended):
 
 ```bash
-# from ../model
+# from model
 pip install torch transformers
 python scripts/diag_gemma4_chat.py \
   --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \
@@ -216,18 +235,17 @@ python scripts/diag_gemma4_chat.py \
   --report ./out/model_diag_gemma4.json
 ```
 
-**2. Engine** (serve the **same** bundle, no cloud handoff):
+**2. Engine** (serve the **same** bundle):
 
 ```bash
-# from this repo; keep --hybrid-execution device so hybrid cannot mask local decode
+# from this repo
 ./aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
-  --hybrid-execution device \
   --compute auto --profile
 python scripts/diag_gemma4_chat.py \
   --url http://127.0.0.1:8080 \
   --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \
-  --peer-report ../model/out/model_diag_gemma4.json \
+  --peer-report /path/to/model/out/model_diag_gemma4.json \
   --report ./out/engine_diag_gemma4.json
 ```
 

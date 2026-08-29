@@ -10,7 +10,7 @@ mod download;
 mod auth;
 pub use download::{download_model, download_model_auth, ensure_ffi_lib, DownloadError};
 pub use auth::{
-    apply_auth, fill_auth_urls, AuthConfig, AuthError, AuthUpdates, CN_CLOUD, CN_SITE, CN_UPGRADE,
+    apply_auth, fill_auth_urls, AuthConfig, AuthError, AuthUpdates, CN_SITE, CN_UPGRADE,
 };
 
 /// Options controlling model auto-download from the regional public hub.
@@ -231,26 +231,16 @@ mod tests {
     fn auth_instance_all_fields() {
         let mut eng = Engine::new();
         eng.auth(&AuthUpdates {
-            cloud_api_key: Some("sk-test".into()),
-            cloud_url: Some(CN_CLOUD.into()),
+            router: Some("http://127.0.0.1:8080".into()),
             site_url: Some(crate::auth::CN_SITE.into()),
             upgrade_url: Some(crate::auth::CN_UPGRADE.into()),
-            hybrid_mode: Some("cost".into()),
-            hybrid_execution: Some("device".into()),
-            hybrid_semantic: Some(false),
-            hybrid_semantic_timeout_ms: Some(250),
-            hybrid_semantic_cache_size: Some(16),
             compute: Some("cpu".into()),
             hf_token: Some("hf_abc".into()),
             modelscope_api_token: Some("ms_xyz".into()),
         })
         .unwrap();
         let st = eng.auth_status();
-        assert_eq!(st.cloud_api_key, "sk-test");
-        assert_eq!(st.hybrid_mode, "cost");
-        assert_eq!(st.hybrid_execution, "device");
-        assert!(!st.hybrid_semantic);
-        assert_eq!(st.hybrid_semantic_timeout_ms, 250);
+        assert_eq!(st.router, "http://127.0.0.1:8080");
         assert_eq!(st.compute, "cpu");
         assert_eq!(st.hf_token, "hf_abc");
         assert_eq!(st.modelscope_api_token, "ms_xyz");
@@ -262,7 +252,7 @@ mod tests {
         let mut eng = Engine::new();
         eng.auth(&AuthUpdates {
             hf_token: Some("hf_one".into()),
-            hybrid_mode: Some("intelligence".into()),
+            router: Some("http://127.0.0.1:1".into()),
             ..Default::default()
         })
         .unwrap();
@@ -273,7 +263,7 @@ mod tests {
         .unwrap();
         let st = eng.auth_status();
         assert_eq!(st.hf_token, "hf_one");
-        assert_eq!(st.hybrid_mode, "intelligence");
+        assert_eq!(st.router, "http://127.0.0.1:1");
         assert_eq!(st.compute, "cuda");
     }
 
@@ -281,17 +271,17 @@ mod tests {
     fn auth_invalid_enum_leaves_state() {
         let mut eng = Engine::new();
         eng.auth(&AuthUpdates {
-            hybrid_mode: Some("cost".into()),
+            compute: Some("cpu".into()),
             ..Default::default()
         })
         .unwrap();
         assert!(eng
             .auth(&AuthUpdates {
-                hybrid_mode: Some("nope".into()),
+                compute: Some("gpu".into()),
                 ..Default::default()
             })
             .is_err());
-        assert_eq!(eng.auth_status().hybrid_mode, "cost");
+        assert_eq!(eng.auth_status().compute, "cpu");
     }
 
     #[test]
@@ -299,14 +289,14 @@ mod tests {
         let mut eng = Engine::new();
         eng.auth(&AuthUpdates {
             hf_token: Some("hf_x".into()),
-            hybrid_mode: Some("cost".into()),
+            compute: Some("cpu".into()),
             ..Default::default()
         })
         .unwrap();
         eng.auth_clear();
         let st = eng.auth_status();
         assert_eq!(st.hf_token, "");
-        assert_eq!(st.hybrid_mode, "balance");
+        assert_eq!(st.compute, "auto");
     }
 
     #[test]
@@ -318,7 +308,6 @@ mod tests {
         })
         .unwrap();
         let st = eng.auth_status();
-        assert_eq!(st.cloud_url, CN_CLOUD);
         assert_eq!(st.upgrade_url, crate::auth::CN_UPGRADE);
     }
 
@@ -329,7 +318,7 @@ mod tests {
         std::env::set_var("ARIA_COMPUTE_HOME", home.path());
         let mut eng = Engine::new();
         eng.auth(&AuthUpdates {
-            cloud_api_key: Some("sk-test".into()),
+            router: Some("http://127.0.0.1:8080".into()),
             site_url: Some("https://ariacompute.com".into()),
             hf_token: Some("hf_x".into()),
             ..Default::default()
@@ -337,21 +326,5 @@ mod tests {
         .unwrap();
         assert!(!home.path().join("config.yml").is_file());
         std::env::remove_var("ARIA_COMPUTE_HOME");
-    }
-
-    #[test]
-    fn auth_detect_urls_from_key_mocked() {
-        crate::auth::set_probe_dashboard(|site, _key| site.contains("ariacompute.cn"));
-        let mut eng = Engine::new();
-        let result = eng.auth(&AuthUpdates {
-            cloud_api_key: Some("sk-region".into()),
-            ..Default::default()
-        });
-        crate::auth::reset_probe_dashboard();
-        result.unwrap();
-        let st = eng.auth_status();
-        assert_eq!(st.site_url, crate::auth::CN_SITE);
-        assert_eq!(st.cloud_url, CN_CLOUD);
-        assert_eq!(st.upgrade_url, crate::auth::CN_UPGRADE);
     }
 }

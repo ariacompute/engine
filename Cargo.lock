@@ -41,21 +41,9 @@ dependencies = [
 ]
 
 [[package]]
-name = "aria-hybrid"
-version = "0.1.0"
-dependencies = [
- "ariacompute-kernel",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
-]
-
-[[package]]
 name = "aria-openai"
 version = "0.1.0"
 dependencies = [
- "aria-hybrid",
  "ariacompute-inference",
  "ariacompute-kernel",
  "axum",

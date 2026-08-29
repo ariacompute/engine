@@ -65,43 +65,10 @@ pub async fn detect_gateway_and_site(api_key: &str) -> GatewayPair {
     detect_by_locale_and_probe().await
 }
 
-/// If config URLs are mismatched or the key is rejected by the configured site,
-/// rewrite to the pair that accepts the key (or the consistent locale fallback).
-/// Returns `true` when `cloud_url` / `site_url` / `upgrade_url` changed.
-pub async fn reconcile_config_urls(cfg: &mut crate::config::AriaConfig) -> bool {
-    if cfg.cloud_api_key.trim().is_empty() {
-        return false;
-    }
-    let before_cloud = cfg.cloud_url.clone();
-    let before_site = cfg.site_url.clone();
-    let before_upgrade = cfg.upgrade_url.clone();
-
-    let site_pair = GatewayPair::from_url(&cfg.site_url);
-    let cloud_pair = GatewayPair::from_url(&cfg.cloud_url);
-    let matched = match (site_pair, cloud_pair) {
-        (Some(s), Some(c)) if s == c => Some(s),
-        _ => None,
-    };
-
-    if let Some(pair) = matched {
-        let (ok, _) = probe_key_on_site(pair.site_url, cfg.cloud_api_key.trim()).await;
-        if ok {
-            cfg.cloud_url = pair.cloud_url.to_string();
-            cfg.site_url = pair.site_url.to_string();
-            cfg.upgrade_url = pair.upgrade_url().to_string();
-            return cfg.cloud_url != before_cloud
-                || cfg.site_url != before_site
-                || cfg.upgrade_url != before_upgrade;
-        }
-    }
-
-    let pair = detect_gateway_and_site(&cfg.cloud_api_key).await;
-    cfg.cloud_url = pair.cloud_url.to_string();
-    cfg.site_url = pair.site_url.to_string();
-    cfg.upgrade_url = pair.upgrade_url().to_string();
-    cfg.cloud_url != before_cloud
-        || cfg.site_url != before_site
-        || cfg.upgrade_url != before_upgrade
+/// If config URLs are mismatched, this used to probe Dashboard with an API key.
+/// Cloud credentials are gone; this is a no-op kept for API stability.
+pub async fn reconcile_config_urls(_cfg: &mut crate::config::AriaConfig) -> bool {
+    false
 }
 
 async fn detect_by_api_key(api_key: &str) -> Option<GatewayPair> {

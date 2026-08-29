@@ -4,6 +4,7 @@ use crate::config::{self, AriaConfig};
 use crate::gateway_detect::GatewayPair;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
+#[cfg(test)]
 use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
@@ -334,7 +335,7 @@ fn hub_token_field(source: DownloadSource) -> &'static str {
     match source {
         DownloadSource::HuggingFace => "hf_token",
         DownloadSource::ModelScope => "modelscope_api_token",
-        DownloadSource::Dashboard => "cloud_api_key",
+        DownloadSource::Dashboard => "hf_token",
     }
 }
 
@@ -443,6 +444,7 @@ pub struct ListedModel {
 }
 
 #[derive(Debug, Deserialize)]
+#[cfg(test)]
 struct CatalogModel {
     slug: String,
     #[serde(default)]
@@ -455,24 +457,24 @@ struct CatalogModel {
     int326_download_url: String,
 }
 
-const CATALOG_TIMEOUT: Duration = Duration::from_secs(15);
-
-/// Fetch Dashboard catalog and merge with local `~/.ariacompute/models` status.
-pub async fn list_models_with_catalog(cfg: &AriaConfig) -> io::Result<Vec<ListedModel>> {
-    if cfg.site_url.trim().is_empty() || cfg.cloud_api_key.trim().is_empty() {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "list requires site_url and cloud_api_key; run `aria-engine auth`",
-        ));
-    }
-    let catalog = fetch_dashboard_catalog(cfg).await?;
+/// Local-only listing (catalog / Dashboard removed).
+pub async fn list_models_with_catalog(_cfg: &AriaConfig) -> io::Result<Vec<ListedModel>> {
     let local = local_model_status()?;
-    Ok(merge_catalog_and_local(
-        expand_catalog_bundles(&catalog),
-        local,
-    ))
+    let mut rows: Vec<ListedModel> = local
+        .into_iter()
+        .map(|(name, st)| ListedModel {
+            name,
+            status: match st {
+                LocalStatus::Valid => "downloaded".into(),
+                LocalStatus::Incomplete => "incomplete".into(),
+            },
+        })
+        .collect();
+    rows.sort_by(|a, b| a.name.cmp(&b.name));
+    Ok(rows)
 }
 
+#[cfg(test)]
 fn merge_catalog_and_local(
     catalog_bundles: Vec<String>,
     local: std::collections::HashMap<String, LocalStatus>,
@@ -510,6 +512,7 @@ fn merge_catalog_and_local(
     rows
 }
 
+#[cfg(test)]
 fn lookup_local_status(
     local: &std::collections::HashMap<String, LocalStatus>,
     catalog_name: &str,
@@ -528,6 +531,7 @@ fn lookup_local_status(
     incomplete
 }
 
+#[cfg(test)]
 fn covered_by_catalog(name: &str, seen: &std::collections::HashSet<String>) -> bool {
     seen.contains(name)
         || config::bundle_cache_aliases(name)
@@ -535,6 +539,7 @@ fn covered_by_catalog(name: &str, seen: &std::collections::HashSet<String>) -> b
             .any(|alias| seen.contains(alias))
 }
 
+#[cfg(test)]
 fn expand_catalog_bundles(catalog: &[CatalogModel]) -> Vec<String> {
     let mut names = Vec::new();
     for item in catalog {
@@ -558,39 +563,6 @@ fn expand_catalog_bundles(catalog: &[CatalogModel]) -> Vec<String> {
     names.sort();
     names.dedup();
     names
-}
-
-async fn fetch_dashboard_catalog(cfg: &AriaConfig) -> io::Result<Vec<CatalogModel>> {
-    let base = cfg.site_url.trim_end_matches('/');
-    let url = format!("{base}/api/dashboard/models");
-    let client = http_client(CATALOG_TIMEOUT).map_err(io_err)?;
-    let resp = client
-        .get(&url)
-        .bearer_auth(&cfg.cloud_api_key)
-        .header("Accept", "application/json")
-        .send()
-        .await
-        .map_err(|e| {
-            io::Error::new(
-                io::ErrorKind::NotConnected,
-                format!("catalog fetch failed ({e}); check site_url / network or re-run `aria-engine auth`"),
-            )
-        })?;
-    if !resp.status().is_success() {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            format!(
-                "catalog HTTP {}; check cloud_api_key or re-run `aria-engine auth`",
-                resp.status()
-            ),
-        ));
-    }
-    resp.json::<Vec<CatalogModel>>().await.map_err(|e| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("catalog JSON parse failed: {e}"),
-        )
-    })
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -826,5 +798,14 @@ mod tests {
         assert_eq!(rows[0].status, "downloaded");
         assert_eq!(rows[1].name, "local-only_q4");
         assert_eq!(rows[1].status, "downloaded");
+    }
+
+    #[tokio::test]
+    async fn list_models_with_catalog_is_local_only() {
+        let rows = list_models_with_catalog(&AriaConfig::default())
+            .await
+            .unwrap();
+        let names = list_models().unwrap();
+        assert_eq!(rows.len(), names.len());
     }
 }

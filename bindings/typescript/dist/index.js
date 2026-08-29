@@ -33,10 +33,9 @@ var __importStar = (this && this.__importStar) || (function () {
     };
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
-exports._internal = exports.Engine = exports.authHooks = exports.CN_UPGRADE = exports.CN_SITE = exports.CN_CLOUD = exports.INTL_UPGRADE = exports.INTL_SITE = exports.INTL_CLOUD = void 0;
+exports._internal = exports.Engine = exports.CN_UPGRADE = exports.CN_SITE = exports.INTL_UPGRADE = exports.INTL_SITE = void 0;
 exports.defaultAuthConfig = defaultAuthConfig;
 exports.fillAuthUrls = fillAuthUrls;
-exports.detectGatewayPair = detectGatewayPair;
 exports.applyAuth = applyAuth;
 exports.parseBundleName = parseBundleName;
 exports.preferredPublicHub = preferredPublicHub;
@@ -60,23 +59,15 @@ const promises_1 = require("node:stream/promises");
 const node_stream_1 = require("node:stream");
 const zlib = __importStar(require("node:zlib"));
 const DEFAULT_SITE = "https://ariacompute.com";
-exports.INTL_CLOUD = "https://gateway.ariacompute.com";
 exports.INTL_SITE = "https://ariacompute.com";
 exports.INTL_UPGRADE = "https://github.com/ariacompute";
-exports.CN_CLOUD = "https://gateway.ariacompute.cn";
 exports.CN_SITE = "https://ariacompute.cn";
 exports.CN_UPGRADE = "https://gitee.com/ariacompute";
 function defaultAuthConfig() {
     return {
-        cloud_api_key: "",
-        cloud_url: "",
+        router: "",
         site_url: "",
         upgrade_url: "",
-        hybrid_mode: "balance",
-        hybrid_execution: "hybrid",
-        hybrid_semantic: true,
-        hybrid_semantic_timeout_ms: 800,
-        hybrid_semantic_cache_size: 512,
         compute: "auto",
         hf_token: "",
         modelscope_api_token: "",
@@ -91,49 +82,19 @@ function gatewayRegion(url) {
     return undefined;
 }
 function pairUrls(region) {
-    return region === "cn" ? [exports.CN_CLOUD, exports.CN_SITE, exports.CN_UPGRADE] : [exports.INTL_CLOUD, exports.INTL_SITE, exports.INTL_UPGRADE];
+    return region === "cn" ? [exports.CN_SITE, exports.CN_UPGRADE] : [exports.INTL_SITE, exports.INTL_UPGRADE];
 }
 function fillAuthUrls(cfg) {
     const out = { ...cfg };
-    const region = gatewayRegion(out.site_url) || gatewayRegion(out.cloud_url) || gatewayRegion(out.upgrade_url);
+    const region = gatewayRegion(out.site_url) || gatewayRegion(out.upgrade_url);
     if (!region)
         return out;
-    const [cloud, site, upgrade] = pairUrls(region);
-    if (!out.cloud_url)
-        out.cloud_url = cloud;
+    const [site, upgrade] = pairUrls(region);
     if (!out.site_url)
         out.site_url = site;
     if (!out.upgrade_url)
         out.upgrade_url = upgrade;
     return out;
-}
-function localePrefersCn() {
-    const lang = `${process.env.LANG || ""}${process.env.LC_ALL || ""}`.toLowerCase();
-    return lang.includes("zh") || lang.includes(".cn") || lang.startsWith("cn");
-}
-function defaultProbeDashboard(siteUrl, apiKey) {
-    const url = `${(siteUrl || "").replace(/\/$/, "")}/api/dashboard/models`;
-    const script = 'fetch(process.env.ARIA_PROBE_URL,{headers:{"User-Agent":"aria-engine-sdk/0.1.0","Authorization":"Bearer "+process.env.ARIA_PROBE_KEY},redirect:"follow"}).then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))';
-    const r = (0, node_child_process_1.spawnSync)(process.execPath, ["-e", script], {
-        env: { ...process.env, ARIA_PROBE_URL: url, ARIA_PROBE_KEY: apiKey },
-        timeout: 10000,
-    });
-    return r.status === 0;
-}
-/** Replace `authHooks.probeDashboard` in tests to avoid a real Dashboard probe. */
-exports.authHooks = {
-    probeDashboard: defaultProbeDashboard,
-};
-function detectGatewayPair(apiKey) {
-    const key = (apiKey || "").trim();
-    const first = localePrefersCn() ? "cn" : "intl";
-    const second = first === "cn" ? "intl" : "cn";
-    for (const region of [first, second]) {
-        const [cloud, site, upgrade] = pairUrls(region);
-        if (key && exports.authHooks.probeDashboard(site, key))
-            return [cloud, site, upgrade];
-    }
-    return pairUrls(first);
 }
 function applyAuth(existing, updates) {
     const out = { ...existing };
@@ -142,44 +103,10 @@ function applyAuth(existing, updates) {
             continue;
         out[k] = v;
     }
-    if (!["cost", "balance", "intelligence"].includes(out.hybrid_mode)) {
-        throw new Error(`invalid hybrid_mode: ${out.hybrid_mode}`);
-    }
-    if (!["hybrid", "device", "cloud"].includes(out.hybrid_execution)) {
-        throw new Error(`invalid hybrid_execution: ${out.hybrid_execution}`);
-    }
     if (!["auto", "cpu", "cuda"].includes(out.compute)) {
         throw new Error(`invalid compute: ${out.compute}`);
     }
-    const timeout = Number(out.hybrid_semantic_timeout_ms);
-    const cache = Number(out.hybrid_semantic_cache_size);
-    if (!Number.isInteger(timeout) || !Number.isInteger(cache) || timeout <= 0 || cache <= 0) {
-        throw new Error("hybrid_semantic_timeout_ms / cache_size must be positive integers");
-    }
-    out.hybrid_semantic = Boolean(out.hybrid_semantic);
-    out.hybrid_semantic_timeout_ms = timeout;
-    out.hybrid_semantic_cache_size = cache;
-    for (const key of [
-        "cloud_api_key",
-        "cloud_url",
-        "site_url",
-        "upgrade_url",
-        "hf_token",
-        "modelscope_api_token",
-    ]) {
-        out[key] = out[key] == null ? "" : String(out[key]);
-    }
-    const filled = fillAuthUrls(out);
-    if (filled.cloud_api_key && !(filled.cloud_url && filled.site_url && filled.upgrade_url)) {
-        const [cloud, site, upgrade] = detectGatewayPair(filled.cloud_api_key);
-        if (!filled.cloud_url)
-            filled.cloud_url = cloud;
-        if (!filled.site_url)
-            filled.site_url = site;
-        if (!filled.upgrade_url)
-            filled.upgrade_url = upgrade;
-    }
-    return filled;
+    return fillAuthUrls(out);
 }
 const DEFAULT_SDK = "v1.0";
 const HUB_REQUIRED = ["config.json", "weight.bin"];

@@ -4,7 +4,6 @@ members = [
     "kernel",
     "graph",
     "inference",
-    "hybrid",
     "openai",
     "ffi",
     "bindings/rust",
@@ -38,5 +37,4 @@ tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
 ariacompute-kernel = { path = "kernel", version = "0.1.0" }
 ariacompute-graph = { path = "graph", version = "0.1.0" }
 ariacompute-inference = { path = "inference", version = "0.1.0" }
-aria-hybrid = { path = "hybrid", version = "0.1.0" }
 ariacompute-ffi = { path = "ffi", version = "0.1.0" }

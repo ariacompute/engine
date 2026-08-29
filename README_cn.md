@@ -2,7 +2,7 @@
 
 [English](README.md) | [中文](README_cn.md)
 
-Aria Compute 推理引擎：OpenAI 兼容 API、Aria bundle 推理、零拷贝计算图、ARM NEON / scalar 内核、Hybrid 路由。
+Aria Compute 推理引擎：OpenAI 兼容 API、Aria bundle 推理、零拷贝计算图、ARM NEON / scalar 内核。端云 / Mixture-of-Models 路由在独立 **router** 仓。
 
 ## 构建 / 测试
 
@@ -13,22 +13,16 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## 配置 / 运行
 
-凭证与 hybrid 偏好保存在 `~/.ariacompute/config.yml`（通过 `aria-engine auth` 写入）。
+凭证保存在 `~/.ariacompute/config.yml`（通过 `aria-engine auth` 写入）。
 
 | 字段 | 含义 | 默认 |
 |------|------|------|
-| `cloud_api_key` | Hybrid Bearer 密钥 | _(空 → 云调用报错)_ |
-| `cloud_url` | Gateway base URL（由 API key 所属区域自动探测） | — |
-| `site_url` | 下载用站点（与 `cloud_url` 同区） | — |
-| `upgrade_url` | CLI/FFI 升级组织根（`.com`→GitHub，`.cn`→Gitee） | — |
-| `hybrid_mode` | `cost` / `balance` / `intelligence` | `balance` |
-| `hybrid_execution` | `hybrid` / `device` / `cloud` | `hybrid` |
-| `hybrid_semantic` | 语义路由层开关（无云凭证时自动短路） | `true` |
-| `hybrid_semantic_timeout_ms` | 语义路由单次调用超时 | `800` |
-| `hybrid_semantic_cache_size` | 语义决策缓存容量（TTL 60s） | `512` |
-| `compute` | `auto` / `cpu` / `cuda`（本机 GEMM；**不是** hybrid 开关） | `auto` |
-| `hf_token` | Hugging Face hub token（可选；`.com` 需授权文件） | _(空)_ |
-| `modelscope_api_token` | ModelScope hub token（可选；`.cn` 需授权文件） | _(空)_ |
+| `router` | 可选 aria-router 管理面 URL | _(空 → 纯本地 serve)_ |
+| `site_url` | 站点（`.com` / `.cn`），用于 hub 分区 | — |
+| `upgrade_url` | 组织根（`.com`→GitHub，`.cn`→Gitee） | — |
+| `compute` | `auto` / `cpu` / `cuda`（本机 GEMM） | `auto` |
+| `hf_token` | Hugging Face hub token（可选） | _(空)_ |
+| `modelscope_api_token` | ModelScope hub token（可选） | _(空)_ |
 
 ```bash
 # 认证
@@ -48,28 +42,32 @@ aria-engine clean gemma-4-e2b-it_q4
 aria-engine upgrade
 aria-engine upgrade 0.7.2
 
-# 服务
+# 服务（纯本地）
 # 或：serve /path/to/aria-bundle
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
-  --hybrid-mode balance \
-  --hybrid-execution hybrid \
+  --compute auto
+
+# 服务并向 aria-router 注册为本地 provider（仅覆盖本进程，不写 config.yml）
+aria-engine serve gemma-4-e2b-it_q4 \
+  --bind 127.0.0.1:8080 \
+  --router http://127.0.0.1:8090 \
   --compute auto
 ```
 
 `download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `aria-engine auth` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/config.yml`。
 
-`list` 查询 `{site_url}/api/dashboard/models`（需先 `aria-engine auth`），按可下载 bundle 列出并标记 `downloaded` / `not downloaded`（另附仅本地缓存项）。
+`list` 只扫描本地 `~/.ariacompute/models`。
 
 `check [model]` 对照本区 hub（与 `download` 相同）校验本地文件数目、文件名与 SHA-256；省略 model 则检查全部缓存。不一致 exit 1；`weight.bin` 只在本地哈希并与 hub 元数据比对，不重新下载。
 
-`serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。
+`serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。`--router URL` 向 aria-router 注册本进程为本地 provider（不写 `config.yml`）。
 
-`--hybrid-execution` 只控制云 handoff（`device` 永不离机）。`--compute auto|cpu|cuda` 选择**本机** GEMM：`auto` 在能加载 `libcudart`/`libcublas` 且 `cudaGetDeviceCount>0` 时用 CUDA，否则 CPU（x86_64 AVX2+FMA，aarch64 NEON）。`--compute cuda` 在无 NVIDIA 设备时**硬失败**，不会静默降到 CPU。CUDA 为运行时 libloading（编译不依赖 CUDA toolkit）；H200 上仍可用 `--features cuda` 作为文档旗标：
+`--compute auto|cpu|cuda` 选择**本机** GEMM：`auto` 在能加载 `libcudart`/`libcublas` 且 `cudaGetDeviceCount>0` 时用 CUDA，否则 CPU（x86_64 AVX2+FMA，aarch64 NEON）。`--compute cuda` 在无 NVIDIA 设备时**硬失败**，不会静默降到 CPU。CUDA 为运行时 libloading（编译不依赖 CUDA toolkit）；H200 上仍可用 `--features cuda` 作为文档旗标：
 
 ```bash
 cargo build -p aria-openai --release --features cuda
-aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profile
+aria-engine serve qwen3-0.6b_q4 --compute auto --profile
 ```
 
 `--profile` 记录加载/生成分段计时。用 `GET /v1/engine/profile` 读取，或：
@@ -78,32 +76,53 @@ aria-engine serve qwen3-0.6b_q4 --hybrid-execution device --compute auto --profi
 python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engine_profile_qwen3.json
 ```
 
-路由是两层正交轴（本机算力 vs 端云路由）：
+`--compute auto|cpu|cuda` 只决定本机 GEMM。端云 / Mixture-of-Models 路由在独立 **router** 仓。
 
-```mermaid
-flowchart TD
-  req[聊天请求]
-  exec{execution}
-  compute[compute auto cpu cuda]
-  local[本地 decode]
-  cloud[云端 handoff]
-  req --> exec
-  exec -->|device| local
-  exec -->|cloud| cloud
-  exec -->|hybrid| modeSem[mode plus semantic]
-  modeSem -->|Local| local
-  modeSem -->|CloudHandoff| cloud
-  local --> compute
-  cloud --> gw[gateway ariamodel]
+## 向 aria-router 注册
+
+本进程不做路由。若配置了 `router`（`config.yml` 或 `--router`），`serve` 在接受请求前向网关注册为本地 provider：
+
+`PUT {router}/v1/router/providers`，body 为 `{name, endpoint, provider_model_id, locality}`。失败则 **退出**（不会静默改成纯本地）。`--router` 只覆盖本进程，不回写 `config.yml`。
+
+端口不要撞车：engine 数据面（`--bind`）与 router 管理面（`--mgmt-bind`，默认 `127.0.0.1:8080`）。客户端应打 **router 数据面**，而不是 engine。
+
+```bash
+# 1. Router 仓 — 数据面 :8899，管理面 :8090
+cd /path/to/router
+cargo run -p aria-router -- serve \
+  --config config/examples/semantic-tiny.yaml \
+  --bind 127.0.0.1:8899 \
+  --mgmt-bind 127.0.0.1:8090
+
+# 2. Engine 仓 — OpenAI 在 :8080，再 PUT 到管理面
+aria-engine serve gemma-4-e2b-it_q4 \
+  --bind 127.0.0.1:8080 \
+  --router http://127.0.0.1:8090 \
+  --compute auto
+
+# 也可写入配置，不必每次带 --router：
+#   aria-engine auth  # 可选填写 router URL
+#   # 或 ~/.ariacompute/config.yml：
+#   # router: http://127.0.0.1:8090
+
+# 3. 经网关对话（实名 = bypass，转发到本 engine）
+curl -s http://127.0.0.1:8899/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{
+    "model": "gemma-4-e2b-it_q4",
+    "messages":[{"role":"user","content":"Hello"}],
+    "max_tokens": 32
+  }' | jq .
+
+# aria/semantic-auto、aria/agent-auto 只有在 YAML 的 modelRefs /
+# default_model 写成同一注册名时才会打到本 engine。看上一跳：
+curl -sD - -o /dev/null http://127.0.0.1:8899/v1/chat/completions \
+  -H 'content-type: application/json' \
+  -d '{"model":"gemma-4-e2b-it_q4","messages":[{"role":"user","content":"Hello"}]}' \
+  | grep -i x-aria-router
 ```
 
-**`compute`（`auto|cpu|cuda`）不是 hybrid 开关**——只决定 **本地 decode** 的 GEMM。`execution=cloud` 时仍加载本地 bundle（隐私硬约束会回本地），成功 handoff 不走 CUDA。
-
-**`execution`（`device|hybrid|cloud`）** 决定允许的后端：`device` 永不离机；`cloud` 始终 handoff（不可用则报错，不静默本地）；`hybrid` 按 mode + semantic 在 Local / Cloud 之间选择。**`mode`（`cost|balance|intelligence`）仅在 `hybrid` 下生效**：调节复杂度 cutoff 与 Chat 策略。Cost 的知识类 Chat 咨询语义层；Balance/Intelligence 的 Chat 规则直云（`rule:chat_prefer_cloud`，`model: "ariacompute/ariamodel"`）。**`semantic` 仅在 `execution=hybrid`、有云凭证且开关 on 时生效。** 规则只对 Agent / 长上下文 / 复杂度邻域 / Cost 的 Chat 提问。问候、硬约束、Balance Chat 直云都不问。`cloud_available=false` 时 hybrid 全部留本地（含 Chat），semantic 短路。
-
-serve 日志与 `GET /v1/engine/routes` 打印**生效**策略（非 hybrid 时 `mode=unused`；`semantic=on|off|n/a`——开关无法开火时为 `n/a`）。用户消息包含 `FORCE_CLOUD` 可强制走云端（测试 / 演示）。客户端设置了 `max_tokens` 则本地 decode 与云端 handoff 都原样使用；未设置时本地跑到 stop 或剩余 context，云端省略该字段。云端 handoff 的 `model` 固定为 `ariacompute/ariamodel`。HTTP 等待上限为 `DEFAULT_CLOUD_CHAT_TIMEOUT_MS`（**60s**，编译期常量；不是 `hybrid_semantic_timeout_ms`）。带 reasoning 的完整 `ariamodel` 回复可能超过 25s。
-
-语义慢路径经云网关获取结构化 JSON 意图决策（`enable_thinking=false`、缓存 60s、单次 ≤800ms）。语义层关闭 / 超时 / 失败时静默回退规则层，不报错。后端健康分（成功 / 失败 / 超时）驱动回退翻转；硬约束（device / 隐私）永不翻转。经 `GET /v1/engine/routes?n=20` 查看最近决策与健康分；`--hybrid-semantic off` 可按进程关闭语义层。
+`x-aria-router-layer`：已注册 bundle 名为 `bypass`；走 recipe 入口则为 `semantic` 或 `agent`。
 
 ## OpenAI API
 
@@ -149,13 +168,13 @@ curl -s http://127.0.0.1:8080/v1/audio/transcriptions \
 
 | 脚本 | 隔离什么 |
 |------|----------|
-| [`../model/scripts/diag_qwen3_chat.py`](../model/scripts/diag_qwen3_chat.py) | **量化 + 模板**：HF fp32 vs 把 `reconstruct_weight` 注入同一张 HF 图 |
+| [`model/scripts/diag_qwen3_chat.py`](https://github.com/ariacompute/model/tree/main/scripts/diag_qwen3_chat.py) | **量化 + 模板**：HF fp32 vs 把 `reconstruct_weight` 注入同一张 HF 图 |
 | [`scripts/diag_qwen3_chat.py`](scripts/diag_qwen3_chat.py) | **引擎图**：本服务 vs model 侧 JSON（`--peer-report`） |
 
 **1. model 教师**（并列的 `model` 仓库；建议 GPU；tokenizer 从 `--hf` 加载，不用 bundle 里的）：
 
 ```bash
-# 在 ../model
+# 在 model
 pip install torch transformers
 python scripts/diag_qwen3_chat.py \
   --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
@@ -168,18 +187,17 @@ python scripts/diag_qwen3_chat.py \
 
 对照 `chat.fp32` 与 `chat.reconstruct`，以及 `template_string_match` / `prompt_ids_match`。若 reconstruct 已能打出类似 `"Hello! How can I assist you today?"` 且 `exact_prefix_len >= 4`，说明 **bundle 在 HF 上可用**，引擎乱码不是量化问题。
 
-**2. engine**（必须 `serve` **同一份** bundle，且不走云 handoff）：
+**2. engine**（必须 `serve` **同一份** bundle）：
 
 ```bash
-# 在本仓库；用 --hybrid-execution device，避免 hybrid 掩盖本地 decode
+# 在本仓库
 ./aria-engine serve qwen3-0.6b_q4 \
   --bind 127.0.0.1:8080 \
-  --hybrid-execution device \
   --compute auto --profile
 python scripts/diag_qwen3_chat.py \
   --url http://127.0.0.1:8080 \
   --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \
-  --peer-report ../model/out/model_diag_qwen3.json \
+  --peer-report /path/to/model/out/model_diag_qwen3.json \
   --report ./out/engine_diag_qwen3.json
 ```
 
@@ -193,7 +211,7 @@ python scripts/diag_qwen3_chat.py \
 | reconstruct greedy 已相对 fp32 发散（`QUANT:…`） | 码本 / Hadamard / 注入 |
 | reconstruct 对话正常，引擎 `content` 仍乱（`ENGINE_GRAPH`） | Rust 前向（HDM、embed 按行取值、RoPE、QK-norm 等） |
 
-引擎的教师信号是 **HF + reconstruct 注入**，不是裸 fp32。更多说明见 [`../model/README_cn.md`](../model/README_cn.md)（质量审计）。
+引擎的教师信号是 **HF + reconstruct 注入**，不是裸 fp32。
 
 ## Gemma-4 对话诊断
 
@@ -201,13 +219,13 @@ python scripts/diag_qwen3_chat.py \
 
 | 脚本 | 隔离什么 |
 |------|----------|
-| [`../model/scripts/diag_gemma4_chat.py`](../model/scripts/diag_gemma4_chat.py) | **量化 + 模板**：HF fp32 vs 把 `reconstruct_weight` 注入同一张 HF 图 |
+| [`model/scripts/diag_gemma4_chat.py`](https://github.com/ariacompute/model/tree/main/scripts/diag_gemma4_chat.py) | **量化 + 模板**：HF fp32 vs 把 `reconstruct_weight` 注入同一张 HF 图 |
 | [`scripts/diag_gemma4_chat.py`](scripts/diag_gemma4_chat.py) | **引擎图**：本服务 vs model 侧 JSON（`--peer-report`） |
 
 **1. model 教师**（并列的 `model` 仓库；建议 GPU）：
 
 ```bash
-# 在 ../model
+# 在 model
 pip install torch transformers
 python scripts/diag_gemma4_chat.py \
   --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \
@@ -216,18 +234,17 @@ python scripts/diag_gemma4_chat.py \
   --report ./out/model_diag_gemma4.json
 ```
 
-**2. engine**（必须 `serve` **同一份** bundle，且不走云 handoff）：
+**2. engine**（必须 `serve` **同一份** bundle）：
 
 ```bash
-# 在本仓库；用 --hybrid-execution device，避免 hybrid 掩盖本地 decode
+# 在本仓库
 ./aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
-  --hybrid-execution device \
   --compute auto --profile
 python scripts/diag_gemma4_chat.py \
   --url http://127.0.0.1:8080 \
   --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \
-  --peer-report ../model/out/model_diag_gemma4.json \
+  --peer-report /path/to/model/out/model_diag_gemma4.json \
   --report ./out/engine_diag_gemma4.json
 ```
 

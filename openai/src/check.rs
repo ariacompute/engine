@@ -485,7 +485,7 @@ async fn get_json(
                 match source {
                     DownloadSource::HuggingFace => "hf_token",
                     DownloadSource::ModelScope => "modelscope_api_token",
-                    DownloadSource::Dashboard => "cloud_api_key",
+                    DownloadSource::Dashboard => "hf_token",
                 }
             ),
         ));

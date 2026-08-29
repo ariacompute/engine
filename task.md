@@ -274,3 +274,18 @@
 - [x] 空构造 → `auth` → `open`；实例字段优先，空则回退读 yml；**禁止**回写 `config.yml`
 - [x] 单测：roundtrip / 部分合并 / 非法枚举 / clear / TLD 补 URL / 不写 yml；`cases.json` `auth_*`
 
+## 路由上移 router 仓（requirements §3.5）
+
+### T90 — 删除 hybrid 云面
+- [x] 从 workspace 移除 `aria-hybrid`；openai chat 仅本地
+- [x] `AriaConfig` 删除 `cloud_api_key` / `cloud_url` / `hybrid_*`；新增 `router`
+- [x] `list` 只扫本地；`auth` 不再强制 API key；CLI `--router` 覆盖不回写
+- [x] 八语言 SDK auth 字段对齐；`cases.json` 更新
+- [x] 删除 `GET /v1/engine/routes` 与 hybrid CLI 旗标
+- [x] `cargo test` 全绿
+
+### T91 — serve 向 aria-router 注册
+- [x] listen 后 `PUT {router}/v1/router/providers`；失败退出
+- [x] 未配置 router 时不访问网关
+
+

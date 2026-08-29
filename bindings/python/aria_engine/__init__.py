@@ -490,25 +490,15 @@ def download_model(
     return cache
 
 
-INTL_CLOUD = "https://gateway.ariacompute.com"
 INTL_SITE = "https://ariacompute.com"
 INTL_UPGRADE = "https://github.com/ariacompute"
-CN_CLOUD = "https://gateway.ariacompute.cn"
 CN_SITE = "https://ariacompute.cn"
 CN_UPGRADE = "https://gitee.com/ariacompute"
-_HYBRID_MODES = ("cost", "balance", "intelligence")
-_HYBRID_EXECUTIONS = ("hybrid", "device", "cloud")
 _COMPUTES = ("auto", "cpu", "cuda")
 _AUTH_KEYS = (
-    "cloud_api_key",
-    "cloud_url",
+    "router",
     "site_url",
     "upgrade_url",
-    "hybrid_mode",
-    "hybrid_execution",
-    "hybrid_semantic",
-    "hybrid_semantic_timeout_ms",
-    "hybrid_semantic_cache_size",
     "compute",
     "hf_token",
     "modelscope_api_token",
@@ -517,15 +507,9 @@ _AUTH_KEYS = (
 
 def default_auth_config() -> dict[str, Any]:
     return {
-        "cloud_api_key": "",
-        "cloud_url": "",
+        "router": "",
         "site_url": "",
         "upgrade_url": "",
-        "hybrid_mode": "balance",
-        "hybrid_execution": "hybrid",
-        "hybrid_semantic": True,
-        "hybrid_semantic_timeout_ms": 800,
-        "hybrid_semantic_cache_size": 512,
         "compute": "auto",
         "hf_token": "",
         "modelscope_api_token": "",
@@ -541,62 +525,26 @@ def _gateway_region(url: str) -> Optional[str]:
     return None
 
 
-def _pair_urls(region: str) -> tuple[str, str, str]:
+def _pair_urls(region: str) -> tuple[str, str]:
     if region == "cn":
-        return CN_CLOUD, CN_SITE, CN_UPGRADE
-    return INTL_CLOUD, INTL_SITE, INTL_UPGRADE
+        return CN_SITE, CN_UPGRADE
+    return INTL_SITE, INTL_UPGRADE
 
 
 def fill_auth_urls(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Fill missing cloud_url / site_url / upgrade_url from a provided TLD."""
+    """Fill missing site_url / upgrade_url from a provided TLD."""
     out = dict(cfg)
-    region = (
-        _gateway_region(out.get("site_url") or "")
-        or _gateway_region(out.get("cloud_url") or "")
-        or _gateway_region(out.get("upgrade_url") or "")
+    region = _gateway_region(out.get("site_url") or "") or _gateway_region(
+        out.get("upgrade_url") or ""
     )
     if not region:
         return out
-    cloud, site, upgrade = _pair_urls(region)
-    if not out.get("cloud_url"):
-        out["cloud_url"] = cloud
+    site, upgrade = _pair_urls(region)
     if not out.get("site_url"):
         out["site_url"] = site
     if not out.get("upgrade_url"):
         out["upgrade_url"] = upgrade
     return out
-
-
-def _locale_prefers_cn() -> bool:
-    lang = (os.environ.get("LANG") or os.environ.get("LC_ALL") or "").lower()
-    return "zh" in lang or ".cn" in lang or lang.startswith("cn")
-
-
-def _probe_dashboard(site_url: str, api_key: str) -> bool:
-    url = site_url.rstrip("/") + "/api/dashboard/models"
-    req = Request(
-        url,
-        headers={
-            "User-Agent": f"aria-engine-sdk/{__version__}",
-            "Authorization": f"Bearer {api_key}",
-        },
-    )
-    try:
-        with urlopen(req, timeout=10) as resp:  # nosec - dashboard probe
-            return 200 <= getattr(resp, "status", 200) < 300
-    except OSError:
-        return False
-
-
-def detect_gateway_pair(api_key: str) -> tuple[str, str, str]:
-    """Match CLI detect: probe Dashboard with the key, else locale fallback."""
-    key = (api_key or "").strip()
-    first, second = (("cn", "intl") if _locale_prefers_cn() else ("intl", "cn"))
-    for region in (first, second):
-        cloud, site, upgrade = _pair_urls(region)
-        if key and _probe_dashboard(site, key):
-            return cloud, site, upgrade
-    return _pair_urls(first)
 
 
 def apply_auth(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -606,44 +554,15 @@ def apply_auth(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, A
         if val is None or key not in _AUTH_KEYS:
             continue
         out[key] = val
-    mode = str(out["hybrid_mode"])
-    if mode not in _HYBRID_MODES:
-        raise ValueError(f"invalid hybrid_mode: {mode}")
-    execution = str(out["hybrid_execution"])
-    if execution not in _HYBRID_EXECUTIONS:
-        raise ValueError(f"invalid hybrid_execution: {execution}")
     compute = str(out["compute"])
     if compute not in _COMPUTES:
         raise ValueError(f"invalid compute: {compute}")
-    try:
-        timeout = int(out["hybrid_semantic_timeout_ms"])
-        cache = int(out["hybrid_semantic_cache_size"])
-    except (TypeError, ValueError) as e:
-        raise ValueError("hybrid_semantic_timeout_ms / cache_size must be integers") from e
-    if timeout <= 0 or cache <= 0:
-        raise ValueError("hybrid_semantic_timeout_ms / cache_size must be positive")
-    out["hybrid_semantic"] = bool(out["hybrid_semantic"])
-    out["hybrid_semantic_timeout_ms"] = timeout
-    out["hybrid_semantic_cache_size"] = cache
-    for key in (
-        "cloud_api_key",
-        "cloud_url",
-        "site_url",
-        "upgrade_url",
-        "hf_token",
-        "modelscope_api_token",
-    ):
-        out[key] = "" if out[key] is None else str(out[key])
-    out = fill_auth_urls(out)
-    if out["cloud_api_key"] and not (out["cloud_url"] and out["site_url"] and out["upgrade_url"]):
-        cloud, site, upgrade = detect_gateway_pair(out["cloud_api_key"])
-        if not out["cloud_url"]:
-            out["cloud_url"] = cloud
-        if not out["site_url"]:
-            out["site_url"] = site
-        if not out["upgrade_url"]:
-            out["upgrade_url"] = upgrade
-    return out
+    for key in _AUTH_KEYS:
+        if key == "compute":
+            continue
+        out[key] = "" if out.get(key) is None else str(out[key])
+    return fill_auth_urls(out)
+
 
 
 def _is_local_ref(ref: str) -> bool:
@@ -676,15 +595,9 @@ class Engine:
 
     def auth(
         self,
-        cloud_api_key: Optional[str] = None,
-        cloud_url: Optional[str] = None,
+        router: Optional[str] = None,
         site_url: Optional[str] = None,
         upgrade_url: Optional[str] = None,
-        hybrid_mode: Optional[str] = None,
-        hybrid_execution: Optional[str] = None,
-        hybrid_semantic: Optional[bool] = None,
-        hybrid_semantic_timeout_ms: Optional[int] = None,
-        hybrid_semantic_cache_size: Optional[int] = None,
         compute: Optional[str] = None,
         hf_token: Optional[str] = None,
         modelscope_api_token: Optional[str] = None,
@@ -693,15 +606,9 @@ class Engine:
         self._cfg = apply_auth(
             self._cfg,
             {
-                "cloud_api_key": cloud_api_key,
-                "cloud_url": cloud_url,
+                "router": router,
                 "site_url": site_url,
                 "upgrade_url": upgrade_url,
-                "hybrid_mode": hybrid_mode,
-                "hybrid_execution": hybrid_execution,
-                "hybrid_semantic": hybrid_semantic,
-                "hybrid_semantic_timeout_ms": hybrid_semantic_timeout_ms,
-                "hybrid_semantic_cache_size": hybrid_semantic_cache_size,
                 "compute": compute,
                 "hf_token": hf_token,
                 "modelscope_api_token": modelscope_api_token,
