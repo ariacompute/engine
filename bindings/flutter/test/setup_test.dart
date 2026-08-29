@@ -1,26 +1,26 @@
-import 'package:aria_engine/auth.dart';
+import 'package:aria_engine/setup.dart';
 import 'package:test/test.dart';
 
 void main() {
   test('defaults', () {
-    final cfg = defaultAuthConfig();
+    final cfg = defaultSetupConfig();
     expect(cfg.compute, 'auto');
     expect(cfg.router, '');
   });
 
   test('invalid enum', () {
     expect(
-        () => applyAuth(defaultAuthConfig(), compute: 'gpu'), throwsArgumentError);
+        () => applySetup(defaultSetupConfig(), compute: 'gpu'), throwsArgumentError);
   });
 
   test('fill urls from cn site', () {
-    final got = fillAuthUrls(AuthConfig(siteUrl: cnSite));
+    final got = fillSetupUrls(SetupConfig(siteUrl: cnSite));
     expect(got.upgradeUrl, cnUpgrade);
   });
 
   test('all fields roundtrip', () {
-    final st = applyAuth(
-      defaultAuthConfig(),
+    final st = applySetup(
+      defaultSetupConfig(),
       router: 'http://127.0.0.1:8080',
       siteUrl: cnSite,
       upgradeUrl: cnUpgrade,
@@ -34,8 +34,8 @@ void main() {
   });
 
   test('invalid enum leaves state', () {
-    final once = applyAuth(defaultAuthConfig(), compute: 'cpu');
-    expect(() => applyAuth(once, compute: 'gpu'), throwsArgumentError);
+    final once = applySetup(defaultSetupConfig(), compute: 'cpu');
+    expect(() => applySetup(once, compute: 'gpu'), throwsArgumentError);
     expect(once.compute, 'cpu');
   });
 }

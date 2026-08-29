@@ -1,4 +1,4 @@
-/// Instance-level Engine auth (in-memory; does not write config.yml).
+/// Instance-level Engine setup (in-memory; does not write engine.yml).
 library;
 
 const intlSite = 'https://ariacompute.com';
@@ -8,7 +8,7 @@ const cnUpgrade = 'https://gitee.com/ariacompute';
 
 const computes = {'auto', 'cpu', 'cuda'};
 
-class AuthConfig {
+class SetupConfig {
   String router;
   String siteUrl;
   String upgradeUrl;
@@ -16,7 +16,7 @@ class AuthConfig {
   String hfToken;
   String modelscopeApiToken;
 
-  AuthConfig({
+  SetupConfig({
     this.router = '',
     this.siteUrl = '',
     this.upgradeUrl = '',
@@ -25,7 +25,7 @@ class AuthConfig {
     this.modelscopeApiToken = '',
   });
 
-  AuthConfig copy() => AuthConfig(
+  SetupConfig copy() => SetupConfig(
         router: router,
         siteUrl: siteUrl,
         upgradeUrl: upgradeUrl,
@@ -44,7 +44,7 @@ class AuthConfig {
       };
 }
 
-AuthConfig defaultAuthConfig() => AuthConfig();
+SetupConfig defaultSetupConfig() => SetupConfig();
 
 String? _gatewayRegion(String url) {
   final lower = url.toLowerCase();
@@ -62,7 +62,7 @@ String? _gatewayRegion(String url) {
 (String, String) _pairUrls(String region) =>
     region == 'cn' ? (cnSite, cnUpgrade) : (intlSite, intlUpgrade);
 
-AuthConfig fillAuthUrls(AuthConfig cfg) {
+SetupConfig fillSetupUrls(SetupConfig cfg) {
   final region = _gatewayRegion(cfg.siteUrl) ?? _gatewayRegion(cfg.upgradeUrl);
   if (region == null) return cfg;
   final (site, upgrade) = _pairUrls(region);
@@ -71,7 +71,7 @@ AuthConfig fillAuthUrls(AuthConfig cfg) {
   return cfg;
 }
 
-AuthConfig applyAuth(AuthConfig existing,
+SetupConfig applySetup(SetupConfig existing,
     {String? router,
     String? siteUrl,
     String? upgradeUrl,
@@ -88,5 +88,5 @@ AuthConfig applyAuth(AuthConfig existing,
   if (!computes.contains(out.compute)) {
     throw ArgumentError('invalid compute: ${out.compute}');
   }
-  return fillAuthUrls(out);
+  return fillSetupUrls(out);
 }

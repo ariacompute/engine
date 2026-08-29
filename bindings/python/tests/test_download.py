@@ -162,6 +162,13 @@ class DownloadTests(unittest.TestCase):
         self.assertEqual(_resolve_hub_token("huggingface"), "hf_from_yml")
         self.assertEqual(_resolve_hub_token("modelscope"), "ms_from_yml")
 
+    def test_engine_yml_preferred_over_legacy_config(self):
+        with open(os.path.join(self.home, "engine.yml"), "w", encoding="utf-8") as f:
+            f.write("hf_token: hf_from_engine\n")
+        with open(os.path.join(self.home, "config.yml"), "w", encoding="utf-8") as f:
+            f.write("hf_token: hf_from_legacy\n")
+        self.assertEqual(_resolve_hub_token("huggingface"), "hf_from_engine")
+
     def test_dashboard_token_falls_back_to_config(self):
         with open(os.path.join(self.home, "config.yml"), "w", encoding="utf-8") as f:
             f.write("hf_token: hf_from_yml\n")

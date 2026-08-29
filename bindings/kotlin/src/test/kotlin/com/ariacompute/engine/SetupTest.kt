@@ -6,10 +6,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 
-class AuthTest {
+class SetupTest {
     @Test
     fun defaults() {
-        val cfg = defaultAuthConfig()
+        val cfg = defaultSetupConfig()
         assertEquals("auto", cfg.compute)
         assertEquals("", cfg.router)
     }
@@ -17,20 +17,20 @@ class AuthTest {
     @Test
     fun invalidEnum() {
         assertFailsWith<IllegalArgumentException> {
-            applyAuthFields(defaultAuthConfig(), compute = "gpu")
+            applySetupFields(defaultSetupConfig(), compute = "gpu")
         }
     }
 
     @Test
     fun fillUrlsFromCnSite() {
-        val got = fillAuthUrls(AuthConfig(siteUrl = CN_SITE))
+        val got = fillSetupUrls(SetupConfig(siteUrl = CN_SITE))
         assertEquals(CN_UPGRADE, got.upgradeUrl)
     }
 
     @Test
     fun allFields() {
-        val st = applyAuthFields(
-            defaultAuthConfig(),
+        val st = applySetupFields(
+            defaultSetupConfig(),
             router = "http://127.0.0.1:8080",
             siteUrl = CN_SITE,
             upgradeUrl = CN_UPGRADE,
@@ -49,7 +49,7 @@ class AuthTest {
         home.delete()
         home.mkdirs()
         System.setProperty("user.home", home.absolutePath)
-        applyAuthFields(defaultAuthConfig(), router = "http://127.0.0.1:8080", hfToken = "hf_x")
+        applySetupFields(defaultSetupConfig(), router = "http://127.0.0.1:8080", hfToken = "hf_x")
         assertFalse(File(home, "config.yml").isFile)
     }
 }

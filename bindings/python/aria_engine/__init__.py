@@ -294,8 +294,17 @@ def _hub_bearer(token: Optional[str]) -> Optional[str]:
 
 
 def _config_yml_scalar(key: str) -> Optional[str]:
-    """Read a top-level scalar from ``~/.ariacompute/config.yml`` (aria-engine auth)."""
-    path = os.path.join(_aria_home(), "config.yml")
+    """Read a top-level scalar from ``~/.ariacompute/engine.yml`` (aria-engine setup)."""
+    home = _aria_home()
+    for name in ("engine.yml", "config.yml"):
+        path = os.path.join(home, name)
+        got = _scalar_from_yml(path, key)
+        if got is not None:
+            return got
+    return None
+
+
+def _scalar_from_yml(path: str, key: str) -> Optional[str]:
     try:
         with open(path, encoding="utf-8") as f:
             for line in f:
@@ -326,9 +335,9 @@ def _resolve_hub_token(
     hf_token: Optional[str] = None,
     modelscope_api_token: Optional[str] = None,
 ) -> Optional[str]:
-    """Named field for the active hub, then generic ``token``, then config.yml.
+    """Named field for the active hub, then generic ``token``, then engine.yml / config.yml.
 
-    Same keys as ``aria-engine auth``: ``hf_token`` (``.com``) /
+    Same keys as ``aria-engine setup``: ``hf_token`` (``.com``) /
     ``modelscope_api_token`` (``.cn``). Does not read ``HF_TOKEN`` /
     ``MODELSCOPE_API_TOKEN``. Dashboard ``sk-`` / ``bfvk-`` values are skipped.
     """
@@ -411,7 +420,7 @@ def _fetch_hub_file(
             if e.code in (401, 403):
                 field = "modelscope_api_token" if source == "modelscope" else "hf_token"
                 raise RuntimeError(
-                    f"auth failed HTTP {e.code}; set {field} via aria-engine auth "
+                    f"auth failed HTTP {e.code}; set {field} via aria-engine setup "
                     f"(do not pass a Dashboard sk-/bfvk- key as the hub token)"
                 ) from e
             continue
@@ -435,7 +444,7 @@ def download_model(
 
     Matches ``aria-engine download``: ``.com`` → Hugging Face, ``.cn`` → ModelScope.
     Hub auth uses ``hf_token`` / ``modelscope_api_token`` (call args, else
-    ``~/.ariacompute/config.yml`` from ``aria-engine auth``). Dashboard is not used.
+    ``~/.ariacompute/engine.yml`` from ``aria-engine setup``). Dashboard is not used.
     A Dashboard API key (``sk-`` / ``bfvk-``) is ignored for hub auth. If a valid
     bundle already exists at the cache path, the download is skipped.
     """
@@ -505,7 +514,7 @@ _AUTH_KEYS = (
 )
 
 
-def default_auth_config() -> dict[str, Any]:
+def default_setup_config() -> dict[str, Any]:
     return {
         "router": "",
         "site_url": "",
@@ -531,7 +540,7 @@ def _pair_urls(region: str) -> tuple[str, str]:
     return INTL_SITE, INTL_UPGRADE
 
 
-def fill_auth_urls(cfg: dict[str, Any]) -> dict[str, Any]:
+def fill_setup_urls(cfg: dict[str, Any]) -> dict[str, Any]:
     """Fill missing site_url / upgrade_url from a provided TLD."""
     out = dict(cfg)
     region = _gateway_region(out.get("site_url") or "") or _gateway_region(
@@ -547,7 +556,7 @@ def fill_auth_urls(cfg: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def apply_auth(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
+def apply_setup(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     """Merge ``updates`` into ``existing``. Validates; does not mutate ``existing``."""
     out = dict(existing)
     for key, val in updates.items():
@@ -561,7 +570,7 @@ def apply_auth(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, A
         if key == "compute":
             continue
         out[key] = "" if out.get(key) is None else str(out[key])
-    return fill_auth_urls(out)
+    return fill_setup_urls(out)
 
 
 
@@ -582,10 +591,10 @@ class Engine:
         self._explicit_lib = lib
         self._lib = None
         self._handle = None
-        self._cfg = default_auth_config()
+        self._cfg = default_setup_config()
         self._generic_token = token
         if site or hf_token or modelscope_api_token:
-            self.auth(
+            self.setup(
                 site_url=site,
                 hf_token=hf_token,
                 modelscope_api_token=modelscope_api_token,
@@ -593,7 +602,7 @@ class Engine:
         if model_ref:
             self.open(model_ref)
 
-    def auth(
+    def setup(
         self,
         router: Optional[str] = None,
         site_url: Optional[str] = None,
@@ -602,8 +611,8 @@ class Engine:
         hf_token: Optional[str] = None,
         modelscope_api_token: Optional[str] = None,
     ) -> "Engine":
-        """Set Config / Run fields on this instance only. Does not write config.yml."""
-        self._cfg = apply_auth(
+        """Set Config / Run fields on this instance only. Does not write engine.yml."""
+        self._cfg = apply_setup(
             self._cfg,
             {
                 "router": router,
@@ -616,12 +625,12 @@ class Engine:
         )
         return self
 
-    def auth_status(self) -> dict[str, Any]:
+    def setup_status(self) -> dict[str, Any]:
         return dict(self._cfg)
 
-    def auth_clear(self) -> "Engine":
-        """Reset instance defaults. Does not delete ~/.ariacompute/config.yml."""
-        self._cfg = default_auth_config()
+    def setup_clear(self) -> "Engine":
+        """Reset instance defaults. Does not delete ~/.ariacompute/engine.yml."""
+        self._cfg = default_setup_config()
         return self
 
     def _ensure_lib(self) -> None:

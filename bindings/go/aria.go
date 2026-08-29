@@ -40,7 +40,7 @@ func (e *Engine) Close() {
 	}
 }
 
-// Open downloads (if needed) and loads a model using instance auth.
+// Open downloads (if needed) and loads a model using instance setup.
 func (e *Engine) Open(ref string) error {
 	if _, err := EnsureFfiLib(e.cfg.SiteURL); err != nil {
 		return err

@@ -8,7 +8,7 @@ public enum AriaDownloadError: Error {
 
 public final class AriaEngine {
     private var handle: OpaquePointer?
-    private var cfg = AuthConfig()
+    private var cfg = SetupConfig()
     private var genericToken = ""
 
     // MARK: - Model name resolution
@@ -95,16 +95,19 @@ public final class AriaEngine {
     }
 
     private static func configYMLScalar(_ key: String) -> String? {
-        let path = (ariaHome() as NSString).appendingPathComponent("config.yml")
-        guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }
-        for line in raw.components(separatedBy: "\n") {
-            if line.hasPrefix(" ") || line.hasPrefix("\t") { continue }
-            let s = line.trimmingCharacters(in: .whitespacesAndNewlines)
-            if s.isEmpty || s.hasPrefix("#") { continue }
-            guard let idx = s.firstIndex(of: ":") else { continue }
-            if String(s[..<idx]).trimmingCharacters(in: .whitespaces) != key { continue }
-            let v = unquoteYAML(String(s[s.index(after: idx)...]))
-            return v.isEmpty ? nil : v
+        let home = ariaHome() as NSString
+        for name in ["engine.yml", "config.yml"] {
+            let path = home.appendingPathComponent(name)
+            guard let raw = try? String(contentsOfFile: path, encoding: .utf8) else { continue }
+            for line in raw.components(separatedBy: "\n") {
+                if line.hasPrefix(" ") || line.hasPrefix("\t") { continue }
+                let s = line.trimmingCharacters(in: .whitespacesAndNewlines)
+                if s.isEmpty || s.hasPrefix("#") { continue }
+                guard let idx = s.firstIndex(of: ":") else { continue }
+                if String(s[..<idx]).trimmingCharacters(in: .whitespaces) != key { continue }
+                let v = unquoteYAML(String(s[s.index(after: idx)...]))
+                if !v.isEmpty { return v }
+            }
         }
         return nil
     }
@@ -199,7 +202,7 @@ public final class AriaEngine {
                 let field = source == "modelscope" ? "modelscope_api_token" : "hf_token"
                 throw AriaDownloadError.requestFailed(
                     code,
-                    "auth failed HTTP \(code); set \(field) via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                    "auth failed HTTP \(code); set \(field) via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
                 )
             } catch {
                 last = error
@@ -448,23 +451,23 @@ public final class AriaEngine {
         if bundlePath.isEmpty { throw NSError(domain: "Aria", code: 1) }
     }
 
-    /// Set Config / Run fields on this instance only. Does not write config.yml.
+    /// Set Config / Run fields on this instance only. Does not write engine.yml.
     @discardableResult
-    public func auth(_ updates: AuthUpdates) throws -> AriaEngine {
-        cfg = try applyAuth(cfg, updates)
+    public func setup(_ updates: SetupUpdates) throws -> AriaEngine {
+        cfg = try applySetup(cfg, updates)
         return self
     }
 
-    public func authStatus() -> AuthConfig { cfg }
+    public func setupStatus() -> SetupConfig { cfg }
 
-    /// Reset instance defaults. Does not delete ~/.ariacompute/config.yml.
+    /// Reset instance defaults. Does not delete ~/.ariacompute/engine.yml.
     @discardableResult
-    public func authClear() -> AriaEngine {
-        cfg = AuthConfig()
+    public func setupClear() -> AriaEngine {
+        cfg = SetupConfig()
         return self
     }
 
-    /// Download (if needed) and load a model using instance auth.
+    /// Download (if needed) and load a model using instance setup.
     @discardableResult
     public func open(_ ref: String) throws -> AriaEngine {
         let site = cfg.siteUrl.isEmpty ? "https://ariacompute.com" : cfg.siteUrl
@@ -499,7 +502,7 @@ public final class AriaEngine {
         let eng = AriaEngine()
         eng.genericToken = token
         if !site.isEmpty || !hfToken.isEmpty || !modelscopeApiToken.isEmpty {
-            try eng.auth(AuthUpdates(siteUrl: site.isEmpty ? nil : site, hfToken: hfToken.isEmpty ? nil : hfToken, modelscopeApiToken: modelscopeApiToken.isEmpty ? nil : modelscopeApiToken))
+            try eng.setup(SetupUpdates(siteUrl: site.isEmpty ? nil : site, hfToken: hfToken.isEmpty ? nil : hfToken, modelscopeApiToken: modelscopeApiToken.isEmpty ? nil : modelscopeApiToken))
         }
         try eng.open(ref)
         return eng

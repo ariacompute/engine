@@ -13,7 +13,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Config / Run
 
-Credentials live in `~/.ariacompute/config.yml` (via `aria-engine auth`).
+Credentials live in `~/.ariacompute/engine.yml` (via `aria-engine setup`).
 
 | Field | Meaning | Default |
 |-------|---------|---------|
@@ -25,12 +25,12 @@ Credentials live in `~/.ariacompute/config.yml` (via `aria-engine auth`).
 | `modelscope_api_token` | ModelScope hub token (optional; `.cn` gated files) | _(empty)_ |
 
 ```bash
-# Auth
-aria-engine auth
-aria-engine auth --status
+# Setup
+aria-engine setup
+aria-engine setup --status
 
 # Download models
-# Optional: aria-engine auth prompts hf_token (.com) or modelscope_api_token (.cn)
+# Optional: aria-engine setup prompts hf_token (.com) or modelscope_api_token (.cn)
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
 aria-engine check gemma-4-e2b-it_q4
@@ -48,20 +48,20 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto
 
-# Serve and register as a local provider on aria-router (process override; does not write config.yml)
+# Serve and register as a local provider on aria-router (process override; does not write engine.yml)
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
   --compute auto
 ```
 
-`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless `aria-engine auth` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/config.yml`.
+`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless `aria-engine setup` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/engine.yml`.
 
 `list` scans local `~/.ariacompute/models` only.
 
 `check [model]` compares local file count, names, and SHA-256 against the regional hub (same source as `download`). Omit the model to check every cached bundle. Exit 1 on mismatch; `weight.bin` is hashed locally and compared to hub metadata (not re-downloaded).
 
-`serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`. `--router URL` registers this process as a local provider on aria-router (does not write `config.yml`).
+`serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`. `--router URL` registers this process as a local provider on aria-router (does not write `engine.yml`).
 
 `--compute auto|cpu|cuda` selects **local** GEMM: `auto` uses CUDA when `libcudart`/`libcublas` load and `cudaGetDeviceCount>0`, otherwise CPU (AVX2+FMA on x86_64, NEON on aarch64). `--compute cuda` **fails** if no NVIDIA device — it does not silently fall back. CUDA is runtime-loaded (no toolkit at compile time); on H200 you can still pass `--features cuda` as a documentation flag:
 
@@ -82,7 +82,7 @@ python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engin
 
 This process never routes. If `router` is set (config or `--router`), `serve` registers as a local provider before it accepts traffic:
 
-`PUT {router}/v1/router/providers` with `{name, endpoint, provider_model_id, locality}`. Failure **exits** (no silent local-only fallback). `--router` overrides `config.yml` for this process only.
+`PUT {router}/v1/router/providers` with `{name, endpoint, provider_model_id, locality}`. Failure **exits** (no silent local-only fallback). `--router` overrides `engine.yml` for this process only.
 
 Use **different ports**: engine data (`--bind`) vs router management (`--mgmt-bind`, default `127.0.0.1:8080`). Clients then talk to the **router data plane**, not engine.
 
@@ -101,8 +101,8 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 
 # Persist the URL instead of passing --router each time:
-#   aria-engine auth  # optional router prompt
-#   # or in ~/.ariacompute/config.yml:
+#   aria-engine setup  # optional router prompt
+#   # or in ~/.ariacompute/engine.yml:
 #   # router: http://127.0.0.1:8090
 
 # 3. Chat via the gateway (concrete name = bypass; forwards to this engine)
@@ -289,7 +289,7 @@ C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `ari
 
 ### Auto-download by model name
 
-Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard. Gated hub files use the same fields as `aria-engine auth` via instance `auth` (empty construct → `auth` → `open`); this is in-memory only and **never** writes `config.yml` (CLI `aria-engine auth` still does). Empty instance fields still fall back to reading `~/.ariacompute/config.yml`. Dashboard `sk-`/`bfvk-` tokens are ignored. Env `HF_TOKEN` / `MODELSCOPE_API_TOKEN` are not used. Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
+Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard. Gated hub files use the same fields as `aria-engine setup` via instance `setup` (empty construct → `setup` → `open`); this is in-memory only and **never** writes `engine.yml` (CLI `aria-engine setup` still does). Empty instance fields still fall back to reading `~/.ariacompute/engine.yml`. Dashboard `sk-`/`bfvk-` tokens are ignored. Env `HF_TOKEN` / `MODELSCOPE_API_TOKEN` are not used. Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
@@ -345,13 +345,13 @@ with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
     # also: eng.embed("hi"), eng.transcribe(pcm_bytes)
 
-# Gated hub files — instance auth (does not write ~/.ariacompute/config.yml):
+# Gated hub files — instance setup (does not write ~/.ariacompute/engine.yml):
 eng = Engine()
-eng.auth(hf_token="hf_...")  # .com → Hugging Face
+eng.setup(hf_token="hf_...")  # .com → Hugging Face
 eng.open("gemma-4-e2b-it_q4")
 print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 eng_ms = Engine()
-eng_ms.auth(modelscope_api_token="ms_...", site_url="https://ariacompute.cn")
+eng_ms.setup(modelscope_api_token="ms_...", site_url="https://ariacompute.cn")
 eng_ms.open("gemma-4-e2b-it_q4")
 print(eng_ms.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
@@ -380,12 +380,12 @@ const eng2 = await Engine.open("gemma-4-e2b-it_q4");
 console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
 eng2.close();
 
-// Gated hub files — instance auth (does not write ~/.ariacompute/config.yml):
+// Gated hub files — instance setup (does not write ~/.ariacompute/engine.yml):
 const engHf = new Engine();
-engHf.auth({ hf_token: "hf_..." }); // .com
+engHf.setup({ hf_token: "hf_..." }); // .com
 await engHf.open("gemma-4-e2b-it_q4");
 const engMs = new Engine();
-engMs.auth({ modelscope_api_token: "ms_...", site_url: "https://ariacompute.cn" });
+engMs.setup({ modelscope_api_token: "ms_...", site_url: "https://ariacompute.cn" });
 await engMs.open("gemma-4-e2b-it_q4");
 engHf.close();
 engMs.close();
@@ -432,10 +432,10 @@ func main() {
 	defer eng2.Close()
 	_ = eng2
 
-	// Gated hub files — instance auth (does not write ~/.ariacompute/config.yml):
+	// Gated hub files — instance setup (does not write ~/.ariacompute/engine.yml):
 	engHf := aria.NewEngine()
 	hf := "hf_..."
-	if err := engHf.Auth(aria.AuthUpdates{HFToken: &hf}); err != nil {
+	if err := engHf.Setup(aria.SetupUpdates{HFToken: &hf}); err != nil {
 		panic(err)
 	}
 	if err := engHf.Open("gemma-4-e2b-it_q4"); err != nil {
@@ -444,7 +444,7 @@ func main() {
 	defer engHf.Close()
 	engMs := aria.NewEngine()
 	ms, site := "ms_...", "https://ariacompute.cn"
-	if err := engMs.Auth(aria.AuthUpdates{ModelScopeAPIToken: &ms, SiteURL: &site}); err != nil {
+	if err := engMs.Setup(aria.SetupUpdates{ModelScopeAPIToken: &ms, SiteURL: &site}); err != nil {
 		panic(err)
 	}
 	if err := engMs.Open("gemma-4-e2b-it_q4"); err != nil {
@@ -463,7 +463,7 @@ cargo add ariacompute-engine
 ```
 
 ```rust
-use aria_engine::{AuthUpdates, Engine, GenerateOpts, OpenOptions};
+use aria_engine::{SetupUpdates, Engine, GenerateOpts, OpenOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut eng = Engine::open("/path/to/aria-bundle")?;
@@ -478,13 +478,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let g2 = eng2.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?;
     println!("{}", g2.text);
 
-    // Gated hub files — instance auth (does not write ~/.ariacompute/config.yml):
+    // Gated hub files — instance setup (does not write ~/.ariacompute/engine.yml):
     let mut eng_hf = Engine::new();
-    eng_hf.auth(&AuthUpdates { hf_token: Some("hf_...".into()), ..Default::default() })?;
+    eng_hf.setup(&SetupUpdates { hf_token: Some("hf_...".into()), ..Default::default() })?;
     eng_hf.open_named("gemma-4-e2b-it_q4")?;
     println!("{}", eng_hf.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?.text);
     let mut eng_ms = Engine::new();
-    eng_ms.auth(&AuthUpdates {
+    eng_ms.setup(&SetupUpdates {
         modelscope_api_token: Some("ms_...".into()),
         site_url: Some("https://ariacompute.cn".into()),
         ..Default::default()

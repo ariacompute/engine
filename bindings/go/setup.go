@@ -13,8 +13,8 @@ const (
 	CNUpgrade   = "https://gitee.com/ariacompute"
 )
 
-// AuthConfig holds Config / Run fields on an Engine instance (memory only).
-type AuthConfig struct {
+// SetupConfig holds Config / Run fields on an Engine instance (memory only).
+type SetupConfig struct {
 	Router             string
 	SiteURL            string
 	UpgradeURL         string
@@ -23,8 +23,8 @@ type AuthConfig struct {
 	ModelScopeAPIToken string
 }
 
-// AuthUpdates is a partial merge. Nil fields are omitted.
-type AuthUpdates struct {
+// SetupUpdates is a partial merge. Nil fields are omitted.
+type SetupUpdates struct {
 	Router             *string
 	SiteURL            *string
 	UpgradeURL         *string
@@ -33,8 +33,8 @@ type AuthUpdates struct {
 	ModelScopeAPIToken *string
 }
 
-func DefaultAuthConfig() AuthConfig {
-	return AuthConfig{Compute: "auto"}
+func DefaultSetupConfig() SetupConfig {
+	return SetupConfig{Compute: "auto"}
 }
 
 func gatewayRegion(url string) string {
@@ -55,8 +55,8 @@ func pairURLs(region string) (site, upgrade string) {
 	return IntlSite, IntlUpgrade
 }
 
-// FillAuthUrls fills missing site/upgrade URLs from a provided TLD.
-func FillAuthUrls(cfg AuthConfig) AuthConfig {
+// FillSetupUrls fills missing site/upgrade URLs from a provided TLD.
+func FillSetupUrls(cfg SetupConfig) SetupConfig {
 	region := gatewayRegion(cfg.SiteURL)
 	if region == "" {
 		region = gatewayRegion(cfg.UpgradeURL)
@@ -74,8 +74,8 @@ func FillAuthUrls(cfg AuthConfig) AuthConfig {
 	return cfg
 }
 
-// ApplyAuth merges updates into existing. Validates; does not mutate existing.
-func ApplyAuth(existing AuthConfig, updates AuthUpdates) (AuthConfig, error) {
+// ApplySetup merges updates into existing. Validates; does not mutate existing.
+func ApplySetup(existing SetupConfig, updates SetupUpdates) (SetupConfig, error) {
 	out := existing
 	if updates.Router != nil {
 		out.Router = *updates.Router
@@ -98,26 +98,26 @@ func ApplyAuth(existing AuthConfig, updates AuthUpdates) (AuthConfig, error) {
 	switch out.Compute {
 	case "auto", "cpu", "cuda":
 	default:
-		return AuthConfig{}, fmt.Errorf("invalid compute: %s", out.Compute)
+		return SetupConfig{}, fmt.Errorf("invalid compute: %s", out.Compute)
 	}
-	return FillAuthUrls(out), nil
+	return FillSetupUrls(out), nil
 }
 
-// Engine holds instance auth in memory. The native handle is filled when built with aria_ffi.
+// Engine holds instance setup in memory. The native handle is filled when built with aria_ffi.
 type Engine struct {
-	cfg          AuthConfig
+	cfg          SetupConfig
 	genericToken string
 	h            unsafe.Pointer
 }
 
-// NewEngine constructs an empty Engine. Call Auth then Open to download/load.
+// NewEngine constructs an empty Engine. Call Setup then Open to download/load.
 func NewEngine() *Engine {
-	return &Engine{cfg: DefaultAuthConfig()}
+	return &Engine{cfg: DefaultSetupConfig()}
 }
 
-// Auth sets Config / Run fields on this instance only. Does not write config.yml.
-func (e *Engine) Auth(u AuthUpdates) error {
-	next, err := ApplyAuth(e.cfg, u)
+// Setup sets Config / Run fields on this instance only. Does not write engine.yml.
+func (e *Engine) Setup(u SetupUpdates) error {
+	next, err := ApplySetup(e.cfg, u)
 	if err != nil {
 		return err
 	}
@@ -125,11 +125,11 @@ func (e *Engine) Auth(u AuthUpdates) error {
 	return nil
 }
 
-func (e *Engine) AuthStatus() AuthConfig {
+func (e *Engine) SetupStatus() SetupConfig {
 	return e.cfg
 }
 
-// AuthClear resets instance defaults. Does not delete ~/.ariacompute/config.yml.
-func (e *Engine) AuthClear() {
-	e.cfg = DefaultAuthConfig()
+// SetupClear resets instance defaults. Does not delete ~/.ariacompute/engine.yml.
+func (e *Engine) SetupClear() {
+	e.cfg = DefaultSetupConfig()
 }

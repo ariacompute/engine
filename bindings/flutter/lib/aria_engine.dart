@@ -2,9 +2,9 @@ import 'dart:convert';
 import 'dart:ffi';
 import 'dart:io';
 import 'package:ffi/ffi.dart';
-import 'auth.dart';
+import 'setup.dart';
 
-export 'auth.dart';
+export 'setup.dart';
 
 typedef AriaInitC = Pointer Function(Pointer<Utf8>);
 typedef AriaInitDart = Pointer Function(Pointer<Utf8>);
@@ -98,19 +98,22 @@ String _unquoteYaml(String v) {
 }
 
 String? _configYmlScalar(String key) {
-  try {
-    final raw = File('${_ariaHome()}/config.yml').readAsStringSync();
-    for (final line in raw.split('\n')) {
-      if (line.startsWith(' ') || line.startsWith('\t')) continue;
-      final s = line.trim();
-      if (s.isEmpty || s.startsWith('#') || !s.contains(':')) continue;
-      final idx = s.indexOf(':');
-      if (s.substring(0, idx).trim() != key) continue;
-      final v = _unquoteYaml(s.substring(idx + 1));
-      return v.isEmpty ? null : v;
+  final home = _ariaHome();
+  for (final name in ['engine.yml', 'config.yml']) {
+    try {
+      final raw = File('$home/$name').readAsStringSync();
+      for (final line in raw.split('\n')) {
+        if (line.startsWith(' ') || line.startsWith('\t')) continue;
+        final s = line.trim();
+        if (s.isEmpty || s.startsWith('#') || !s.contains(':')) continue;
+        final idx = s.indexOf(':');
+        if (s.substring(0, idx).trim() != key) continue;
+        final v = _unquoteYaml(s.substring(idx + 1));
+        if (v.isNotEmpty) return v;
+      }
+    } catch (_) {
+      continue;
     }
-  } catch (_) {
-    return null;
   }
   return null;
 }
@@ -181,7 +184,7 @@ class _HubAuthException implements Exception {
   String toString() {
     final field =
         source == 'modelscope' ? 'modelscope_api_token' : 'hf_token';
-    return 'auth failed HTTP $code; set $field via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)';
+    return 'auth failed HTTP $code; set $field via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)';
   }
 }
 
@@ -470,7 +473,7 @@ Future<String> ensureFfiLib({String? site}) async {
 class AriaEngine {
   DynamicLibrary? _lib;
   Pointer? _handle;
-  AuthConfig _cfg = defaultAuthConfig();
+  SetupConfig _cfg = defaultSetupConfig();
   String? _token;
   String? _libPath;
 
@@ -491,7 +494,7 @@ class AriaEngine {
         lang.startsWith('cn');
   }
 
-  /// Set Config / Run fields on this instance only. Does not write config.yml.
+  /// Set Config / Run fields on this instance only. Does not write engine.yml.
   AriaEngine auth(
       {String? router,
       String? siteUrl,
@@ -499,7 +502,7 @@ class AriaEngine {
       String? compute,
       String? hfToken,
       String? modelscopeApiToken}) {
-    _cfg = applyAuth(_cfg,
+    _cfg = applySetup(_cfg,
         router: router,
         siteUrl: siteUrl,
         upgradeUrl: upgradeUrl,
@@ -509,11 +512,11 @@ class AriaEngine {
     return this;
   }
 
-  Map<String, Object> authStatus() => _cfg.toMap();
+  Map<String, Object> setupStatus() => _cfg.toMap();
 
-  /// Reset instance defaults. Does not delete ~/.ariacompute/config.yml.
-  AriaEngine authClear() {
-    _cfg = defaultAuthConfig();
+  /// Reset instance defaults. Does not delete ~/.ariacompute/engine.yml.
+  AriaEngine setupClear() {
+    _cfg = defaultSetupConfig();
     return this;
   }
 
@@ -537,7 +540,7 @@ class AriaEngine {
     }
   }
 
-  /// Download (if needed) and load a model using instance auth.
+  /// Download (if needed) and load a model using instance setup.
   Future<AriaEngine> openUsingAuth(String modelRef, {String? libPath}) async {
     final site = _cfg.siteUrl.isEmpty ? _defaultSite : _cfg.siteUrl;
     final resolvedLib = libPath ?? _libPath ?? await ensureFfiLib(site: site);
@@ -566,12 +569,12 @@ class AriaEngine {
     final eng = AriaEngine(null, libPath);
     eng._token = token;
     if (site != _defaultSite || hfToken != null || modelscopeApiToken != null) {
-      eng.auth(
+      eng.setup(
           siteUrl: site == _defaultSite ? null : site,
           hfToken: hfToken,
           modelscopeApiToken: modelscopeApiToken);
       if (site != _defaultSite && eng._cfg.siteUrl.isEmpty) {
-        eng.auth(siteUrl: site);
+        eng.setup(siteUrl: site);
       }
     }
     await eng.openUsingAuth(modelRef, libPath: libPath);

@@ -52,7 +52,7 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
     if upgrade_url.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "upgrade_url not set; run `aria-engine auth` first",
+            "upgrade_url not set; run `aria-engine setup` first",
         ));
     }
     let org = upgrade_url.trim_end_matches('/');

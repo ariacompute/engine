@@ -38,9 +38,9 @@ export interface CompleteResult {
 export interface OpenOptions {
   /** Legacy generic hub token. Dashboard sk-/bfvk- keys are ignored. */
   token?: string;
-  /** Hugging Face hub token (`.com`). Same field as `aria-engine auth` `hf_token`. */
+  /** Hugging Face hub token (`.com`). Same field as `aria-engine setup` `hf_token`. */
   hfToken?: string;
-  /** ModelScope hub token (`.cn`). Same field as `aria-engine auth` `modelscope_api_token`. */
+  /** ModelScope hub token (`.cn`). Same field as `aria-engine setup` `modelscope_api_token`. */
   modelscopeApiToken?: string;
   /** Site used to pick the regional hub. Defaults to https://ariacompute.com (.com → HF, .cn → ModelScope). */
   site?: string;
@@ -54,7 +54,7 @@ export const INTL_UPGRADE = "https://github.com/ariacompute";
 export const CN_SITE = "https://ariacompute.cn";
 export const CN_UPGRADE = "https://gitee.com/ariacompute";
 
-export interface AuthConfig {
+export interface SetupConfig {
   router: string;
   site_url: string;
   upgrade_url: string;
@@ -63,7 +63,7 @@ export interface AuthConfig {
   modelscope_api_token: string;
 }
 
-export function defaultAuthConfig(): AuthConfig {
+export function defaultSetupConfig(): SetupConfig {
   return {
     router: "",
     site_url: "",
@@ -85,7 +85,7 @@ function pairUrls(region: "cn" | "intl"): [string, string] {
   return region === "cn" ? [CN_SITE, CN_UPGRADE] : [INTL_SITE, INTL_UPGRADE];
 }
 
-export function fillAuthUrls(cfg: AuthConfig): AuthConfig {
+export function fillSetupUrls(cfg: SetupConfig): SetupConfig {
   const out = { ...cfg };
   const region = gatewayRegion(out.site_url) || gatewayRegion(out.upgrade_url);
   if (!region) return out;
@@ -95,8 +95,8 @@ export function fillAuthUrls(cfg: AuthConfig): AuthConfig {
   return out;
 }
 
-export function applyAuth(existing: AuthConfig, updates: Partial<AuthConfig>): AuthConfig {
-  const out: AuthConfig = { ...existing };
+export function applySetup(existing: SetupConfig, updates: Partial<SetupConfig>): SetupConfig {
+  const out: SetupConfig = { ...existing };
   for (const [k, v] of Object.entries(updates)) {
     if (v === undefined) continue;
     (out as unknown as Record<string, unknown>)[k] = v;
@@ -104,7 +104,7 @@ export function applyAuth(existing: AuthConfig, updates: Partial<AuthConfig>): A
   if (!["auto", "cpu", "cuda"].includes(out.compute)) {
     throw new Error(`invalid compute: ${out.compute}`);
   }
-  return fillAuthUrls(out);
+  return fillSetupUrls(out);
 }
 
 const DEFAULT_SDK = "v1.0";
@@ -186,19 +186,22 @@ function unquoteYaml(v: string): string {
 }
 
 export function configYmlScalar(key: string): string | undefined {
-  try {
-    const raw = fs.readFileSync(path.join(ariaHome(), "config.yml"), "utf8");
-    for (const line of raw.split("\n")) {
-      if (line.startsWith(" ") || line.startsWith("\t")) continue;
-      const s = line.trim();
-      if (!s || s.startsWith("#") || !s.includes(":")) continue;
-      const idx = s.indexOf(":");
-      if (s.slice(0, idx).trim() !== key) continue;
-      const v = unquoteYaml(s.slice(idx + 1));
-      return v || undefined;
+  const home = ariaHome();
+  for (const name of ["engine.yml", "config.yml"]) {
+    try {
+      const raw = fs.readFileSync(path.join(home, name), "utf8");
+      for (const line of raw.split("\n")) {
+        if (line.startsWith(" ") || line.startsWith("\t")) continue;
+        const s = line.trim();
+        if (!s || s.startsWith("#") || !s.includes(":")) continue;
+        const idx = s.indexOf(":");
+        if (s.slice(0, idx).trim() !== key) continue;
+        const v = unquoteYaml(s.slice(idx + 1));
+        if (v) return v;
+      }
+    } catch {
+      continue;
     }
-  } catch {
-    return undefined;
   }
   return undefined;
 }
@@ -300,7 +303,7 @@ async function fetchHubFile(
       if (e instanceof HubHttpError && (e.status === 401 || e.status === 403)) {
         const field = source === "modelscope" ? "modelscope_api_token" : "hf_token";
         throw new Error(
-          `auth failed HTTP ${e.status}; set ${field} via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
+          `auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
         );
       }
     }
@@ -582,14 +585,14 @@ export class Engine {
   private fnEmbed: any;
   private fnTranscribe: any;
   private fnLastError: any;
-  private cfg: AuthConfig = defaultAuthConfig();
+  private cfg: SetupConfig = defaultSetupConfig();
   private opts: OpenOptions = {};
 
   /** Empty construct, or a local bundle directory. */
   constructor(bundle?: string, opts: OpenOptions = {}) {
     this.opts = opts;
     if (opts.site || opts.hfToken || opts.modelscopeApiToken) {
-      this.auth({
+      this.setup({
         site_url: opts.site,
         hf_token: opts.hfToken,
         modelscope_api_token: opts.modelscopeApiToken,
@@ -598,19 +601,19 @@ export class Engine {
     if (bundle) this.bindAndInit(bundle, opts.ffiLib);
   }
 
-  /** Set Config / Run fields on this instance only. Does not write config.yml. */
-  auth(updates: Partial<AuthConfig>): this {
-    this.cfg = applyAuth(this.cfg, updates);
+  /** Set Config / Run fields on this instance only. Does not write engine.yml. */
+  setup(updates: Partial<SetupConfig>): this {
+    this.cfg = applySetup(this.cfg, updates);
     return this;
   }
 
-  authStatus(): AuthConfig {
+  setupStatus(): SetupConfig {
     return { ...this.cfg };
   }
 
-  /** Reset instance defaults. Does not delete ~/.ariacompute/config.yml. */
-  authClear(): this {
-    this.cfg = defaultAuthConfig();
+  /** Reset instance defaults. Does not delete ~/.ariacompute/engine.yml. */
+  setupClear(): this {
+    this.cfg = defaultSetupConfig();
     return this;
   }
 
@@ -629,7 +632,7 @@ export class Engine {
     }
   }
 
-  /** Download (if needed) and load a model using instance auth. */
+  /** Download (if needed) and load a model using instance setup. */
   async open(modelRef: string): Promise<this> {
     await ensureFfiLib(this.cfg.site_url || this.opts.site);
     const openOpts: OpenOptions = {

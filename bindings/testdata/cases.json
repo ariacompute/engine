@@ -20,16 +20,16 @@
     {"id": "open_model_name_token_optional", "intent": "Model name without token", "assert": "open_model/open attempts hub download; token is optional for public models"},
     {"id": "open_local_path_ignores_token", "intent": "Local path with no token", "assert": "loads directly; token optional"},
     {"id": "download_cached_skip", "intent": "Valid cached bundle present", "assert": "download_model returns cache path without network"},
-    {"id": "download_dashboard_token_ignored", "intent": "Dashboard sk-/bfvk- token", "assert": "not sent as hub Bearer; falls back to config.yml hub token if present"},
-    {"id": "download_hub_token_from_config", "intent": "config.yml hf_token / modelscope_api_token", "assert": "SDK uses the regional field from ~/.ariacompute/config.yml when call args are empty"},
+    {"id": "download_dashboard_token_ignored", "intent": "Dashboard sk-/bfvk- token", "assert": "not sent as hub Bearer; falls back to engine.yml hub token if present"},
+    {"id": "download_hub_token_from_config", "intent": "engine.yml hf_token / modelscope_api_token", "assert": "SDK uses the regional field from ~/.ariacompute/engine.yml when call args are empty"},
     {"id": "download_named_hub_token", "intent": "Explicit hf_token or modelscope_api_token", "assert": "named field for the active hub is sent; the other region field is ignored"},
     {"id": "ensure_ffi_lib_cached", "intent": "libaria_ffi already in ~/.ariacompute/lib", "assert": "SDK loads that path; no Releases download"},
     {"id": "ensure_ffi_lib_from_release", "intent": "No ARIA_FFI_LIB / bundled / cache", "assert": "downloads latest stable libaria_ffi_{ver}_{os}.tar.gz into ~/.ariacompute/lib (GitHub .com / Gitee .cn)"},
-    {"id": "auth_instance_all_fields", "intent": "Engine.auth sets §3.4.1 fields in memory", "assert": "auth_status returns those values"},
-    {"id": "auth_instance_partial_merge", "intent": "Second auth omits some fields", "assert": "omitted fields keep previous instance values"},
-    {"id": "auth_invalid_enum", "intent": "Illegal compute", "assert": "error; instance state unchanged"},
-    {"id": "auth_clear_resets_instance", "intent": "auth_clear", "assert": "instance back to defaults; config.yml untouched"},
-    {"id": "auth_fills_urls_from_site_tld", "intent": "auth(site_url=.cn) without other URLs", "assert": "upgrade_url gitee.com/ariacompute in memory"},
-    {"id": "auth_does_not_write_config_yml", "intent": "auth on empty Engine", "assert": "no config.yml created or modified under ARIA_COMPUTE_HOME"}
+    {"id": "setup_instance_all_fields", "intent": "Engine.setup sets §3.4.1 fields in memory", "assert": "setup_status returns those values"},
+    {"id": "setup_instance_partial_merge", "intent": "Second setup omits some fields", "assert": "omitted fields keep previous instance values"},
+    {"id": "setup_invalid_enum", "intent": "Illegal compute", "assert": "error; instance state unchanged"},
+    {"id": "setup_clear_resets_instance", "intent": "setup_clear", "assert": "instance back to defaults; engine.yml untouched"},
+    {"id": "setup_fills_urls_from_site_tld", "intent": "setup(site_url=.cn) without other URLs", "assert": "upgrade_url gitee.com/ariacompute in memory"},
+    {"id": "setup_does_not_write_engine_yml", "intent": "setup on empty Engine", "assert": "no engine.yml created or modified under ARIA_COMPUTE_HOME"}
   ]
 }

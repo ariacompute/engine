@@ -1,4 +1,4 @@
-//! Instance-level Engine auth (in-memory; does not write config.yml).
+//! Instance-level Engine setup (in-memory; does not write engine.yml).
 
 use thiserror::Error;
 
@@ -8,13 +8,13 @@ pub const CN_SITE: &str = "https://ariacompute.cn";
 pub const CN_UPGRADE: &str = "https://gitee.com/ariacompute";
 
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
-pub enum AuthError {
+pub enum SetupError {
     #[error("invalid compute: {0}")]
     InvalidCompute(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct AuthConfig {
+pub struct SetupConfig {
     pub router: String,
     pub site_url: String,
     pub upgrade_url: String,
@@ -23,7 +23,7 @@ pub struct AuthConfig {
     pub modelscope_api_token: String,
 }
 
-impl Default for AuthConfig {
+impl Default for SetupConfig {
     fn default() -> Self {
         Self {
             router: String::new(),
@@ -38,7 +38,7 @@ impl Default for AuthConfig {
 
 /// Partial merge. `None` fields are omitted.
 #[derive(Debug, Clone, Default)]
-pub struct AuthUpdates {
+pub struct SetupUpdates {
     pub router: Option<String>,
     pub site_url: Option<String>,
     pub upgrade_url: Option<String>,
@@ -67,7 +67,7 @@ fn pair_urls(region: &str) -> (&'static str, &'static str) {
 }
 
 /// Fill missing site/upgrade URLs from a provided TLD.
-pub fn fill_auth_urls(mut cfg: AuthConfig) -> AuthConfig {
+pub fn fill_setup_urls(mut cfg: SetupConfig) -> SetupConfig {
     let region = gateway_region(&cfg.site_url).or_else(|| gateway_region(&cfg.upgrade_url));
     let Some(region) = region else {
         return cfg;
@@ -83,7 +83,7 @@ pub fn fill_auth_urls(mut cfg: AuthConfig) -> AuthConfig {
 }
 
 /// Merge `updates` into `existing`. Validates; does not mutate `existing`.
-pub fn apply_auth(existing: &AuthConfig, updates: &AuthUpdates) -> Result<AuthConfig, AuthError> {
+pub fn apply_setup(existing: &SetupConfig, updates: &SetupUpdates) -> Result<SetupConfig, SetupError> {
     let mut out = existing.clone();
     if let Some(v) = &updates.router {
         out.router = v.clone();
@@ -105,7 +105,7 @@ pub fn apply_auth(existing: &AuthConfig, updates: &AuthUpdates) -> Result<AuthCo
     }
     match out.compute.as_str() {
         "auto" | "cpu" | "cuda" => {}
-        other => return Err(AuthError::InvalidCompute(other.into())),
+        other => return Err(SetupError::InvalidCompute(other.into())),
     }
-    Ok(fill_auth_urls(out))
+    Ok(fill_setup_urls(out))
 }

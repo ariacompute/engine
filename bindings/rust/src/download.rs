@@ -136,8 +136,7 @@ fn unquote_yaml(v: &str) -> String {
     }
 }
 
-fn config_yml_scalar(key: &str) -> Option<String> {
-    let path = aria_home().ok()?.join("config.yml");
+fn scalar_from_yml_path(path: &std::path::Path, key: &str) -> Option<String> {
     let raw = std::fs::read_to_string(path).ok()?;
     for line in raw.lines() {
         if line.starts_with(' ') || line.starts_with('\t') {
@@ -158,6 +157,16 @@ fn config_yml_scalar(key: &str) -> Option<String> {
             return None;
         }
         return Some(val);
+    }
+    None
+}
+
+fn config_yml_scalar(key: &str) -> Option<String> {
+    let home = aria_home().ok()?;
+    for name in ["engine.yml", "config.yml"] {
+        if let Some(v) = scalar_from_yml_path(&home.join(name), key) {
+            return Some(v);
+        }
     }
     None
 }
@@ -273,7 +282,7 @@ fn auth_error(source: &str, code: u16) -> DownloadError {
         "hf_token"
     };
     DownloadError::Request(format!(
-        "auth failed HTTP {code}; set {field} via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+        "auth failed HTTP {code}; set {field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
     ))
 }
 
@@ -349,18 +358,18 @@ fn fetch_hub_file(
 ///
 /// If a valid bundle already exists at the cache path, the download is skipped.
 /// Hub auth: explicit `hf_token` / `modelscope_api_token`, then generic `token`,
-/// then `~/.ariacompute/config.yml` (same keys as `aria-engine auth`).
+/// then `~/.ariacompute/engine.yml` (same keys as `aria-engine setup`).
 /// Dashboard `sk-` / `bfvk-` keys are not sent to the hub.
 pub fn download_model(
     model: &str,
     token: &str,
     site: Option<&str>,
 ) -> Result<PathBuf, DownloadError> {
-    download_model_auth(model, token, site, None, None)
+    download_model_setup(model, token, site, None, None)
 }
 
-/// Like [`download_model`], with named hub tokens matching `aria-engine auth`.
-pub fn download_model_auth(
+/// Like [`download_model`], with named hub tokens matching `aria-engine setup`.
+pub fn download_model_setup(
     model: &str,
     token: &str,
     site: Option<&str>,

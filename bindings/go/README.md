@@ -24,15 +24,15 @@ and then loads it. Dashboard is not used. A Dashboard `sk-` / `bfvk-` token is
 ignored for hub auth. Token is optional for public models. A valid cached bundle
 is reused without re-downloading.
 
-Gated files: `NewEngine` → `Auth` → `Open` (instance memory; does not write
-`config.yml`). Same keys as `aria-engine auth`. If omitted, the SDK reads
-`~/.ariacompute/config.yml`. Package-level `OpenModel` / `OpenModelOpts` remain.
+Gated files: `NewEngine` → `Setup` → `Open` (instance memory; does not write
+`engine.yml`). Same keys as `aria-engine setup`. If omitted, the SDK reads
+`~/.ariacompute/engine.yml`. Package-level `OpenModel` / `OpenModelOpts` remain.
 
 ```go
 eng, err := aria.OpenModel("gemma-4-e2b-it_q4", "", "")
 
 e := aria.NewEngine()
 hf := "hf_..."
-_ = e.Auth(aria.AuthUpdates{HFToken: &hf})
+_ = e.Setup(aria.SetupUpdates{HFToken: &hf})
 _ = e.Open("gemma-4-e2b-it_q4")
 ```

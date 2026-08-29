@@ -34,9 +34,9 @@ var __importStar = (this && this.__importStar) || (function () {
 })();
 Object.defineProperty(exports, "__esModule", { value: true });
 exports._internal = exports.Engine = exports.CN_UPGRADE = exports.CN_SITE = exports.INTL_UPGRADE = exports.INTL_SITE = void 0;
-exports.defaultAuthConfig = defaultAuthConfig;
-exports.fillAuthUrls = fillAuthUrls;
-exports.applyAuth = applyAuth;
+exports.defaultSetupConfig = defaultSetupConfig;
+exports.fillSetupUrls = fillSetupUrls;
+exports.applySetup = applySetup;
 exports.parseBundleName = parseBundleName;
 exports.preferredPublicHub = preferredPublicHub;
 exports.hubBearer = hubBearer;
@@ -63,7 +63,7 @@ exports.INTL_SITE = "https://ariacompute.com";
 exports.INTL_UPGRADE = "https://github.com/ariacompute";
 exports.CN_SITE = "https://ariacompute.cn";
 exports.CN_UPGRADE = "https://gitee.com/ariacompute";
-function defaultAuthConfig() {
+function defaultSetupConfig() {
     return {
         router: "",
         site_url: "",
@@ -84,7 +84,7 @@ function gatewayRegion(url) {
 function pairUrls(region) {
     return region === "cn" ? [exports.CN_SITE, exports.CN_UPGRADE] : [exports.INTL_SITE, exports.INTL_UPGRADE];
 }
-function fillAuthUrls(cfg) {
+function fillSetupUrls(cfg) {
     const out = { ...cfg };
     const region = gatewayRegion(out.site_url) || gatewayRegion(out.upgrade_url);
     if (!region)
@@ -96,7 +96,7 @@ function fillAuthUrls(cfg) {
         out.upgrade_url = upgrade;
     return out;
 }
-function applyAuth(existing, updates) {
+function applySetup(existing, updates) {
     const out = { ...existing };
     for (const [k, v] of Object.entries(updates)) {
         if (v === undefined)
@@ -106,7 +106,7 @@ function applyAuth(existing, updates) {
     if (!["auto", "cpu", "cuda"].includes(out.compute)) {
         throw new Error(`invalid compute: ${out.compute}`);
     }
-    return fillAuthUrls(out);
+    return fillSetupUrls(out);
 }
 const DEFAULT_SDK = "v1.0";
 const HUB_REQUIRED = ["config.json", "weight.bin"];
@@ -184,23 +184,27 @@ function unquoteYaml(v) {
     return t;
 }
 function configYmlScalar(key) {
-    try {
-        const raw = fs.readFileSync(path.join(ariaHome(), "config.yml"), "utf8");
-        for (const line of raw.split("\n")) {
-            if (line.startsWith(" ") || line.startsWith("\t"))
-                continue;
-            const s = line.trim();
-            if (!s || s.startsWith("#") || !s.includes(":"))
-                continue;
-            const idx = s.indexOf(":");
-            if (s.slice(0, idx).trim() !== key)
-                continue;
-            const v = unquoteYaml(s.slice(idx + 1));
-            return v || undefined;
+    const home = ariaHome();
+    for (const name of ["engine.yml", "config.yml"]) {
+        try {
+            const raw = fs.readFileSync(path.join(home, name), "utf8");
+            for (const line of raw.split("\n")) {
+                if (line.startsWith(" ") || line.startsWith("\t"))
+                    continue;
+                const s = line.trim();
+                if (!s || s.startsWith("#") || !s.includes(":"))
+                    continue;
+                const idx = s.indexOf(":");
+                if (s.slice(0, idx).trim() !== key)
+                    continue;
+                const v = unquoteYaml(s.slice(idx + 1));
+                if (v)
+                    return v;
+            }
         }
-    }
-    catch {
-        return undefined;
+        catch {
+            continue;
+        }
     }
     return undefined;
 }
@@ -288,7 +292,7 @@ async function fetchHubFile(source, model, file, dest, token, required) {
             last = e;
             if (e instanceof HubHttpError && (e.status === 401 || e.status === 403)) {
                 const field = source === "modelscope" ? "modelscope_api_token" : "hf_token";
-                throw new Error(`auth failed HTTP ${e.status}; set ${field} via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)`);
+                throw new Error(`auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`);
             }
         }
     }
@@ -564,11 +568,11 @@ class Engine {
     constructor(bundle, opts = {}) {
         this.lib = null;
         this.handle = null;
-        this.cfg = defaultAuthConfig();
+        this.cfg = defaultSetupConfig();
         this.opts = {};
         this.opts = opts;
         if (opts.site || opts.hfToken || opts.modelscopeApiToken) {
-            this.auth({
+            this.setup({
                 site_url: opts.site,
                 hf_token: opts.hfToken,
                 modelscope_api_token: opts.modelscopeApiToken,
@@ -577,17 +581,17 @@ class Engine {
         if (bundle)
             this.bindAndInit(bundle, opts.ffiLib);
     }
-    /** Set Config / Run fields on this instance only. Does not write config.yml. */
-    auth(updates) {
-        this.cfg = applyAuth(this.cfg, updates);
+    /** Set Config / Run fields on this instance only. Does not write engine.yml. */
+    setup(updates) {
+        this.cfg = applySetup(this.cfg, updates);
         return this;
     }
-    authStatus() {
+    setupStatus() {
         return { ...this.cfg };
     }
-    /** Reset instance defaults. Does not delete ~/.ariacompute/config.yml. */
-    authClear() {
-        this.cfg = defaultAuthConfig();
+    /** Reset instance defaults. Does not delete ~/.ariacompute/engine.yml. */
+    setupClear() {
+        this.cfg = defaultSetupConfig();
         return this;
     }
     bindAndInit(bundle, ffiLib) {
@@ -604,7 +608,7 @@ class Engine {
             throw new Error(err || "init failed");
         }
     }
-    /** Download (if needed) and load a model using instance auth. */
+    /** Download (if needed) and load a model using instance setup. */
     async open(modelRef) {
         await ensureFfiLib(this.cfg.site_url || this.opts.site);
         const openOpts = {

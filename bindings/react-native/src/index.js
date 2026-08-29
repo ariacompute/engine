@@ -9,9 +9,9 @@
  */
 import { NativeModules } from 'react-native';
 import {
-  defaultAuthConfig,
-  applyAuth,
-} from './auth.js';
+  defaultSetupConfig,
+  applySetup,
+} from './setup.js';
 
 const AriaEngineModule = NativeModules.AriaEngine;
 
@@ -91,19 +91,22 @@ function unquoteYaml(v) {
 function configYmlScalar(key) {
   const fs = require('fs');
   const path = require('path');
-  try {
-    const raw = fs.readFileSync(path.join(ariaHome(), 'config.yml'), 'utf8');
-    for (const line of raw.split('\n')) {
-      if (line.startsWith(' ') || line.startsWith('\t')) continue;
-      const s = line.trim();
-      if (!s || s.startsWith('#') || !s.includes(':')) continue;
-      const idx = s.indexOf(':');
-      if (s.slice(0, idx).trim() !== key) continue;
-      const v = unquoteYaml(s.slice(idx + 1));
-      return v || undefined;
+  const home = ariaHome();
+  for (const name of ['engine.yml', 'config.yml']) {
+    try {
+      const raw = fs.readFileSync(path.join(home, name), 'utf8');
+      for (const line of raw.split('\n')) {
+        if (line.startsWith(' ') || line.startsWith('\t')) continue;
+        const s = line.trim();
+        if (!s || s.startsWith('#') || !s.includes(':')) continue;
+        const idx = s.indexOf(':');
+        if (s.slice(0, idx).trim() !== key) continue;
+        const v = unquoteYaml(s.slice(idx + 1));
+        if (v) return v;
+      }
+    } catch {
+      continue;
     }
-  } catch {
-    return undefined;
   }
   return undefined;
 }
@@ -213,7 +216,7 @@ async function fetchHubFile(source, model, file, dest, token, required) {
       if (e && (e.status === 401 || e.status === 403)) {
         const field = source === 'modelscope' ? 'modelscope_api_token' : 'hf_token';
         throw new Error(
-          `auth failed HTTP ${e.status}; set ${field} via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
+          `auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
         );
       }
     }
@@ -425,22 +428,22 @@ async function ensureFfiLib(site) {
 export class AriaEngine {
   constructor(bundlePath) {
     this.bundlePath = bundlePath;
-    this.cfg = defaultAuthConfig();
+    this.cfg = defaultSetupConfig();
     this.opts = {};
     // NativeModules.AriaEngine.init(bundlePath) when linked.
   }
 
-  auth(updates) {
-    this.cfg = applyAuth(this.cfg, updates);
+  setup(updates) {
+    this.cfg = applySetup(this.cfg, updates);
     return this;
   }
 
-  authStatus() {
+  setupStatus() {
     return { ...this.cfg };
   }
 
-  authClear() {
-    this.cfg = defaultAuthConfig();
+  setupClear() {
+    this.cfg = defaultSetupConfig();
     return this;
   }
 
@@ -460,7 +463,7 @@ export class AriaEngine {
     const eng = new AriaEngine();
     eng.opts = opts;
     if (opts.site || opts.hfToken || opts.modelscopeApiToken) {
-      eng.auth({
+      eng.setup({
         site_url: opts.site,
         hf_token: opts.hfToken,
         modelscope_api_token: opts.modelscopeApiToken,

@@ -13,7 +13,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## 配置 / 运行
 
-凭证保存在 `~/.ariacompute/config.yml`（通过 `aria-engine auth` 写入）。
+凭证保存在 `~/.ariacompute/engine.yml`（通过 `aria-engine setup` 写入）。
 
 | 字段 | 含义 | 默认 |
 |------|------|------|
@@ -25,12 +25,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `modelscope_api_token` | ModelScope hub token（可选） | _(空)_ |
 
 ```bash
-# 认证
-aria-engine auth
-aria-engine auth --status
+# 配置
+aria-engine setup
+aria-engine setup --status
 
 # 下载模型
-# 可选：aria-engine auth 按区提示 hf_token（.com）或 modelscope_api_token（.cn）
+# 可选：aria-engine setup 按区提示 hf_token（.com）或 modelscope_api_token（.cn）
 aria-engine download gemma-4-e2b-it_q4
 aria-engine list
 aria-engine check gemma-4-e2b-it_q4
@@ -48,20 +48,20 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto
 
-# 服务并向 aria-router 注册为本地 provider（仅覆盖本进程，不写 config.yml）
+# 服务并向 aria-router 注册为本地 provider（仅覆盖本进程，不写 engine.yml）
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
   --compute auto
 ```
 
-`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `aria-engine auth` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/config.yml`。
+`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `aria-engine setup` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/engine.yml`。
 
 `list` 只扫描本地 `~/.ariacompute/models`。
 
 `check [model]` 对照本区 hub（与 `download` 相同）校验本地文件数目、文件名与 SHA-256；省略 model 则检查全部缓存。不一致 exit 1；`weight.bin` 只在本地哈希并与 hub 元数据比对，不重新下载。
 
-`serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。`--router URL` 向 aria-router 注册本进程为本地 provider（不写 `config.yml`）。
+`serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。`--router URL` 向 aria-router 注册本进程为本地 provider（不写 `engine.yml`）。
 
 `--compute auto|cpu|cuda` 选择**本机** GEMM：`auto` 在能加载 `libcudart`/`libcublas` 且 `cudaGetDeviceCount>0` 时用 CUDA，否则 CPU（x86_64 AVX2+FMA，aarch64 NEON）。`--compute cuda` 在无 NVIDIA 设备时**硬失败**，不会静默降到 CPU。CUDA 为运行时 libloading（编译不依赖 CUDA toolkit）；H200 上仍可用 `--features cuda` 作为文档旗标：
 
@@ -80,9 +80,9 @@ python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engin
 
 ## 向 aria-router 注册
 
-本进程不做路由。若配置了 `router`（`config.yml` 或 `--router`），`serve` 在接受请求前向网关注册为本地 provider：
+本进程不做路由。若配置了 `router`（`engine.yml` 或 `--router`），`serve` 在接受请求前向网关注册为本地 provider：
 
-`PUT {router}/v1/router/providers`，body 为 `{name, endpoint, provider_model_id, locality}`。失败则 **退出**（不会静默改成纯本地）。`--router` 只覆盖本进程，不回写 `config.yml`。
+`PUT {router}/v1/router/providers`，body 为 `{name, endpoint, provider_model_id, locality}`。失败则 **退出**（不会静默改成纯本地）。`--router` 只覆盖本进程，不回写 `engine.yml`。
 
 端口不要撞车：engine 数据面（`--bind`）与 router 管理面（`--mgmt-bind`，默认 `127.0.0.1:8080`）。客户端应打 **router 数据面**，而不是 engine。
 
@@ -101,8 +101,8 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 
 # 也可写入配置，不必每次带 --router：
-#   aria-engine auth  # 可选填写 router URL
-#   # 或 ~/.ariacompute/config.yml：
+#   aria-engine setup  # 可选填写 router URL
+#   # 或 ~/.ariacompute/engine.yml：
 #   # router: http://127.0.0.1:8090
 
 # 3. 经网关对话（实名 = bypass，转发到本 engine）
@@ -288,7 +288,7 @@ C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`�
 
 ### 按模型名自动下载
 
-所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `aria-engine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**。需授权的 hub 文件使用与 `aria-engine auth` 相同的字段，通过实例 `auth`（空构造 → `auth` → `open`）设置；**仅内存**，绝不写入 `config.yml`（CLI `aria-engine auth` 仍写该文件）。实例字段为空时下载仍可读 `~/.ariacompute/config.yml`。Dashboard 的 `sk-`/`bfvk-` token 不会当作 hub 凭证。不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
+所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `aria-engine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**。需授权的 hub 文件使用与 `aria-engine setup` 相同的字段，通过实例 `setup`（空构造 → `setup` → `open`）设置；**仅内存**，绝不写入 `engine.yml`（CLI `aria-engine setup` 仍写该文件）。实例字段为空时下载仍可读 `~/.ariacompute/engine.yml`。Dashboard 的 `sk-`/`bfvk-` token 不会当作 hub 凭证。不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
@@ -344,13 +344,13 @@ with Engine("/path/to/aria-bundle") as eng:
 with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 
-# 需授权的 hub 文件 —— 实例 auth（不写 ~/.ariacompute/config.yml）：
+# 需授权的 hub 文件 —— 实例 setup（不写 ~/.ariacompute/engine.yml）：
 eng = Engine()
-eng.auth(hf_token="hf_...")  # .com → Hugging Face
+eng.setup(hf_token="hf_...")  # .com → Hugging Face
 eng.open("gemma-4-e2b-it_q4")
 print(eng.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 eng_ms = Engine()
-eng_ms.auth(modelscope_api_token="ms_...", site_url="https://ariacompute.cn")
+eng_ms.setup(modelscope_api_token="ms_...", site_url="https://ariacompute.cn")
 eng_ms.open("gemma-4-e2b-it_q4")
 print(eng_ms.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
@@ -379,12 +379,12 @@ const eng2 = await Engine.open("gemma-4-e2b-it_q4");
 console.log((await eng2.complete([{ role: "user", content: "Hello" }])).response);
 eng2.close();
 
-// 需授权的 hub 文件 —— 实例 auth（不写 ~/.ariacompute/config.yml）：
+// 需授权的 hub 文件 —— 实例 setup（不写 ~/.ariacompute/engine.yml）：
 const engHf = new Engine();
-engHf.auth({ hf_token: "hf_..." }); // .com
+engHf.setup({ hf_token: "hf_..." }); // .com
 await engHf.open("gemma-4-e2b-it_q4");
 const engMs = new Engine();
-engMs.auth({ modelscope_api_token: "ms_...", site_url: "https://ariacompute.cn" });
+engMs.setup({ modelscope_api_token: "ms_...", site_url: "https://ariacompute.cn" });
 await engMs.open("gemma-4-e2b-it_q4");
 engHf.close();
 engMs.close();
@@ -432,10 +432,10 @@ func main() {
 	defer eng2.Close()
 	_ = eng2
 
-	// 需授权的 hub 文件 —— 实例 auth（不写 ~/.ariacompute/config.yml）：
+	// 需授权的 hub 文件 —— 实例 setup（不写 ~/.ariacompute/engine.yml）：
 	engHf := aria.NewEngine()
 	hf := "hf_..."
-	if err := engHf.Auth(aria.AuthUpdates{HFToken: &hf}); err != nil {
+	if err := engHf.Setup(aria.SetupUpdates{HFToken: &hf}); err != nil {
 		panic(err)
 	}
 	if err := engHf.Open("gemma-4-e2b-it_q4"); err != nil {
@@ -444,7 +444,7 @@ func main() {
 	defer engHf.Close()
 	engMs := aria.NewEngine()
 	ms, site := "ms_...", "https://ariacompute.cn"
-	if err := engMs.Auth(aria.AuthUpdates{ModelScopeAPIToken: &ms, SiteURL: &site}); err != nil {
+	if err := engMs.Setup(aria.SetupUpdates{ModelScopeAPIToken: &ms, SiteURL: &site}); err != nil {
 		panic(err)
 	}
 	if err := engMs.Open("gemma-4-e2b-it_q4"); err != nil {
@@ -463,7 +463,7 @@ cargo add ariacompute-engine
 ```
 
 ```rust
-use aria_engine::{AuthUpdates, Engine, GenerateOpts, OpenOptions};
+use aria_engine::{SetupUpdates, Engine, GenerateOpts, OpenOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 本地 bundle 路径：
@@ -479,13 +479,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let g2 = eng2.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?;
     println!("{}", g2.text);
 
-    // 需授权的 hub 文件 —— 实例 auth（不写 ~/.ariacompute/config.yml）：
+    // 需授权的 hub 文件 —— 实例 setup（不写 ~/.ariacompute/engine.yml）：
     let mut eng_hf = Engine::new();
-    eng_hf.auth(&AuthUpdates { hf_token: Some("hf_...".into()), ..Default::default() })?;
+    eng_hf.setup(&SetupUpdates { hf_token: Some("hf_...".into()), ..Default::default() })?;
     eng_hf.open_named("gemma-4-e2b-it_q4")?;
     println!("{}", eng_hf.complete("Hello", &GenerateOpts { max_tokens: 32, temperature: 0.0 })?.text);
     let mut eng_ms = Engine::new();
-    eng_ms.auth(&AuthUpdates {
+    eng_ms.setup(&SetupUpdates {
         modelscope_api_token: Some("ms_...".into()),
         site_url: Some("https://ariacompute.cn".into()),
         ..Default::default()

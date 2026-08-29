@@ -29,9 +29,9 @@ export interface CompleteResult {
 export interface OpenOptions {
     /** Legacy generic hub token. Dashboard sk-/bfvk- keys are ignored. */
     token?: string;
-    /** Hugging Face hub token (`.com`). Same field as `aria-engine auth` `hf_token`. */
+    /** Hugging Face hub token (`.com`). Same field as `aria-engine setup` `hf_token`. */
     hfToken?: string;
-    /** ModelScope hub token (`.cn`). Same field as `aria-engine auth` `modelscope_api_token`. */
+    /** ModelScope hub token (`.cn`). Same field as `aria-engine setup` `modelscope_api_token`. */
     modelscopeApiToken?: string;
     /** Site used to pick the regional hub. Defaults to https://ariacompute.com (.com → HF, .cn → ModelScope). */
     site?: string;
@@ -42,7 +42,7 @@ export declare const INTL_SITE = "https://ariacompute.com";
 export declare const INTL_UPGRADE = "https://github.com/ariacompute";
 export declare const CN_SITE = "https://ariacompute.cn";
 export declare const CN_UPGRADE = "https://gitee.com/ariacompute";
-export interface AuthConfig {
+export interface SetupConfig {
     router: string;
     site_url: string;
     upgrade_url: string;
@@ -50,9 +50,9 @@ export interface AuthConfig {
     hf_token: string;
     modelscope_api_token: string;
 }
-export declare function defaultAuthConfig(): AuthConfig;
-export declare function fillAuthUrls(cfg: AuthConfig): AuthConfig;
-export declare function applyAuth(existing: AuthConfig, updates: Partial<AuthConfig>): AuthConfig;
+export declare function defaultSetupConfig(): SetupConfig;
+export declare function fillSetupUrls(cfg: SetupConfig): SetupConfig;
+export declare function applySetup(existing: SetupConfig, updates: Partial<SetupConfig>): SetupConfig;
 /** Parse `slug`/`quant` from a model name such as `gemma-4-e2b-it_q4`. */
 export declare function parseBundleName(model: string): {
     slug: string;
@@ -89,13 +89,13 @@ export declare class Engine {
     private opts;
     /** Empty construct, or a local bundle directory. */
     constructor(bundle?: string, opts?: OpenOptions);
-    /** Set Config / Run fields on this instance only. Does not write config.yml. */
-    auth(updates: Partial<AuthConfig>): this;
-    authStatus(): AuthConfig;
-    /** Reset instance defaults. Does not delete ~/.ariacompute/config.yml. */
-    authClear(): this;
+    /** Set Config / Run fields on this instance only. Does not write engine.yml. */
+    setup(updates: Partial<SetupConfig>): this;
+    setupStatus(): SetupConfig;
+    /** Reset instance defaults. Does not delete ~/.ariacompute/engine.yml. */
+    setupClear(): this;
     private bindAndInit;
-    /** Download (if needed) and load a model using instance auth. */
+    /** Download (if needed) and load a model using instance setup. */
     open(modelRef: string): Promise<this>;
     /** Auto-detect: a value containing a separator or already on disk is a local
      * path; otherwise it is a model name downloaded from the regional public hub. */

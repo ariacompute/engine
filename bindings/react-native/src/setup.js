@@ -1,11 +1,11 @@
-/** Instance-level Engine auth (in-memory; does not write config.yml). */
+/** Instance-level Engine setup (in-memory; does not write engine.yml). */
 
 const INTL_SITE = 'https://ariacompute.com';
 const INTL_UPGRADE = 'https://github.com/ariacompute';
 const CN_SITE = 'https://ariacompute.cn';
 const CN_UPGRADE = 'https://gitee.com/ariacompute';
 
-function defaultAuthConfig() {
+function defaultSetupConfig() {
   return {
     router: '',
     site_url: '',
@@ -27,7 +27,7 @@ function pairUrls(region) {
   return region === 'cn' ? [CN_SITE, CN_UPGRADE] : [INTL_SITE, INTL_UPGRADE];
 }
 
-function fillAuthUrls(cfg) {
+function fillSetupUrls(cfg) {
   const out = { ...cfg };
   const region = gatewayRegion(out.site_url) || gatewayRegion(out.upgrade_url);
   if (!region) return out;
@@ -37,7 +37,7 @@ function fillAuthUrls(cfg) {
   return out;
 }
 
-function applyAuth(existing, updates) {
+function applySetup(existing, updates) {
   const out = { ...existing };
   for (const [k, v] of Object.entries(updates || {})) {
     if (v === undefined) continue;
@@ -46,7 +46,7 @@ function applyAuth(existing, updates) {
   if (!['auto', 'cpu', 'cuda'].includes(out.compute)) {
     throw new Error(`invalid compute: ${out.compute}`);
   }
-  return fillAuthUrls(out);
+  return fillSetupUrls(out);
 }
 
 module.exports = {
@@ -54,7 +54,7 @@ module.exports = {
   INTL_UPGRADE,
   CN_SITE,
   CN_UPGRADE,
-  defaultAuthConfig,
-  fillAuthUrls,
-  applyAuth,
+  defaultSetupConfig,
+  fillSetupUrls,
+  applySetup,
 };

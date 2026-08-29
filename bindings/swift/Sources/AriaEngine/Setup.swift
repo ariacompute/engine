@@ -5,7 +5,7 @@ public let intlUpgrade = "https://github.com/ariacompute"
 public let cnSite = "https://ariacompute.cn"
 public let cnUpgrade = "https://gitee.com/ariacompute"
 
-public struct AuthConfig: Equatable {
+public struct SetupConfig: Equatable {
     public var router: String = ""
     public var siteUrl: String = ""
     public var upgradeUrl: String = ""
@@ -16,7 +16,7 @@ public struct AuthConfig: Equatable {
     public init() {}
 }
 
-public struct AuthUpdates {
+public struct SetupUpdates {
     public var router: String?
     public var siteUrl: String?
     public var upgradeUrl: String?
@@ -41,7 +41,7 @@ public struct AuthUpdates {
     }
 }
 
-public enum AriaAuthError: Error, Equatable {
+public enum AriaSetupError: Error, Equatable {
     case invalidCompute(String)
 }
 
@@ -56,7 +56,7 @@ func pairUrls(_ region: String) -> (String, String) {
     region == "cn" ? (cnSite, cnUpgrade) : (intlSite, intlUpgrade)
 }
 
-public func fillAuthUrls(_ cfg: AuthConfig) -> AuthConfig {
+public func fillSetupUrls(_ cfg: SetupConfig) -> SetupConfig {
     var out = cfg
     guard let region = gatewayRegion(out.siteUrl) ?? gatewayRegion(out.upgradeUrl) else {
         return out
@@ -67,7 +67,7 @@ public func fillAuthUrls(_ cfg: AuthConfig) -> AuthConfig {
     return out
 }
 
-public func applyAuth(_ existing: AuthConfig, _ updates: AuthUpdates) throws -> AuthConfig {
+public func applySetup(_ existing: SetupConfig, _ updates: SetupUpdates) throws -> SetupConfig {
     var out = existing
     if let v = updates.router { out.router = v }
     if let v = updates.siteUrl { out.siteUrl = v }
@@ -79,7 +79,7 @@ public func applyAuth(_ existing: AuthConfig, _ updates: AuthUpdates) throws -> 
     case "auto", "cpu", "cuda":
         break
     default:
-        throw AriaAuthError.invalidCompute(out.compute)
+        throw AriaSetupError.invalidCompute(out.compute)
     }
-    return fillAuthUrls(out)
+    return fillSetupUrls(out)
 }

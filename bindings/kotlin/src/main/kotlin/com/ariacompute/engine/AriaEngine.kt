@@ -15,7 +15,7 @@ import org.json.JSONObject
 /** Kotlin/JVM + Android JNI wrapper over libaria_ffi. */
 class AriaEngine : AutoCloseable {
     private var handle: Long = 0L
-    private var cfg: AuthConfig = defaultAuthConfig()
+    private var cfg: SetupConfig = defaultSetupConfig()
     private var genericToken: String = ""
 
     constructor()
@@ -30,7 +30,7 @@ class AriaEngine : AutoCloseable {
         if (handle == 0L) throw IllegalStateException(nativeLastError() ?: "init failed")
     }
 
-    fun auth(
+    fun setup(
         router: String? = null,
         siteUrl: String? = null,
         upgradeUrl: String? = null,
@@ -38,7 +38,7 @@ class AriaEngine : AutoCloseable {
         hfToken: String? = null,
         modelscopeApiToken: String? = null,
     ): AriaEngine {
-        cfg = applyAuthFields(
+        cfg = applySetupFields(
             cfg,
             router, siteUrl, upgradeUrl,
             compute, hfToken, modelscopeApiToken,
@@ -46,14 +46,14 @@ class AriaEngine : AutoCloseable {
         return this
     }
 
-    fun authStatus(): AuthConfig = cfg.copy()
+    fun setupStatus(): SetupConfig = cfg.copy()
 
-    fun authClear(): AriaEngine {
-        cfg = defaultAuthConfig()
+    fun setupClear(): AriaEngine {
+        cfg = defaultSetupConfig()
         return this
     }
 
-    /** Download (if needed) and load a model using instance auth. */
+    /** Download (if needed) and load a model using instance setup. */
     @JvmName("openNamed")
     fun open(modelRef: String): AriaEngine {
         val site = cfg.siteUrl.ifEmpty { DEFAULT_SITE }
@@ -384,20 +384,25 @@ class AriaEngine : AutoCloseable {
         }
 
         private fun configYmlScalar(key: String): String? {
-            val path = File(ariaHome(), "config.yml")
-            if (!path.isFile) return null
-            return try {
-                path.readLines().firstNotNullOfOrNull { line ->
-                    if (line.startsWith(" ") || line.startsWith("\t")) return@firstNotNullOfOrNull null
-                    val s = line.trim()
-                    if (s.isEmpty() || s.startsWith("#") || ':' !in s) return@firstNotNullOfOrNull null
-                    val idx = s.indexOf(':')
-                    if (s.substring(0, idx).trim() != key) return@firstNotNullOfOrNull null
-                    unquoteYaml(s.substring(idx + 1)).ifEmpty { null }
+            val home = File(ariaHome())
+            for (name in listOf("engine.yml", "config.yml")) {
+                val path = File(home, name)
+                if (!path.isFile) continue
+                try {
+                    path.readLines().forEach { line ->
+                        if (line.startsWith(" ") || line.startsWith("\t")) return@forEach
+                        val s = line.trim()
+                        if (s.isEmpty() || s.startsWith("#") || ':' !in s) return@forEach
+                        val idx = s.indexOf(':')
+                        if (s.substring(0, idx).trim() != key) return@forEach
+                        val v = unquoteYaml(s.substring(idx + 1))
+                        if (v.isNotEmpty()) return v
+                    }
+                } catch (_: Exception) {
+                    continue
                 }
-            } catch (_: Exception) {
-                null
             }
+            return null
         }
 
         private fun resolveHubToken(
@@ -496,7 +501,7 @@ class AriaEngine : AutoCloseable {
                         val field = if (source == "modelscope") "modelscope_api_token" else "hf_token"
                         val code = if (msg.contains("401")) 401 else 403
                         throw RuntimeException(
-                            "auth failed HTTP $code; set $field via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                            "auth failed HTTP $code; set $field via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
                         )
                     }
                 }

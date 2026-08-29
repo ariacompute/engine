@@ -8,6 +8,6 @@
     "react-native": ">=0.72.0"
   },
   "scripts": {
-    "test": "node --test test/auth.test.cjs"
+    "test": "node --test test/setup.test.cjs"
   }
 }

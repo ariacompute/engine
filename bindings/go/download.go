@@ -133,23 +133,25 @@ func configYMLScalar(key string) string {
 	if err != nil {
 		return ""
 	}
-	raw, err := os.ReadFile(filepath.Join(home, "config.yml"))
-	if err != nil {
-		return ""
-	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if line != "" && (line[0] == ' ' || line[0] == '\t') {
+	for _, name := range []string{"engine.yml", "config.yml"} {
+		raw, err := os.ReadFile(filepath.Join(home, name))
+		if err != nil {
 			continue
 		}
-		s := strings.TrimSpace(line)
-		if s == "" || strings.HasPrefix(s, "#") {
-			continue
+		for _, line := range strings.Split(string(raw), "\n") {
+			if line != "" && (line[0] == ' ' || line[0] == '\t') {
+				continue
+			}
+			s := strings.TrimSpace(line)
+			if s == "" || strings.HasPrefix(s, "#") {
+				continue
+			}
+			k, v, ok := strings.Cut(s, ":")
+			if !ok || strings.TrimSpace(k) != key {
+				continue
+			}
+			return unquoteYAML(v)
 		}
-		k, v, ok := strings.Cut(s, ":")
-		if !ok || strings.TrimSpace(k) != key {
-			continue
-		}
-		return unquoteYAML(v)
 	}
 	return ""
 }
@@ -161,7 +163,7 @@ func hubTokenField(source string) string {
 	return "hf_token"
 }
 
-// DownloadOptions controls hub download auth. Field names match aria-engine auth
+// DownloadOptions controls hub download auth. Field names match aria-engine setup
 // (hf_token / modelscope_api_token) plus a legacy Token and Site.
 type DownloadOptions struct {
 	Token              string
@@ -239,17 +241,17 @@ func hubFileURLs(source, model, file string) []string {
 	return urls
 }
 
-type hubAuthError struct {
+type hubSetupError struct {
 	code   int
 	source string
 }
 
-func (e *hubAuthError) Error() string {
+func (e *hubSetupError) Error() string {
 	field := "hf_token"
 	if e.source == "modelscope" {
 		field = "modelscope_api_token"
 	}
-	return fmt.Sprintf("auth failed HTTP %d; set %s via aria-engine auth (do not pass a Dashboard sk-/bfvk- key as the hub token)", e.code, field)
+	return fmt.Sprintf("auth failed HTTP %d; set %s via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)", e.code, field)
 }
 
 func fetchURLToFile(url, dest, token string) error {
@@ -266,7 +268,7 @@ func fetchURLToFile(url, dest, token string) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
-		return &hubAuthError{code: resp.StatusCode}
+		return &hubSetupError{code: resp.StatusCode}
 	}
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("HTTP %s", resp.Status)
@@ -290,7 +292,7 @@ func fetchHubFile(source, model, file, dest, token string, required bool) error 
 		if err == nil {
 			return nil
 		}
-		if ae, ok := err.(*hubAuthError); ok {
+		if ae, ok := err.(*hubSetupError); ok {
 			ae.source = source
 			return ae
 		}
@@ -307,13 +309,13 @@ func fetchHubFile(source, model, file, dest, token string, required bool) error 
 //
 // Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
 // Hub auth uses hf_token / modelscope_api_token (DownloadModelOpts, else
-// ~/.ariacompute/config.yml from aria-engine auth). Dashboard is not used.
+// ~/.ariacompute/engine.yml from aria-engine setup). Dashboard is not used.
 func DownloadModel(model, token, site string) (string, error) {
 	return DownloadModelOpts(model, DownloadOptions{Token: token, Site: site})
 }
 
 // DownloadModelOpts is DownloadModel with explicit hub tokens (same keys as
-// aria-engine auth).
+// aria-engine setup).
 func DownloadModelOpts(model string, opts DownloadOptions) (string, error) {
 	if _, _, err := parseBundleName(model); err != nil {
 		return "", err

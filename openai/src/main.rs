@@ -19,7 +19,7 @@ fn print_usage() {
 aria-engine — Aria Compute inference engine
 
 Usage:
-  aria-engine auth [--status|--clear]
+  aria-engine setup [--status|--clear]
   aria-engine download <model>
   aria-engine list
   aria-engine check [model]
@@ -30,13 +30,13 @@ Usage:
   aria-engine -v | --version | version
 
 Cache:
-  ~/.ariacompute/config.yml
+  ~/.ariacompute/engine.yml
   ~/.ariacompute/models/<model>/
   ~/.ariacompute/lib/   (libaria_ffi from upgrade)
 
-auth                 Prompt for compute, hub token, optional router URL; no API key required
+setup                Prompt for compute, hub token, optional router URL; no API key required
   --status           Show config status (keys redacted)
-  --clear            Remove config.yml
+  --clear            Remove engine.yml (and leftover config.yml)
 download <model>     Fetch from the regional public hub
 list                 Scan local ~/.ariacompute/models
 check [model]        Compare local bundle files (count, names, SHA-256) to regional hub
@@ -44,7 +44,7 @@ clean [model]        Remove one cached model or all
 upgrade [version]    Replace this CLI + libaria_ffi from GitHub/Gitee (via upgrade_url)
 serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
-  --router           aria-router management URL (process override; does not write config.yml)
+  --router           aria-router management URL (process override; does not write engine.yml)
   --compute          auto | cpu | cuda (local GEMM)
   --profile          record load/generate timings; GET /v1/engine/profile
 "
@@ -102,7 +102,7 @@ fn redact_secret(value: &str) -> String {
     }
 }
 
-async fn cmd_auth(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     if args.iter().any(|a| a == "--status") {
         let cfg = config::load_config()?;
         println!(
@@ -358,7 +358,7 @@ async fn main() {
             print_version();
             Ok(())
         }
-        "auth" => cmd_auth(&args[1..]).await,
+        "setup" => cmd_setup(&args[1..]).await,
         "download" => {
             let model = args.get(1).map(|s| s.as_str()).unwrap_or("");
             if model.is_empty() {

@@ -195,7 +195,7 @@ async fn probe_hub(source: DownloadSource, bundle: &BundleRef, cfg: &AriaConfig)
                     reachable: false,
                     bytes_per_sec: 0.0,
                     detail: format!(
-                        "auth failed HTTP {}; run `aria-engine auth` to set {}",
+                        "auth failed HTTP {}; run `aria-engine setup` to set {}",
                         r.status(),
                         hub_token_field(source)
                     ),

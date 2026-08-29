@@ -49,8 +49,8 @@ if command -v npm >/dev/null && [[ -f bindings/typescript/package.json ]]; then
 fi
 
 if command -v node >/dev/null && [[ -f bindings/react-native/package.json ]]; then
-  echo "== react-native auth =="
-  (cd bindings/react-native && node --test test/auth.test.cjs)
+  echo "== react-native setup =="
+  (cd bindings/react-native && node --test test/setup.test.cjs)
 fi
 
 echo "done (mobile Swift/Kotlin/Flutter/RN: see bindings/*/README and bindings-mobile.yml)"

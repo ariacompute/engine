@@ -5,7 +5,7 @@ const val INTL_UPGRADE = "https://github.com/ariacompute"
 const val CN_SITE = "https://ariacompute.cn"
 const val CN_UPGRADE = "https://gitee.com/ariacompute"
 
-data class AuthConfig(
+data class SetupConfig(
     var router: String = "",
     var siteUrl: String = "",
     var upgradeUrl: String = "",
@@ -14,7 +14,7 @@ data class AuthConfig(
     var modelscopeApiToken: String = "",
 )
 
-internal fun defaultAuthConfig() = AuthConfig()
+internal fun defaultSetupConfig() = SetupConfig()
 
 internal fun gatewayRegion(url: String): String? {
     val lower = url.lowercase()
@@ -26,7 +26,7 @@ internal fun gatewayRegion(url: String): String? {
 internal fun pairUrls(region: String): Pair<String, String> =
     if (region == "cn") Pair(CN_SITE, CN_UPGRADE) else Pair(INTL_SITE, INTL_UPGRADE)
 
-fun fillAuthUrls(cfg: AuthConfig): AuthConfig {
+fun fillSetupUrls(cfg: SetupConfig): SetupConfig {
     val region = gatewayRegion(cfg.siteUrl) ?: gatewayRegion(cfg.upgradeUrl) ?: return cfg
     val (site, upgrade) = pairUrls(region)
     if (cfg.siteUrl.isEmpty()) cfg.siteUrl = site
@@ -34,15 +34,15 @@ fun fillAuthUrls(cfg: AuthConfig): AuthConfig {
     return cfg
 }
 
-fun applyAuthFields(
-    existing: AuthConfig,
+fun applySetupFields(
+    existing: SetupConfig,
     router: String? = null,
     siteUrl: String? = null,
     upgradeUrl: String? = null,
     compute: String? = null,
     hfToken: String? = null,
     modelscopeApiToken: String? = null,
-): AuthConfig {
+): SetupConfig {
     val out = existing.copy()
     if (router != null) out.router = router
     if (siteUrl != null) out.siteUrl = siteUrl
@@ -51,6 +51,6 @@ fun applyAuthFields(
     if (hfToken != null) out.hfToken = hfToken
     if (modelscopeApiToken != null) out.modelscopeApiToken = modelscopeApiToken
     require(out.compute in setOf("auto", "cpu", "cuda")) { "invalid compute: ${out.compute}" }
-    fillAuthUrls(out)
+    fillSetupUrls(out)
     return out
 }

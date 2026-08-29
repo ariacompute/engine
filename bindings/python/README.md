@@ -26,8 +26,8 @@ with Engine("/path/to/bundle") as eng:
 或本地已存在的值直接加载；否则由 SDK 从**本区公开 hub** 自动下载（`.com` → Hugging Face，
 `.cn` → ModelScope；`site` 默认 `https://ariacompute.com`）到 `~/.ariacompute/models/{model}` 再加载。
 **不再请求 Dashboard**（避免 HTTP 403）。需授权的 hub 文件请传入 `hf_token`（`.com`）或
-`modelscope_api_token`（`.cn`），字段名与 `aria-engine auth` 相同；未传则读
-`~/.ariacompute/config.yml`。Dashboard `sk-` / `bfvk-` token 不会当作 hub 凭证。
+`modelscope_api_token`（`.cn`），字段名与 `aria-engine setup` 相同；未传则读
+`~/.ariacompute/engine.yml`。Dashboard `sk-` / `bfvk-` token 不会当作 hub 凭证。
 不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。
 缓存中已有有效 bundle 时直接复用，不重复下载。
 
@@ -35,14 +35,14 @@ with Engine("/path/to/bundle") as eng:
 with Engine("gemma-4-e2b-it_q4") as eng:
     print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
 
-# Gated Hugging Face files (instance auth; does not write config.yml):
+# Gated Hugging Face files (instance setup; does not write engine.yml):
 eng = Engine()
-eng.auth(hf_token="hf_...")
+eng.setup(hf_token="hf_...")
 eng.open("gemma-4-e2b-it_q4")
 print(eng.complete([{"role":"user","content":"hi"}], {"max_tokens": 16}))
 ```
 
-`Engine.auth` sets Config / Run fields on **that instance only**. CLI `aria-engine auth` still writes `~/.ariacompute/config.yml`; the SDK never does. Empty fields still fall back to reading that file for hub download. Also: `eng.auth_status()`, `eng.auth_clear()`.
+`Engine.setup` sets Config / Run fields on **that instance only**. CLI `aria-engine setup` still writes `~/.ariacompute/engine.yml`; the SDK never does. Empty fields still fall back to reading that file for hub download. Also: `eng.setup_status()`, `eng.setup_clear()`.
 
 ## 动态库查找顺序
 

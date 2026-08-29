@@ -1,4 +1,4 @@
-//! `~/.ariacompute` paths and `config.yml`.
+//! `~/.ariacompute` paths and `engine.yml`.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -81,6 +81,10 @@ pub fn aria_home() -> io::Result<PathBuf> {
 }
 
 pub fn config_path() -> io::Result<PathBuf> {
+    Ok(aria_home()?.join("engine.yml"))
+}
+
+pub fn legacy_config_path() -> io::Result<PathBuf> {
     Ok(aria_home()?.join("config.yml"))
 }
 
@@ -145,10 +149,17 @@ pub fn ensure_aria_home() -> io::Result<PathBuf> {
 }
 
 pub fn load_config() -> io::Result<AriaConfig> {
-    let path = config_path()?;
-    if !path.exists() {
-        return Ok(AriaConfig::default());
-    }
+    let primary = config_path()?;
+    let path = if primary.exists() {
+        primary
+    } else {
+        let legacy = legacy_config_path()?;
+        if legacy.exists() {
+            legacy
+        } else {
+            return Ok(AriaConfig::default());
+        }
+    };
     let raw = fs::read_to_string(&path)?;
     let cfg: AriaConfig =
         serde_yaml::from_str(&raw).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
@@ -171,9 +182,10 @@ pub fn save_config(cfg: &AriaConfig) -> io::Result<()> {
 }
 
 pub fn clear_config() -> io::Result<()> {
-    let path = config_path()?;
-    if path.exists() {
-        fs::remove_file(path)?;
+    for path in [config_path()?, legacy_config_path()?] {
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
     }
     Ok(())
 }
@@ -223,6 +235,22 @@ mod tests {
         let loaded = load_config().unwrap();
         assert_eq!(loaded, cfg);
         clear_config().unwrap();
+        assert!(!config_path().unwrap().exists());
+        std::env::remove_var("ARIA_COMPUTE_HOME");
+    }
+
+    #[test]
+    fn legacy_config_yml_still_loads() {
+        let dir = tempdir().unwrap();
+        std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
+        fs::write(
+            dir.path().join("config.yml"),
+            "hf_token: hf_legacy\nrouter: http://127.0.0.1:8090\n",
+        )
+        .unwrap();
+        let loaded = load_config().unwrap();
+        assert_eq!(loaded.hf_token, "hf_legacy");
+        assert_eq!(loaded.router, "http://127.0.0.1:8090");
         assert!(!config_path().unwrap().exists());
         std::env::remove_var("ARIA_COMPUTE_HOME");
     }

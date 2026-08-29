@@ -95,7 +95,7 @@ test("hub URLs follow upload layout", () => {
   assert.ok([...hf, ...ms].every((u) => !u.includes("/api/dashboard/")));
 });
 
-test("resolveHubToken uses named fields and config.yml", () => {
+test("resolveHubToken uses named fields and engine.yml", () => {
   const mod = loadDownload();
   if (!mod) {
     test.skip("build typescript first");
@@ -107,7 +107,7 @@ test("resolveHubToken uses named fields and config.yml", () => {
   process.env.ARIA_COMPUTE_HOME = home;
   try {
     fs.writeFileSync(
-      path.join(home, "config.yml"),
+      path.join(home, "engine.yml"),
       'hf_token: hf_from_yml\nmodelscope_api_token: "ms_from_yml"\n',
     );
     assert.equal(
@@ -223,7 +223,7 @@ test("extractFfiArchive and cached ensureFfiLib skip network", async () => {
   }
 });
 
-test("auth instance all fields roundtrip", () => {
+test("setup instance all fields roundtrip", () => {
   const mod = loadDownload();
   if (!mod) {
     test.skip("build typescript first");
@@ -231,7 +231,7 @@ test("auth instance all fields roundtrip", () => {
   }
   const { Engine, CN_SITE, CN_UPGRADE } = mod;
   const eng = new Engine();
-  eng.auth({
+  eng.setup({
     router: "http://127.0.0.1:8080",
     site_url: CN_SITE,
     upgrade_url: CN_UPGRADE,
@@ -239,7 +239,7 @@ test("auth instance all fields roundtrip", () => {
     hf_token: "hf_abc",
     modelscope_api_token: "ms_xyz",
   });
-  const st = eng.authStatus();
+  const st = eng.setupStatus();
   assert.equal(st.router, "http://127.0.0.1:8080");
   assert.equal(st.compute, "cpu");
   assert.equal(st.hf_token, "hf_abc");
@@ -247,7 +247,7 @@ test("auth instance all fields roundtrip", () => {
   assert.equal(st.site_url, CN_SITE);
 });
 
-test("auth instance partial merge", () => {
+test("setup instance partial merge", () => {
   const mod = loadDownload();
   if (!mod) {
     test.skip("build typescript first");
@@ -255,15 +255,15 @@ test("auth instance partial merge", () => {
   }
   const { Engine } = mod;
   const eng = new Engine();
-  eng.auth({ hf_token: "hf_one", router: "http://127.0.0.1:1" });
-  eng.auth({ compute: "cuda" });
-  const st = eng.authStatus();
+  eng.setup({ hf_token: "hf_one", router: "http://127.0.0.1:1" });
+  eng.setup({ compute: "cuda" });
+  const st = eng.setupStatus();
   assert.equal(st.hf_token, "hf_one");
   assert.equal(st.router, "http://127.0.0.1:1");
   assert.equal(st.compute, "cuda");
 });
 
-test("auth invalid enum leaves state", () => {
+test("setup invalid enum leaves state", () => {
   const mod = loadDownload();
   if (!mod) {
     test.skip("build typescript first");
@@ -271,12 +271,12 @@ test("auth invalid enum leaves state", () => {
   }
   const { Engine } = mod;
   const eng = new Engine();
-  eng.auth({ compute: "cpu" });
-  assert.throws(() => eng.auth({ compute: "gpu" }));
-  assert.equal(eng.authStatus().compute, "cpu");
+  eng.setup({ compute: "cpu" });
+  assert.throws(() => eng.setup({ compute: "gpu" }));
+  assert.equal(eng.setupStatus().compute, "cpu");
 });
 
-test("auth clear resets instance", () => {
+test("setup clear resets instance", () => {
   const mod = loadDownload();
   if (!mod) {
     test.skip("build typescript first");
@@ -284,14 +284,14 @@ test("auth clear resets instance", () => {
   }
   const { Engine } = mod;
   const eng = new Engine();
-  eng.auth({ hf_token: "hf_x", compute: "cpu" });
-  eng.authClear();
-  const st = eng.authStatus();
+  eng.setup({ hf_token: "hf_x", compute: "cpu" });
+  eng.setupClear();
+  const st = eng.setupStatus();
   assert.equal(st.hf_token, "");
   assert.equal(st.compute, "auto");
 });
 
-test("auth fills urls from site tld", () => {
+test("setup fills urls from site tld", () => {
   const mod = loadDownload();
   if (!mod) {
     test.skip("build typescript first");
@@ -299,12 +299,12 @@ test("auth fills urls from site tld", () => {
   }
   const { Engine, CN_UPGRADE } = mod;
   const eng = new Engine();
-  eng.auth({ site_url: "https://ariacompute.cn" });
-  const st = eng.authStatus();
+  eng.setup({ site_url: "https://ariacompute.cn" });
+  const st = eng.setupStatus();
   assert.equal(st.upgrade_url, CN_UPGRADE);
 });
 
-test("auth does not write config.yml", () => {
+test("setup does not write engine.yml", () => {
   const mod = loadDownload();
   if (!mod) {
     test.skip("build typescript first");
@@ -312,15 +312,16 @@ test("auth does not write config.yml", () => {
   }
   const { Engine } = mod;
   const prev = process.env.ARIA_COMPUTE_HOME;
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), "aria-auth-"));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), "aria-setup-"));
   process.env.ARIA_COMPUTE_HOME = home;
   try {
     const eng = new Engine();
-    eng.auth({
+    eng.setup({
       router: "http://127.0.0.1:8080",
       site_url: "https://ariacompute.com",
       hf_token: "hf_x",
     });
+    assert.equal(fs.existsSync(path.join(home, "engine.yml")), false);
     assert.equal(fs.existsSync(path.join(home, "config.yml")), false);
   } finally {
     if (prev === undefined) delete process.env.ARIA_COMPUTE_HOME;

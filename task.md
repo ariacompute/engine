@@ -288,4 +288,9 @@
 - [x] listen 后 `PUT {router}/v1/router/providers`；失败退出
 - [x] 未配置 router 时不访问网关
 
+### T92 — `auth` → `setup`；`engine.yml`
+- [x] CLI `aria-engine setup`（无 `auth` 别名）；写 `~/.ariacompute/engine.yml`；读优先该文件，缺则回退 `config.yml`
+- [x] 八语言 SDK `Engine.setup` / `setup_status` / `setup_clear`；不写 yml
+- [x] `--clear` 删除 `engine.yml` 及遗留 `config.yml`
+
 
