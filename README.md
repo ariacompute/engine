@@ -87,14 +87,14 @@ This process never routes. If `router` is set (config or `--router`), `serve` re
 Use **different ports**: engine data (`--bind`) vs router management (`--mgmt-bind`, default `127.0.0.1:8080`). Clients then talk to the **router data plane**, not engine.
 
 ```bash
-# 1. Router repo — data :8899, management :8090
+# 1. router repo — data :8899, management :8090
 cd /path/to/router
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# 2. Engine repo — OpenAI on :8080, then PUT to management
+# 2. engine repo — OpenAI on :8080, then PUT to management
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
@@ -191,7 +191,7 @@ Read `chat.fp32` vs `chat.reconstruct`, plus `template_string_match` / `prompt_i
 **2. Engine** (serve the **same** bundle):
 
 ```bash
-# from this repo
+# from engine
 ./aria-engine serve qwen3-0.6b_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto --profile
@@ -238,7 +238,7 @@ python scripts/diag_gemma4_chat.py \
 **2. Engine** (serve the **same** bundle):
 
 ```bash
-# from this repo
+# from engine
 ./aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto --profile

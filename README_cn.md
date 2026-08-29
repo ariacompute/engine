@@ -87,14 +87,14 @@ python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engin
 端口不要撞车：engine 数据面（`--bind`）与 router 管理面（`--mgmt-bind`，默认 `127.0.0.1:8080`）。客户端应打 **router 数据面**，而不是 engine。
 
 ```bash
-# 1. Router 仓 — 数据面 :8899，管理面 :8090
+# 1. router 仓 — 数据面 :8899，管理面 :8090
 cd /path/to/router
 cargo run -p aria-router -- serve \
   --config config/examples/semantic-tiny.yaml \
   --bind 127.0.0.1:8899 \
   --mgmt-bind 127.0.0.1:8090
 
-# 2. Engine 仓 — OpenAI 在 :8080，再 PUT 到管理面
+# 2. engine 仓 — OpenAI 在 :8080，再 PUT 到管理面
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
@@ -190,7 +190,7 @@ python scripts/diag_qwen3_chat.py \
 **2. engine**（必须 `serve` **同一份** bundle）：
 
 ```bash
-# 在本仓库
+# 在 engine
 ./aria-engine serve qwen3-0.6b_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto --profile
@@ -237,7 +237,7 @@ python scripts/diag_gemma4_chat.py \
 **2. engine**（必须 `serve` **同一份** bundle）：
 
 ```bash
-# 在本仓库
+# 在 engine
 ./aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto --profile
