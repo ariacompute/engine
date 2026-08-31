@@ -485,17 +485,8 @@ class AriaEngine {
     }
   }
 
-  bool _prefersCn() {
-    final lang =
-        '${Platform.environment['LANG'] ?? ''}${Platform.environment['LC_ALL'] ?? ''}'
-            .toLowerCase();
-    return lang.contains('zh') ||
-        lang.contains('.cn') ||
-        lang.startsWith('cn');
-  }
-
   /// Set Config / Run fields on this instance only. Does not write engine.yml.
-  AriaEngine auth(
+  AriaEngine setup(
       {String? router,
       String? siteUrl,
       String? upgradeUrl,
@@ -541,7 +532,7 @@ class AriaEngine {
   }
 
   /// Download (if needed) and load a model using instance setup.
-  Future<AriaEngine> openUsingAuth(String modelRef, {String? libPath}) async {
+  Future<AriaEngine> openUsingSetup(String modelRef, {String? libPath}) async {
     final site = _cfg.siteUrl.isEmpty ? _defaultSite : _cfg.siteUrl;
     final resolvedLib = libPath ?? _libPath ?? await ensureFfiLib(site: site);
     final bundle = _isLocalRef(modelRef)
@@ -577,7 +568,7 @@ class AriaEngine {
         eng.setup(siteUrl: site);
       }
     }
-    await eng.openUsingAuth(modelRef, libPath: libPath);
+    await eng.openUsingSetup(modelRef, libPath: libPath);
     return eng;
   }
 
@@ -619,7 +610,7 @@ class AriaEngine {
 }
 
 /// Instance `open` lives on an extension so it does not clash with [AriaEngine.open].
-extension AriaEngineAuthOpen on AriaEngine {
+extension AriaEngineSetupOpen on AriaEngine {
   Future<AriaEngine> open(String modelRef, {String? libPath}) =>
-      openUsingAuth(modelRef, libPath: libPath);
+      openUsingSetup(modelRef, libPath: libPath);
 }

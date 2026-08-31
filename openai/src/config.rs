@@ -217,11 +217,25 @@ pub fn resolve_model_path(model: &str) -> io::Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::Mutex;
     use tempfile::tempdir;
+
+    /// Tests that mutate `ARIA_COMPUTE_HOME` must not run in parallel:
+    /// `load_config` / `save_config` read that env for the home path.
+    static ENV_LOCK: Mutex<()> = Mutex::new(());
+
+    fn restore_aria_home(prev: Option<String>) {
+        match prev {
+            Some(v) => std::env::set_var("ARIA_COMPUTE_HOME", v),
+            None => std::env::remove_var("ARIA_COMPUTE_HOME"),
+        }
+    }
 
     #[test]
     fn config_roundtrip() {
+        let _g = ENV_LOCK.lock().unwrap();
         let dir = tempdir().unwrap();
+        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
         std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
         let cfg = AriaConfig {
             router: "http://127.0.0.1:8080".into(),
@@ -236,12 +250,14 @@ mod tests {
         assert_eq!(loaded, cfg);
         clear_config().unwrap();
         assert!(!config_path().unwrap().exists());
-        std::env::remove_var("ARIA_COMPUTE_HOME");
+        restore_aria_home(prev);
     }
 
     #[test]
     fn legacy_config_yml_still_loads() {
+        let _g = ENV_LOCK.lock().unwrap();
         let dir = tempdir().unwrap();
+        let prev = std::env::var("ARIA_COMPUTE_HOME").ok();
         std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
         fs::write(
             dir.path().join("config.yml"),
@@ -252,7 +268,7 @@ mod tests {
         assert_eq!(loaded.hf_token, "hf_legacy");
         assert_eq!(loaded.router, "http://127.0.0.1:8090");
         assert!(!config_path().unwrap().exists());
-        std::env::remove_var("ARIA_COMPUTE_HOME");
+        restore_aria_home(prev);
     }
 
     #[test]
