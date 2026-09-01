@@ -488,6 +488,7 @@ class AriaEngine {
   /// Set Config / Run fields on this instance only. Does not write engine.yml.
   AriaEngine setup(
       {String? router,
+      String? routerApiKey,
       String? siteUrl,
       String? upgradeUrl,
       String? compute,
@@ -495,6 +496,7 @@ class AriaEngine {
       String? modelscopeApiToken}) {
     _cfg = applySetup(_cfg,
         router: router,
+        routerApiKey: routerApiKey,
         siteUrl: siteUrl,
         upgradeUrl: upgradeUrl,
         compute: compute,

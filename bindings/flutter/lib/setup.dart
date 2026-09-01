@@ -10,6 +10,7 @@ const computes = {'auto', 'cpu', 'cuda'};
 
 class SetupConfig {
   String router;
+  String routerApiKey;
   String siteUrl;
   String upgradeUrl;
   String compute;
@@ -18,6 +19,7 @@ class SetupConfig {
 
   SetupConfig({
     this.router = '',
+    this.routerApiKey = '',
     this.siteUrl = '',
     this.upgradeUrl = '',
     this.compute = 'auto',
@@ -27,6 +29,7 @@ class SetupConfig {
 
   SetupConfig copy() => SetupConfig(
         router: router,
+        routerApiKey: routerApiKey,
         siteUrl: siteUrl,
         upgradeUrl: upgradeUrl,
         compute: compute,
@@ -36,6 +39,7 @@ class SetupConfig {
 
   Map<String, Object> toMap() => {
         'router': router,
+        'router_api_key': routerApiKey,
         'site_url': siteUrl,
         'upgrade_url': upgradeUrl,
         'compute': compute,
@@ -73,6 +77,7 @@ SetupConfig fillSetupUrls(SetupConfig cfg) {
 
 SetupConfig applySetup(SetupConfig existing,
     {String? router,
+    String? routerApiKey,
     String? siteUrl,
     String? upgradeUrl,
     String? compute,
@@ -80,6 +85,7 @@ SetupConfig applySetup(SetupConfig existing,
     String? modelscopeApiToken}) {
   final out = existing.copy();
   if (router != null) out.router = router;
+  if (routerApiKey != null) out.routerApiKey = routerApiKey;
   if (siteUrl != null) out.siteUrl = siteUrl;
   if (upgradeUrl != null) out.upgradeUrl = upgradeUrl;
   if (compute != null) out.compute = compute;

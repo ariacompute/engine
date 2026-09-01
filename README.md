@@ -18,6 +18,7 @@ Credentials live in `~/.ariacompute/engine.yml` (via `aria-engine setup`).
 | Field | Meaning | Default |
 |-------|---------|---------|
 | `router` | Optional aria-router management URL | _(empty → local-only serve)_ |
+| `router_api_key` | Dashboard-issued secret for provider registration Bearer | _(empty)_ |
 | `site_url` | Site for hub region (`.com` / `.cn`) | — |
 | `upgrade_url` | Org root for CLI/FFI upgrades (`.com`→GitHub, `.cn`→Gitee) | — |
 | `compute` | `auto` / `cpu` / `cuda` (local GEMM) | `auto` |
@@ -52,6 +53,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
+  --router-api-key sk-aria_… \
   --compute auto
 ```
 
@@ -61,7 +63,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
 
 `check [model]` compares local file count, names, and SHA-256 against the regional hub (same source as `download`). Omit the model to check every cached bundle. Exit 1 on mismatch; `weight.bin` is hashed locally and compared to hub metadata (not re-downloaded).
 
-`serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`. `--router URL` registers this process as a local provider on aria-router (does not write `engine.yml`).
+`serve` flags override config for that process only (no rewrite). `serve <model>` uses a filesystem path if it exists, otherwise `~/.ariacompute/models/<model>`. `--router URL` / `--router-api-key SECRET` register this process as a local provider on aria-router (do not write `engine.yml`). Use the secret from router Dashboard → API keys when the gateway has `require_api_key: true`.
 
 `--compute auto|cpu|cuda` selects **local** GEMM: `auto` uses CUDA when `libcudart`/`libcublas` load and `cudaGetDeviceCount>0`, otherwise CPU (AVX2+FMA on x86_64, NEON on aarch64). `--compute cuda` **fails** if no NVIDIA device — it does not silently fall back. CUDA is runtime-loaded (no toolkit at compile time); on H200 you can still pass `--features cuda` as a documentation flag:
 
@@ -82,7 +84,7 @@ python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engin
 
 This process never routes. If `router` is set (config or `--router`), `serve` registers as a local provider before it accepts traffic:
 
-`PUT {router}/v1/router/providers` with `{name, endpoint, provider_model_id, locality}`. Failure **exits** (no silent local-only fallback). `--router` overrides `engine.yml` for this process only.
+`PUT {router}/v1/router/providers` with `{name, endpoint, provider_model_id, locality}` and optional `Authorization: Bearer` from `router_api_key`. Failure **exits** (no silent local-only fallback). `--router` / `--router-api-key` override `engine.yml` for this process only.
 
 Use **different ports**: engine data (`--bind`) vs router management (`--mgmt-bind`, default `127.0.0.1:8080`). Clients then talk to the **router data plane**, not engine.
 
@@ -98,12 +100,14 @@ cargo run -p aria-router -- serve \
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
+  --router-api-key sk-aria_… \
   --compute auto
 
-# Persist the URL instead of passing --router each time:
-#   aria-engine setup  # optional router prompt
+# Persist the URL / key instead of passing flags each time:
+#   aria-engine setup  # optional router URL + router API key (from Dashboard)
 #   # or in ~/.ariacompute/engine.yml:
 #   # router: http://127.0.0.1:8090
+#   # router_api_key: sk-aria_…
 
 # 3. Chat via the gateway (concrete name = bypass; forwards to this engine)
 curl -s http://127.0.0.1:8899/v1/chat/completions \

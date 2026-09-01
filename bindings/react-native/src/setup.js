@@ -8,6 +8,7 @@ const CN_UPGRADE = 'https://gitee.com/ariacompute';
 function defaultSetupConfig() {
   return {
     router: '',
+    router_api_key: '',
     site_url: '',
     upgrade_url: '',
     compute: 'auto',

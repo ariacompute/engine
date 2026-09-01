@@ -32,6 +32,7 @@ class AriaEngine : AutoCloseable {
 
     fun setup(
         router: String? = null,
+        routerApiKey: String? = null,
         siteUrl: String? = null,
         upgradeUrl: String? = null,
         compute: String? = null,
@@ -40,8 +41,13 @@ class AriaEngine : AutoCloseable {
     ): AriaEngine {
         cfg = applySetupFields(
             cfg,
-            router, siteUrl, upgradeUrl,
-            compute, hfToken, modelscopeApiToken,
+            router = router,
+            routerApiKey = routerApiKey,
+            siteUrl = siteUrl,
+            upgradeUrl = upgradeUrl,
+            compute = compute,
+            hfToken = hfToken,
+            modelscopeApiToken = modelscopeApiToken,
         )
         return this
     }

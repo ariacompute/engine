@@ -16,6 +16,7 @@ pub enum SetupError {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupConfig {
     pub router: String,
+    pub router_api_key: String,
     pub site_url: String,
     pub upgrade_url: String,
     pub compute: String,
@@ -27,6 +28,7 @@ impl Default for SetupConfig {
     fn default() -> Self {
         Self {
             router: String::new(),
+            router_api_key: String::new(),
             site_url: String::new(),
             upgrade_url: String::new(),
             compute: "auto".into(),
@@ -40,6 +42,7 @@ impl Default for SetupConfig {
 #[derive(Debug, Clone, Default)]
 pub struct SetupUpdates {
     pub router: Option<String>,
+    pub router_api_key: Option<String>,
     pub site_url: Option<String>,
     pub upgrade_url: Option<String>,
     pub compute: Option<String>,
@@ -87,6 +90,9 @@ pub fn apply_setup(existing: &SetupConfig, updates: &SetupUpdates) -> Result<Set
     let mut out = existing.clone();
     if let Some(v) = &updates.router {
         out.router = v.clone();
+    }
+    if let Some(v) = &updates.router_api_key {
+        out.router_api_key = v.clone();
     }
     if let Some(v) = &updates.site_url {
         out.site_url = v.clone();

@@ -517,6 +517,7 @@ _AUTH_KEYS = (
 def default_setup_config() -> dict[str, Any]:
     return {
         "router": "",
+        "router_api_key": "",
         "site_url": "",
         "upgrade_url": "",
         "compute": "auto",
@@ -605,6 +606,7 @@ class Engine:
     def setup(
         self,
         router: Optional[str] = None,
+        router_api_key: Optional[str] = None,
         site_url: Optional[str] = None,
         upgrade_url: Optional[str] = None,
         compute: Optional[str] = None,
@@ -616,6 +618,7 @@ class Engine:
             self._cfg,
             {
                 "router": router,
+                "router_api_key": router_api_key,
                 "site_url": site_url,
                 "upgrade_url": upgrade_url,
                 "compute": compute,

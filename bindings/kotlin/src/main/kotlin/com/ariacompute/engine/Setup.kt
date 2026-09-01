@@ -7,6 +7,7 @@ const val CN_UPGRADE = "https://gitee.com/ariacompute"
 
 data class SetupConfig(
     var router: String = "",
+    var routerApiKey: String = "",
     var siteUrl: String = "",
     var upgradeUrl: String = "",
     var compute: String = "auto",
@@ -37,6 +38,7 @@ fun fillSetupUrls(cfg: SetupConfig): SetupConfig {
 fun applySetupFields(
     existing: SetupConfig,
     router: String? = null,
+    routerApiKey: String? = null,
     siteUrl: String? = null,
     upgradeUrl: String? = null,
     compute: String? = null,
@@ -45,6 +47,7 @@ fun applySetupFields(
 ): SetupConfig {
     val out = existing.copy()
     if (router != null) out.router = router
+    if (routerApiKey != null) out.routerApiKey = routerApiKey
     if (siteUrl != null) out.siteUrl = siteUrl
     if (upgradeUrl != null) out.upgradeUrl = upgradeUrl
     if (compute != null) out.compute = compute

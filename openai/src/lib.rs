@@ -505,19 +505,22 @@ pub async fn register_with_router(
     router_base: &str,
     endpoint: &str,
     model_name: &str,
+    router_api_key: &str,
 ) -> Result<(), EngineError> {
     let url = format!(
         "{}/v1/router/providers",
         router_base.trim_end_matches('/')
     );
-    let resp = reqwest::Client::new()
-        .put(&url)
-        .json(&json!({
-            "name": model_name,
-            "endpoint": endpoint,
-            "provider_model_id": model_name,
-            "locality": "local"
-        }))
+    let mut builder = reqwest::Client::new().put(&url).json(&json!({
+        "name": model_name,
+        "endpoint": endpoint,
+        "provider_model_id": model_name,
+        "locality": "local"
+    }));
+    if !router_api_key.is_empty() {
+        builder = builder.bearer_auth(router_api_key);
+    }
+    let resp = builder
         .send()
         .await
         .map_err(|e| EngineError::Upstream(format!("router register: {e}")))?;
@@ -787,8 +790,68 @@ mod tests {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(async move { axum::serve(listener, app).await.unwrap(); });
-        register_with_router(&format!("http://{addr}"), "127.0.0.1:8080", "tiny_q4")
+        register_with_router(&format!("http://{addr}"), "127.0.0.1:8080", "tiny_q4", "")
             .await
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn register_with_router_sends_bearer() {
+        use axum::extract::Request;
+        use axum::routing::put;
+        use std::sync::{Arc, Mutex};
+        let seen = Arc::new(Mutex::new(None));
+        let seen2 = seen.clone();
+        async fn capture(
+            axum::extract::State(seen): axum::extract::State<Arc<Mutex<Option<String>>>>,
+            req: Request,
+        ) -> Json<Value> {
+            let auth = req
+                .headers()
+                .get(axum::http::header::AUTHORIZATION)
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string());
+            *seen.lock().unwrap() = auth;
+            Json(json!({"ok": true}))
+        }
+        let app = axum::Router::new()
+            .route("/v1/router/providers", put(capture))
+            .with_state(seen2);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        register_with_router(
+            &format!("http://{addr}"),
+            "127.0.0.1:8080",
+            "tiny_q4",
+            "sk-aria_test",
+        )
+        .await
+        .unwrap();
+        assert_eq!(
+            seen.lock().unwrap().as_deref(),
+            Some("Bearer sk-aria_test")
+        );
+    }
+
+    #[tokio::test]
+    async fn register_with_router_empty_key_fails_on_401() {
+        use axum::http::StatusCode;
+        use axum::routing::put;
+        async fn unauthorized() -> StatusCode {
+            StatusCode::UNAUTHORIZED
+        }
+        let app = axum::Router::new().route("/v1/router/providers", put(unauthorized));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        let err = register_with_router(&format!("http://{addr}"), "127.0.0.1:8080", "tiny_q4", "")
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("401") || err.to_string().contains("register"));
     }
 }

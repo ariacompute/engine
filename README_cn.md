@@ -18,6 +18,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | 字段 | 含义 | 默认 |
 |------|------|------|
 | `router` | 可选 aria-router 管理面 URL | _(空 → 纯本地 serve)_ |
+| `router_api_key` | Dashboard 签发的注册 Bearer secret | _(空)_ |
 | `site_url` | 站点（`.com` / `.cn`），用于 hub 分区 | — |
 | `upgrade_url` | 组织根（`.com`→GitHub，`.cn`→Gitee） | — |
 | `compute` | `auto` / `cpu` / `cuda`（本机 GEMM） | `auto` |
@@ -52,6 +53,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
+  --router-api-key sk-aria_… \
   --compute auto
 ```
 
@@ -61,7 +63,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
 
 `check [model]` 对照本区 hub（与 `download` 相同）校验本地文件数目、文件名与 SHA-256；省略 model 则检查全部缓存。不一致 exit 1；`weight.bin` 只在本地哈希并与 hub 元数据比对，不重新下载。
 
-`serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。`--router URL` 向 aria-router 注册本进程为本地 provider（不写 `engine.yml`）。
+`serve` 旗标仅覆盖本进程配置（不回写文件）。`serve <model>`：若为现存路径则用之，否则使用 `~/.ariacompute/models/<model>`。`--router URL` / `--router-api-key SECRET` 向 aria-router 注册本进程为本地 provider（不写 `engine.yml`）。网关开启 `require_api_key` 时使用 Dashboard「API 密钥」签发的 secret。
 
 `--compute auto|cpu|cuda` 选择**本机** GEMM：`auto` 在能加载 `libcudart`/`libcublas` 且 `cudaGetDeviceCount>0` 时用 CUDA，否则 CPU（x86_64 AVX2+FMA，aarch64 NEON）。`--compute cuda` 在无 NVIDIA 设备时**硬失败**，不会静默降到 CPU。CUDA 为运行时 libloading（编译不依赖 CUDA toolkit）；H200 上仍可用 `--features cuda` 作为文档旗标：
 
@@ -82,7 +84,7 @@ python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engin
 
 本进程不做路由。若配置了 `router`（`engine.yml` 或 `--router`），`serve` 在接受请求前向网关注册为本地 provider：
 
-`PUT {router}/v1/router/providers`，body 为 `{name, endpoint, provider_model_id, locality}`。失败则 **退出**（不会静默改成纯本地）。`--router` 只覆盖本进程，不回写 `engine.yml`。
+`PUT {router}/v1/router/providers`，body 为 `{name, endpoint, provider_model_id, locality}`，可选 `Authorization: Bearer`（来自 `router_api_key`）。失败则 **退出**（不会静默改成纯本地）。`--router` / `--router-api-key` 只覆盖本进程，不回写 `engine.yml`。
 
 端口不要撞车：engine 数据面（`--bind`）与 router 管理面（`--mgmt-bind`，默认 `127.0.0.1:8080`）。客户端应打 **router 数据面**，而不是 engine。
 
@@ -98,12 +100,14 @@ cargo run -p aria-router -- serve \
 aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
+  --router-api-key sk-aria_… \
   --compute auto
 
-# 也可写入配置，不必每次带 --router：
-#   aria-engine setup  # 可选填写 router URL
+# 也可写入配置，不必每次带旗标：
+#   aria-engine setup  # 可选填写 router URL + router API key（来自 Dashboard）
 #   # 或 ~/.ariacompute/engine.yml：
 #   # router: http://127.0.0.1:8090
+#   # router_api_key: sk-aria_…
 
 # 3. 经网关对话（实名 = bypass，转发到本 engine）
 curl -s http://127.0.0.1:8899/v1/chat/completions \

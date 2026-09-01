@@ -293,4 +293,9 @@
 - [x] 八语言 SDK `Engine.setup` / `setup_status` / `setup_clear`；不写 yml
 - [x] `--clear` 删除 `engine.yml` 及遗留 `config.yml`
 
+### T93 — router API key（与 router G-cost 协同）
+- [x] `AriaConfig.router_api_key`；`setup` 提示；`--status` 脱敏；`serve --router-api-key`
+- [x] `register_with_router` 非空时带 `Authorization: Bearer`；SDK Setup 字段
+- [x] 单测：Bearer 头断言
+
 

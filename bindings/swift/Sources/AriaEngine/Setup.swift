@@ -7,6 +7,7 @@ public let cnUpgrade = "https://gitee.com/ariacompute"
 
 public struct SetupConfig: Equatable {
     public var router: String = ""
+    public var routerApiKey: String = ""
     public var siteUrl: String = ""
     public var upgradeUrl: String = ""
     public var compute: String = "auto"
@@ -18,6 +19,7 @@ public struct SetupConfig: Equatable {
 
 public struct SetupUpdates {
     public var router: String?
+    public var routerApiKey: String?
     public var siteUrl: String?
     public var upgradeUrl: String?
     public var compute: String?
@@ -26,6 +28,7 @@ public struct SetupUpdates {
 
     public init(
         router: String? = nil,
+        routerApiKey: String? = nil,
         siteUrl: String? = nil,
         upgradeUrl: String? = nil,
         compute: String? = nil,
@@ -33,6 +36,7 @@ public struct SetupUpdates {
         modelscopeApiToken: String? = nil
     ) {
         self.router = router
+        self.routerApiKey = routerApiKey
         self.siteUrl = siteUrl
         self.upgradeUrl = upgradeUrl
         self.compute = compute
@@ -56,11 +60,9 @@ func pairUrls(_ region: String) -> (String, String) {
     region == "cn" ? (cnSite, cnUpgrade) : (intlSite, intlUpgrade)
 }
 
-public func fillSetupUrls(_ cfg: SetupConfig) -> SetupConfig {
+func fillSetupUrls(_ cfg: SetupConfig) -> SetupConfig {
     var out = cfg
-    guard let region = gatewayRegion(out.siteUrl) ?? gatewayRegion(out.upgradeUrl) else {
-        return out
-    }
+    guard let region = gatewayRegion(out.siteUrl) ?? gatewayRegion(out.upgradeUrl) else { return out }
     let (site, upgrade) = pairUrls(region)
     if out.siteUrl.isEmpty { out.siteUrl = site }
     if out.upgradeUrl.isEmpty { out.upgradeUrl = upgrade }
@@ -70,6 +72,7 @@ public func fillSetupUrls(_ cfg: SetupConfig) -> SetupConfig {
 public func applySetup(_ existing: SetupConfig, _ updates: SetupUpdates) throws -> SetupConfig {
     var out = existing
     if let v = updates.router { out.router = v }
+    if let v = updates.routerApiKey { out.routerApiKey = v }
     if let v = updates.siteUrl { out.siteUrl = v }
     if let v = updates.upgradeUrl { out.upgradeUrl = v }
     if let v = updates.compute { out.compute = v }

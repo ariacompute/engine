@@ -25,7 +25,7 @@ Usage:
   aria-engine check [model]
   aria-engine clean [model]
   aria-engine upgrade [version]
-  aria-engine serve <model> [--bind host:port] [--router URL] [--compute auto|cpu|cuda] [--profile]
+  aria-engine serve <model> [--bind host:port] [--router URL] [--router-api-key SECRET] [--compute auto|cpu|cuda] [--profile]
   aria-engine -h | --help | help
   aria-engine -v | --version | version
 
@@ -45,6 +45,7 @@ upgrade [version]    Replace this CLI + libaria_ffi from GitHub/Gitee (via upgra
 serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
   --router           aria-router management URL (process override; does not write engine.yml)
+  --router-api-key   Dashboard-issued secret for provider registration Bearer (process override)
   --compute          auto | cpu | cuda (local GEMM)
   --profile          record load/generate timings; GET /v1/engine/profile
 "
@@ -112,6 +113,10 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             } else {
                 &cfg.router
             }
+        );
+        println!(
+            "router_api_key: {}",
+            redact_secret(&cfg.router_api_key)
         );
         println!(
             "site_url: {}",
@@ -195,11 +200,25 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         router
     };
+    let router_api_key = prompt(&format!(
+        "router API key from Dashboard (optional, default: {}): ",
+        if existing.router_api_key.is_empty() {
+            "(none)"
+        } else {
+            "(set)"
+        }
+    ))?;
+    let router_api_key = if router_api_key.is_empty() {
+        existing.router_api_key.clone()
+    } else {
+        router_api_key
+    };
     let compute = prompt_choice("compute", &["auto", "cpu", "cuda"], "auto")?;
     let (hf_token, modelscope_api_token) = prompt_regional_hub_token(pair, &existing)?;
 
     let cfg = AriaConfig {
         router,
+        router_api_key,
         site_url,
         upgrade_url,
         compute,
@@ -263,6 +282,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let mut model = None;
     let mut bind = "127.0.0.1:8080".to_string();
     let mut router_override = None;
+    let mut router_api_key_override = None;
     let mut compute_override = None;
     let mut profile = false;
     let mut i = 0;
@@ -275,6 +295,11 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             "--router" => {
                 i += 1;
                 router_override = Some(args.get(i).cloned().ok_or("--router requires a URL")?);
+            }
+            "--router-api-key" => {
+                i += 1;
+                router_api_key_override =
+                    Some(args.get(i).cloned().ok_or("--router-api-key requires a secret")?);
             }
             "--compute" => {
                 i += 1;
@@ -327,9 +352,12 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 Some(cfg.router.clone())
             }
         });
+    let router_api_key = router_api_key_override
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| cfg.router_api_key.clone());
     if let Some(url) = router_url {
         eprintln!("registering provider {model_id} at {url}");
-        register_with_router(&url, &bind, &model_id)
+        register_with_router(&url, &bind, &model_id, &router_api_key)
             .await
             .map_err(|e| format!("{e}"))?;
     }

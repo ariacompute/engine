@@ -10,6 +10,9 @@ pub struct AriaConfig {
     /// Optional aria-router management URL (empty = do not register).
     #[serde(default)]
     pub router: String,
+    /// Dashboard-issued secret for `PUT /v1/router/providers` (Bearer).
+    #[serde(default)]
+    pub router_api_key: String,
     #[serde(default)]
     pub site_url: String,
     /// Org root for CLI/FFI upgrades (`…/ariacompute`); runtime appends `/engine`.
@@ -58,6 +61,7 @@ impl Default for AriaConfig {
     fn default() -> Self {
         Self {
             router: String::new(),
+            router_api_key: String::new(),
             site_url: String::new(),
             upgrade_url: String::new(),
             compute: default_compute(),
@@ -239,6 +243,7 @@ mod tests {
         std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
         let cfg = AriaConfig {
             router: "http://127.0.0.1:8080".into(),
+            router_api_key: String::new(),
             site_url: "https://ariacompute.com".into(),
             upgrade_url: "https://github.com/ariacompute".into(),
             compute: "cpu".into(),

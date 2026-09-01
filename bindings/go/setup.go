@@ -16,6 +16,7 @@ const (
 // SetupConfig holds Config / Run fields on an Engine instance (memory only).
 type SetupConfig struct {
 	Router             string
+	RouterAPIKey       string
 	SiteURL            string
 	UpgradeURL         string
 	Compute            string
@@ -26,6 +27,7 @@ type SetupConfig struct {
 // SetupUpdates is a partial merge. Nil fields are omitted.
 type SetupUpdates struct {
 	Router             *string
+	RouterAPIKey       *string
 	SiteURL            *string
 	UpgradeURL         *string
 	Compute            *string
@@ -79,6 +81,9 @@ func ApplySetup(existing SetupConfig, updates SetupUpdates) (SetupConfig, error)
 	out := existing
 	if updates.Router != nil {
 		out.Router = *updates.Router
+	}
+	if updates.RouterAPIKey != nil {
+		out.RouterAPIKey = *updates.RouterAPIKey
 	}
 	if updates.SiteURL != nil {
 		out.SiteURL = *updates.SiteURL

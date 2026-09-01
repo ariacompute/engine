@@ -56,6 +56,7 @@ export const CN_UPGRADE = "https://gitee.com/ariacompute";
 
 export interface SetupConfig {
   router: string;
+  router_api_key: string;
   site_url: string;
   upgrade_url: string;
   compute: string;
@@ -66,6 +67,7 @@ export interface SetupConfig {
 export function defaultSetupConfig(): SetupConfig {
   return {
     router: "",
+    router_api_key: "",
     site_url: "",
     upgrade_url: "",
     compute: "auto",
