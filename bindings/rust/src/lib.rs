@@ -232,6 +232,7 @@ mod tests {
         let mut eng = Engine::new();
         eng.setup(&SetupUpdates {
             router: Some("http://127.0.0.1:8080".into()),
+            router_api_key: Some("sk-aria_test".into()),
             site_url: Some(crate::setup::CN_SITE.into()),
             upgrade_url: Some(crate::setup::CN_UPGRADE.into()),
             compute: Some("cpu".into()),
@@ -241,6 +242,7 @@ mod tests {
         .unwrap();
         let st = eng.setup_status();
         assert_eq!(st.router, "http://127.0.0.1:8080");
+        assert_eq!(st.router_api_key, "sk-aria_test");
         assert_eq!(st.compute, "cpu");
         assert_eq!(st.hf_token, "hf_abc");
         assert_eq!(st.modelscope_api_token, "ms_xyz");
