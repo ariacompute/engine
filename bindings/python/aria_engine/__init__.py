@@ -1,4 +1,4 @@
-"""Aria Engine Python binding (ctypes over libaria_ffi)."""
+"""Aria Engine Python binding (ctypes over libaria-engine_ffi)."""
 from __future__ import annotations
 
 import ctypes
@@ -15,8 +15,8 @@ import tarfile
 __version__ = "0.1.0"
 
 _LIB_NAMES = {
-    "win32": "aria_ffi.dll",
-    "darwin": "libaria_ffi.dylib",
+    "win32": "aria-engine_ffi.dll",
+    "darwin": "libaria-engine_ffi.dylib",
 }
 
 DEFAULT_SITE = "https://ariacompute.com"
@@ -30,7 +30,7 @@ def _default_lib_path(package_dir: Optional[str] = None) -> Optional[str]:
     when the library is not present (e.g. a source checkout).
     """
     pkg_dir = os.path.dirname(os.path.abspath(__file__)) if package_dir is None else package_dir
-    name = _LIB_NAMES.get(sys.platform, "libaria_ffi.so")
+    name = _LIB_NAMES.get(sys.platform, "libaria-engine_ffi.so")
     candidate = os.path.join(pkg_dir, "lib", name)
     return candidate if os.path.isfile(candidate) else None
 
@@ -55,7 +55,7 @@ def _aria_home() -> str:
 
 def _ffi_lib_name(plat: Optional[str] = None) -> str:
     p = plat or sys.platform
-    return _LIB_NAMES.get(p, "libaria_ffi.so")
+    return _LIB_NAMES.get(p, "libaria-engine_ffi.so")
 
 
 def _lib_dir() -> str:
@@ -79,7 +79,7 @@ def _ffi_asset_os(system: Optional[str] = None, machine: Optional[str] = None) -
         return "macos"
     if system.startswith("win") and machine in ("x86_64", "amd64"):
         return "windows_x86_64"
-    raise RuntimeError(f"unsupported platform {system}/{machine} for libaria_ffi")
+    raise RuntimeError(f"unsupported platform {system}/{machine} for libaria-engine_ffi")
 
 
 def _strip_v(tag: str) -> str:
@@ -112,7 +112,7 @@ def _select_latest_stable(releases: list) -> str:
             best_key = parsed
             best_tag = tag
     if not best_tag:
-        raise RuntimeError("no stable release found for libaria_ffi")
+        raise RuntimeError("no stable release found for libaria-engine_ffi")
     return _strip_v(best_tag)
 
 
@@ -173,7 +173,7 @@ def _extract_ffi_archive(archive: str, dest_dir: str, lib_name: Optional[str] = 
 
 
 def ensure_ffi_lib(site: Optional[str] = None) -> str:
-    """Return a path to libaria_ffi, downloading the latest Release if needed."""
+    """Return a path to libaria-engine_ffi, downloading the latest Release if needed."""
     env = os.environ.get("ARIA_FFI_LIB")
     if env and os.path.isfile(env):
         return env
@@ -194,7 +194,7 @@ def ensure_ffi_lib(site: Optional[str] = None) -> str:
         raise RuntimeError(f"unexpected releases payload from {org}")
     ver = _select_latest_stable(releases)
     asset_os = _ffi_asset_os()
-    asset_name = f"libaria_ffi_{ver}_{asset_os}.tar.gz"
+    asset_name = f"libaria-engine_ffi_{ver}_{asset_os}.tar.gz"
     url = None
     for rel in releases:
         tag = str(rel.get("tag_name") or rel.get("tag") or "")

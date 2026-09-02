@@ -32,7 +32,7 @@ Usage:
 Cache:
   ~/.ariacompute/engine.yml
   ~/.ariacompute/models/<model>/
-  ~/.ariacompute/lib/   (libaria_ffi from upgrade)
+  ~/.ariacompute/lib/   (libaria-engine_ffi from upgrade)
 
 setup                Prompt for compute, hub token, optional router URL; no API key required
   --status           Show config status (keys redacted)
@@ -41,7 +41,7 @@ download <model>     Fetch from the regional public hub
 list                 Scan local ~/.ariacompute/models
 check [model]        Compare local bundle files (count, names, SHA-256) to regional hub
 clean [model]        Remove one cached model or all
-upgrade [version]    Replace this CLI + libaria_ffi from GitHub/Gitee (via upgrade_url)
+upgrade [version]    Replace this CLI + libaria-engine_ffi from GitHub/Gitee (via upgrade_url)
 serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
   --router           aria-router management URL (process override; does not write engine.yml)

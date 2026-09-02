@@ -1,4 +1,4 @@
-//! Upgrade CLI binary + libaria_ffi from GitHub/Gitee Releases.
+//! Upgrade CLI binary + libaria-engine_ffi from GitHub/Gitee Releases.
 
 use crate::config;
 use crate::download;
@@ -68,7 +68,7 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
 
     let asset_os = detect_asset_os()?;
     let engine_name = engine_asset_name(&ver, asset_os);
-    let ffi_name = format!("libaria_ffi_{ver}_{asset_os}.tar.gz");
+    let ffi_name = format!("libaria-engine_ffi_{ver}_{asset_os}.tar.gz");
     let engine_asset = find_asset(&target.assets, &engine_name)?;
     let ffi_asset = find_asset(&target.assets, &ffi_name)?;
 
@@ -90,7 +90,7 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
     download_url(
         &ffi_asset.download_url,
         &ffi_archive,
-        &format!("libaria_ffi {ver}"),
+        &format!("libaria-engine_ffi {ver}"),
     )
     .await?;
 
@@ -107,7 +107,7 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
     let _ = fs::remove_dir_all(&staging);
     println!("upgraded to {ver}");
     println!(
-        "libaria_ffi installed under {} (set ARIA_FFI_LIB if needed)",
+        "libaria-engine_ffi installed under {} (set ARIA_FFI_LIB if needed)",
         config::lib_dir()?.display()
     );
     Ok(())
@@ -252,9 +252,9 @@ pub fn detect_asset_os() -> io::Result<&'static str> {
 
 pub fn engine_asset_name(version: &str, asset_os: &str) -> String {
     if asset_os.starts_with("windows") {
-        format!("engine_{version}_{asset_os}.zip")
+        format!("aria-engine_{version}_{asset_os}.zip")
     } else {
-        format!("engine_{version}_{asset_os}.tar.gz")
+        format!("aria-engine_{version}_{asset_os}.tar.gz")
     }
 }
 
@@ -386,12 +386,12 @@ fn install_ffi(extract_dir: &Path) -> io::Result<()> {
     let lib = config::lib_dir()?;
     fs::create_dir_all(&lib)?;
     let names = [
-        "libaria_ffi.so",
-        "libaria_ffi.dylib",
-        "libaria_ffi.a",
-        "aria_ffi.dll",
-        "aria_ffi.dll.lib",
-        "aria_ffi.lib",
+        "libaria-engine_ffi.so",
+        "libaria-engine_ffi.dylib",
+        "libaria-engine_ffi.a",
+        "aria-engine_ffi.dll",
+        "aria-engine_ffi.dll.lib",
+        "aria-engine_ffi.lib",
     ];
     let mut any = false;
     for name in names {
@@ -408,7 +408,7 @@ fn install_ffi(extract_dir: &Path) -> io::Result<()> {
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            if name.contains("aria_ffi") || name.contains("libaria_ffi") {
+            if name.contains("aria-engine_ffi") || name.contains("libaria-engine_ffi") {
                 fs::copy(&entry, lib.join(&name))?;
                 any = true;
             }
@@ -417,7 +417,7 @@ fn install_ffi(extract_dir: &Path) -> io::Result<()> {
     if !any {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            "no libaria_ffi library found in archive",
+            "no libaria-engine_ffi library found in archive",
         ));
     }
     Ok(())
@@ -485,11 +485,11 @@ mod tests {
                 draft: false,
                 assets: vec![
                     ReleaseAsset {
-                        name: "engine_0.7.2_linux_x86_64.tar.gz".into(),
+                        name: "aria-engine_0.7.2_linux_x86_64.tar.gz".into(),
                         download_url: "https://example/e".into(),
                     },
                     ReleaseAsset {
-                        name: "libaria_ffi_0.7.2_linux_x86_64.tar.gz".into(),
+                        name: "libaria-engine_ffi_0.7.2_linux_x86_64.tar.gz".into(),
                         download_url: "https://example/f".into(),
                     },
                 ],
@@ -565,11 +565,11 @@ mod tests {
     fn engine_asset_names() {
         assert_eq!(
             engine_asset_name("0.7.2", "linux_x86_64"),
-            "engine_0.7.2_linux_x86_64.tar.gz"
+            "aria-engine_0.7.2_linux_x86_64.tar.gz"
         );
         assert_eq!(
             engine_asset_name("0.7.2", "windows_x86_64"),
-            "engine_0.7.2_windows_x86_64.zip"
+            "aria-engine_0.7.2_windows_x86_64.zip"
         );
     }
 

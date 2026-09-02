@@ -1,5 +1,5 @@
 /**
- * React Native surface — native module bridges to libaria_ffi (Turbo Module / JSI).
+ * React Native surface — native module bridges to libaria-engine_ffi (Turbo Module / JSI).
  * JS API mirrors @ariacompute/engine-ts for docs samples.
  *
  * Auto-download: `AriaEngine.open(modelRef, { token, site })` resolves a model
@@ -272,9 +272,9 @@ const SDK_UA = 'aria-engine-sdk/0.1.0';
 const zlib = require('zlib');
 
 function ffiLibName(platform = process.platform) {
-  if (platform === 'win32' || String(platform).toLowerCase().startsWith('win')) return 'aria_ffi.dll';
-  if (platform === 'darwin') return 'libaria_ffi.dylib';
-  return 'libaria_ffi.so';
+  if (platform === 'win32' || String(platform).toLowerCase().startsWith('win')) return 'aria-engine_ffi.dll';
+  if (platform === 'darwin') return 'libaria-engine_ffi.dylib';
+  return 'libaria-engine_ffi.so';
 }
 
 function libDir() {
@@ -298,7 +298,7 @@ function ffiAssetOs(platform = process.platform, arch = process.arch) {
   if ((p === 'win32' || p.startsWith('win')) && (a === 'x64' || a === 'x86_64' || a === 'amd64')) {
     return 'windows_x86_64';
   }
-  throw new Error(`unsupported platform ${platform}/${arch} for libaria_ffi`);
+  throw new Error(`unsupported platform ${platform}/${arch} for libaria-engine_ffi`);
 }
 
 function stripV(tag) {
@@ -329,7 +329,7 @@ function selectLatestStable(releases) {
       bestTag = tag;
     }
   }
-  if (!bestTag) throw new Error('no stable release found for libaria_ffi');
+  if (!bestTag) throw new Error('no stable release found for libaria-engine_ffi');
   return stripV(bestTag);
 }
 
@@ -399,7 +399,7 @@ async function ensureFfiLib(site) {
   const releases = JSON.parse(raw.toString('utf8'));
   if (!Array.isArray(releases)) throw new Error('unexpected releases payload');
   const ver = selectLatestStable(releases);
-  const assetName = `libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
+  const assetName = `libaria-engine_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
   let url;
   for (const rel of releases) {
     const tag = String(rel.tag_name || rel.tag || '');
@@ -479,7 +479,7 @@ export class AriaEngine {
       success: true,
       response: '',
       function_calls: [],
-      note: 'Link native module to libaria_ffi',
+      note: 'Link native module to libaria-engine_ffi',
     };
   }
 

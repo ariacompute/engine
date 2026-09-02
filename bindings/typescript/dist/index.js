@@ -349,10 +349,10 @@ async function downloadModel(model, tokenOrOpts, site = DEFAULT_SITE) {
 const SDK_UA = "aria-engine-sdk/0.1.0";
 function ffiLibName(platform = process.platform) {
     if (platform === "win32" || platform.toLowerCase().startsWith("win"))
-        return "aria_ffi.dll";
+        return "aria-engine_ffi.dll";
     if (platform === "darwin")
-        return "libaria_ffi.dylib";
-    return "libaria_ffi.so";
+        return "libaria-engine_ffi.dylib";
+    return "libaria-engine_ffi.so";
 }
 function libDir() {
     return path.join(ariaHome(), "lib");
@@ -377,7 +377,7 @@ function ffiAssetOs(platform = process.platform, arch = process.arch) {
     if ((p === "win32" || p.startsWith("win")) && (a === "x64" || a === "x86_64" || a === "amd64")) {
         return "windows_x86_64";
     }
-    throw new Error(`unsupported platform ${platform}/${arch} for libaria_ffi`);
+    throw new Error(`unsupported platform ${platform}/${arch} for libaria-engine_ffi`);
 }
 function stripV(tag) {
     const t = tag.trim();
@@ -412,7 +412,7 @@ function selectLatestStable(releases) {
         }
     }
     if (!bestTag)
-        throw new Error("no stable release found for libaria_ffi");
+        throw new Error("no stable release found for libaria-engine_ffi");
     return stripV(bestTag);
 }
 function upgradeOrg(site) {
@@ -490,7 +490,7 @@ function installFfiFromReleases(raw, archiveBytes) {
     if (!Array.isArray(releases))
         throw new Error("unexpected releases payload");
     const ver = selectLatestStable(releases);
-    const assetName = `libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
+    const assetName = `libaria-engine_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
     let url;
     for (const rel of releases) {
         const tag = String(rel.tag_name || rel.tag || "");
@@ -520,7 +520,7 @@ function installFfiFromReleases(raw, archiveBytes) {
         fs.rmSync(staging, { recursive: true, force: true });
     }
 }
-/** Return a path to libaria_ffi, downloading the latest stable Release if needed. */
+/** Return a path to libaria-engine_ffi, downloading the latest stable Release if needed. */
 async function ensureFfiLib(site) {
     const env = process.env.ARIA_FFI_LIB;
     if (env && fs.existsSync(env))
@@ -556,7 +556,7 @@ function loadLib(ffiLib, site) {
         cachedFfiPath() ||
         ensureFfiLibSync(site);
     if (!libPath)
-        throw new Error("Cannot locate libaria_ffi");
+        throw new Error("Cannot locate libaria-engine_ffi");
     const koffiNS = require("koffi");
     return koffiNS.load(libPath);
 }

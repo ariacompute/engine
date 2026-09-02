@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="engine_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="aria-engine_${VERSION}_${ASSET_OS}.tar.gz"
           tar -czf "$ARCHIVE_NAME" -C target/release "$BIN_NAME"
           echo "ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
 
@@ -84,11 +84,11 @@ jobs:
           ASSET_OS: ${{ matrix.asset_os }}
         run: |
           $version = $env:TAG_NAME.TrimStart('v')
-          $archiveName = "engine_${version}_$($env:ASSET_OS).zip"
+          $archiveName = "aria-engine_${version}_$($env:ASSET_OS).zip"
           Compress-Archive -Path "target/release/$($env:BIN_NAME).exe" -DestinationPath $archiveName -Force
           Add-Content -Path $env:GITHUB_ENV -Value "ASSET_PATH=$archiveName"
 
-      - name: Package libaria_ffi (Unix)
+      - name: Package libaria-engine_ffi (Unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
         env:
@@ -97,23 +97,26 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="libaria_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="libaria-engine_ffi_${VERSION}_${ASSET_OS}.tar.gz"
           cd target/release
           if [[ -f libaria_ffi.dylib ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.dylib
+            cp libaria_ffi.dylib libaria-engine_ffi.dylib
+            tar -czf "../../$ARCHIVE_NAME" libaria-engine_ffi.dylib
           elif [[ -f libaria_ffi.so ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.so
+            cp libaria_ffi.so libaria-engine_ffi.so
+            tar -czf "../../$ARCHIVE_NAME" libaria-engine_ffi.so
           elif [[ -f libaria_ffi.a ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.a
+            cp libaria_ffi.a libaria-engine_ffi.a
+            tar -czf "../../$ARCHIVE_NAME" libaria-engine_ffi.a
           else
-            echo "No libaria_ffi shared/static library found in target/release" >&2
+            echo "No libaria-engine_ffi shared/static library found in target/release" >&2
             ls -la
             exit 1
           fi
           cd ../..
           echo "FFI_ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
 
-      - name: Package libaria_ffi (Windows)
+      - name: Package libaria-engine_ffi (Windows)
         if: matrix.archive == 'zip'
         shell: bash
         env:
@@ -122,15 +125,22 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="libaria_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="libaria-engine_ffi_${VERSION}_${ASSET_OS}.tar.gz"
           cd target/release
           if [[ -f aria_ffi.dll ]]; then
-            FILES=(aria_ffi.dll)
-            [[ -f aria_ffi.dll.lib ]] && FILES+=(aria_ffi.dll.lib)
-            [[ -f aria_ffi.lib ]] && FILES+=(aria_ffi.lib)
+            cp aria_ffi.dll aria-engine_ffi.dll
+            FILES=(aria-engine_ffi.dll)
+            if [[ -f aria_ffi.dll.lib ]]; then
+              cp aria_ffi.dll.lib aria-engine_ffi.dll.lib
+              FILES+=(aria-engine_ffi.dll.lib)
+            fi
+            if [[ -f aria_ffi.lib ]]; then
+              cp aria_ffi.lib aria-engine_ffi.lib
+              FILES+=(aria-engine_ffi.lib)
+            fi
             tar -czf "../../$ARCHIVE_NAME" "${FILES[@]}"
           else
-            echo "No aria_ffi.dll found in target/release" >&2
+            echo "No aria-engine_ffi.dll found in target/release" >&2
             ls -la
             exit 1
           fi

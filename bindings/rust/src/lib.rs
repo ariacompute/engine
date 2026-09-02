@@ -210,11 +210,11 @@ mod tests {
         let libdir = home.path().join("lib");
         std::fs::create_dir_all(&libdir).unwrap();
         let name = if cfg!(windows) {
-            "aria_ffi.dll"
+            "aria-engine_ffi.dll"
         } else if cfg!(target_os = "macos") {
-            "libaria_ffi.dylib"
+            "libaria-engine_ffi.dylib"
         } else {
-            "libaria_ffi.so"
+            "libaria-engine_ffi.so"
         };
         std::fs::write(libdir.join(name), b"x").unwrap();
         let dir = tempfile::tempdir().unwrap();

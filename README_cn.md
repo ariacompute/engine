@@ -88,6 +88,8 @@ python scripts/profile_qwen3_serve.py --compute cpu --spawn --report ./out/engin
 
 端口不要撞车：engine 数据面（`--bind`）与 router 管理面（`--mgmt-bind`，默认 `127.0.0.1:8080`）。客户端应打 **router 数据面**，而不是 engine。
 
+从 GitHub/Gitee Releases 安装 `aria-router`（`aria-router_<ver>_<os>.tar.gz` 或 `.zip`；包内为 `aria-router` 二进制）。
+
 ```bash
 # 1. router 仓 — 数据面 :8899，管理面 :8090
 cd /path/to/router
@@ -275,7 +277,7 @@ python -m bench run \
 
 ## SDK Bindings
 
-原生 C ABI（`ariacompute-ffi` / `libaria_ffi`）与 `bindings/` 下薄封装
+原生 C ABI（`ariacompute-ffi` / `libaria_ffi`）与 `bindings/` 下薄封装。**不要**与 `libaria-router_ffi` / `ariacompute-router` 混用（见 **router** 仓）。
 
 | Binding | 路径 | Registry |
 |---------|------|----------|

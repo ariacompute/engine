@@ -374,11 +374,11 @@ const sdkUserAgent = "aria-engine-sdk/0.1.0"
 func ffiLibNameFor(goos string) string {
 	switch goos {
 	case "windows":
-		return "aria_ffi.dll"
+		return "aria-engine_ffi.dll"
 	case "darwin":
-		return "libaria_ffi.dylib"
+		return "libaria-engine_ffi.dylib"
 	default:
-		return "libaria_ffi.so"
+		return "libaria-engine_ffi.so"
 	}
 }
 
@@ -420,7 +420,7 @@ func ffiAssetOSFor(goos, goarch string) (string, error) {
 			return "windows_x86_64", nil
 		}
 	}
-	return "", fmt.Errorf("unsupported platform %s/%s for libaria_ffi", goos, goarch)
+	return "", fmt.Errorf("unsupported platform %s/%s for libaria-engine_ffi", goos, goarch)
 }
 
 func stripV(tag string) string {
@@ -491,7 +491,7 @@ func selectLatestStable(releases []ghRelease) (string, error) {
 		}
 	}
 	if bestTag == "" {
-		return "", fmt.Errorf("no stable release found for libaria_ffi")
+		return "", fmt.Errorf("no stable release found for libaria-engine_ffi")
 	}
 	return stripV(bestTag), nil
 }
@@ -598,7 +598,7 @@ func extractFfiArchive(archive, destDir, want string) (string, error) {
 	return "", fmt.Errorf("%s not found in %s", want, archive)
 }
 
-// EnsureFfiLib returns a path to libaria_ffi, downloading the latest stable
+// EnsureFfiLib returns a path to libaria-engine_ffi, downloading the latest stable
 // Release into ~/.ariacompute/lib/ if it is not already present.
 func EnsureFfiLib(site string) (string, error) {
 	if env := os.Getenv("ARIA_FFI_LIB"); env != "" {
@@ -629,7 +629,7 @@ func EnsureFfiLib(site string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	assetName := fmt.Sprintf("libaria_ffi_%s_%s.tar.gz", ver, assetOS)
+	assetName := fmt.Sprintf("libaria-engine_ffi_%s_%s.tar.gz", ver, assetOS)
 	var url string
 	for _, rel := range releases {
 		if stripV(rel.tag()) != ver {

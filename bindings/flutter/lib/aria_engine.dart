@@ -281,9 +281,9 @@ Future<String> downloadModel(String model,
 const _sdkUa = 'aria-engine-sdk/0.1.0';
 
 String _ffiLibName() {
-  if (Platform.isWindows) return 'aria_ffi.dll';
-  if (Platform.isMacOS || Platform.isIOS) return 'libaria_ffi.dylib';
-  return 'libaria_ffi.so';
+  if (Platform.isWindows) return 'aria-engine_ffi.dll';
+  if (Platform.isMacOS || Platform.isIOS) return 'libaria-engine_ffi.dylib';
+  return 'libaria-engine_ffi.so';
 }
 
 String _libDir() => '${_ariaHome()}/lib';
@@ -314,7 +314,7 @@ String ffiAssetOs({String? system, String? machine}) {
   if (sys.startsWith('win') && (mach == 'x86_64' || mach == 'amd64' || mach.isEmpty)) {
     return 'windows_x86_64';
   }
-  throw StateError('unsupported platform $sys/$mach for libaria_ffi');
+  throw StateError('unsupported platform $sys/$mach for libaria-engine_ffi');
 }
 
 String _stripV(String tag) {
@@ -351,7 +351,7 @@ String selectLatestStable(List releases) {
     }
   }
   if (bestTag == null) {
-    throw StateError('no stable release found for libaria_ffi');
+    throw StateError('no stable release found for libaria-engine_ffi');
   }
   return _stripV(bestTag);
 }
@@ -425,7 +425,7 @@ String extractFfiArchive(String archive, String destDir, {String? want}) {
   throw StateError('$name not found in $archive');
 }
 
-/// Return a path to libaria_ffi, downloading the latest stable Release if needed.
+/// Return a path to libaria-engine_ffi, downloading the latest stable Release if needed.
 Future<String> ensureFfiLib({String? site}) async {
   final env = Platform.environment['ARIA_FFI_LIB'];
   if (env != null && File(env).existsSync()) return env;
@@ -439,7 +439,7 @@ Future<String> ensureFfiLib({String? site}) async {
     throw StateError('unexpected releases payload from $org');
   }
   final ver = selectLatestStable(releases);
-  final assetName = 'libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz';
+  final assetName = 'libaria-engine_ffi_${ver}_${ffiAssetOs()}.tar.gz';
   String? url;
   for (final rel in releases) {
     final map = rel as Map<String, dynamic>;
@@ -519,10 +519,10 @@ class AriaEngine {
         Platform.environment['ARIA_FFI_LIB'] ??
         _cachedFfiPath() ??
         (Platform.isWindows
-            ? 'aria_ffi.dll'
+            ? 'aria-engine_ffi.dll'
             : Platform.isMacOS
-                ? 'libaria_ffi.dylib'
-                : 'libaria_ffi.so');
+                ? 'libaria-engine_ffi.dylib'
+                : 'libaria-engine_ffi.so');
     _lib = DynamicLibrary.open(path);
     final init = _lib!.lookupFunction<AriaInitC, AriaInitDart>('aria_model_init');
     final p = bundlePath.toNativeUtf8();

@@ -45,9 +45,9 @@ esac
 
 # --- locate the built library (CARGO_TARGET_DIR aware) ------------------
 case "$(uname -s)" in
-  Darwin)          LIB="libaria_ffi.dylib";;
-  MINGW*|MSYS*|CYGWIN*) LIB="aria_ffi.dll";;
-  *)               LIB="libaria_ffi.so";;
+  Darwin)          LIB="libaria_ffi.dylib"; DEST_NAME="libaria-engine_ffi.dylib";;
+  MINGW*|MSYS*|CYGWIN*) LIB="aria_ffi.dll"; DEST_NAME="aria-engine_ffi.dll";;
+  *)               LIB="libaria_ffi.so"; DEST_NAME="libaria-engine_ffi.so";;
 esac
 
 # --- build the FFI cdylib ------------------------------------------------
@@ -75,5 +75,5 @@ fi
 
 DEST="bindings/python/aria_engine/lib"
 mkdir -p "$DEST"
-cp "$SRC" "$DEST/"
-echo "FFI copied $SRC -> $DEST"
+cp "$SRC" "$DEST/$DEST_NAME"
+echo "FFI copied $SRC -> $DEST/$DEST_NAME"

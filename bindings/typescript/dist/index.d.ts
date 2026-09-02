@@ -73,7 +73,7 @@ export declare function cachedFfiPath(platform?: string): string | undefined;
 export declare function ffiAssetOs(platform?: string, arch?: string): string;
 export declare function selectLatestStable(releases: Array<Record<string, unknown>>): string;
 export declare function extractFfiArchive(archive: string, destDir: string, want?: string): string;
-/** Return a path to libaria_ffi, downloading the latest stable Release if needed. */
+/** Return a path to libaria-engine_ffi, downloading the latest stable Release if needed. */
 export declare function ensureFfiLib(site?: string): Promise<string>;
 export declare function isLocalRef(modelRef: string): boolean;
 export declare class Engine {

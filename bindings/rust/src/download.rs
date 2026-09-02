@@ -417,11 +417,11 @@ const SDK_UA: &str = "aria-engine-sdk/0.1.0";
 
 fn ffi_lib_name() -> &'static str {
     if cfg!(windows) {
-        "aria_ffi.dll"
+        "aria-engine_ffi.dll"
     } else if cfg!(target_os = "macos") {
-        "libaria_ffi.dylib"
+        "libaria-engine_ffi.dylib"
     } else {
-        "libaria_ffi.so"
+        "libaria-engine_ffi.so"
     }
 }
 
@@ -441,7 +441,7 @@ pub(crate) fn ffi_asset_os(os: &str, arch: &str) -> Result<&'static str, Downloa
         ("macos", _) => Ok("macos"),
         ("windows", "x86_64") => Ok("windows_x86_64"),
         _ => Err(DownloadError::Request(format!(
-            "unsupported platform {os}/{arch} for libaria_ffi"
+            "unsupported platform {os}/{arch} for libaria-engine_ffi"
         ))),
     }
 }
@@ -485,7 +485,7 @@ pub(crate) fn select_latest_stable(releases: &[serde_json::Value]) -> Result<Str
     }
     best_tag
         .map(|t| strip_v(t).to_string())
-        .ok_or_else(|| DownloadError::Request("no stable release found for libaria_ffi".into()))
+        .ok_or_else(|| DownloadError::Request("no stable release found for libaria-engine_ffi".into()))
 }
 
 fn upgrade_org(site: Option<&str>) -> String {
@@ -570,7 +570,7 @@ pub(crate) fn extract_ffi_archive(
     )))
 }
 
-/// Return a path to libaria_ffi, downloading the latest stable Release if needed.
+/// Return a path to libaria-engine_ffi, downloading the latest stable Release if needed.
 pub fn ensure_ffi_lib(site: Option<&str>) -> Result<PathBuf, DownloadError> {
     if let Ok(env) = std::env::var("ARIA_FFI_LIB") {
         let p = PathBuf::from(&env);
@@ -588,7 +588,7 @@ pub fn ensure_ffi_lib(site: Option<&str>) -> Result<PathBuf, DownloadError> {
         .map_err(|e| DownloadError::Request(format!("invalid releases JSON from {org}: {e}")))?;
     let ver = select_latest_stable(&releases)?;
     let asset_os = ffi_asset_os(std::env::consts::OS, std::env::consts::ARCH)?;
-    let asset_name = format!("libaria_ffi_{ver}_{asset_os}.tar.gz");
+    let asset_name = format!("libaria-engine_ffi_{ver}_{asset_os}.tar.gz");
     let mut url = None;
     for rel in &releases {
         let tag = rel
@@ -766,14 +766,14 @@ mod tests {
         let src_dir = tmp.path().join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         let want = if cfg!(windows) {
-            "aria_ffi.dll"
+            "aria-engine_ffi.dll"
         } else if cfg!(target_os = "macos") {
-            "libaria_ffi.dylib"
+            "libaria-engine_ffi.dylib"
         } else {
-            "libaria_ffi.so"
+            "libaria-engine_ffi.so"
         };
         std::fs::write(src_dir.join(want), b"dummy-ffi").unwrap();
-        let archive = tmp.path().join("libaria_ffi.tar.gz");
+        let archive = tmp.path().join("libaria-engine_ffi.tar.gz");
         {
             let f = std::fs::File::create(&archive).unwrap();
             let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());

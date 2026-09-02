@@ -12,7 +12,7 @@ import java.util.zip.GZIPInputStream
 import org.json.JSONArray
 import org.json.JSONObject
 
-/** Kotlin/JVM + Android JNI wrapper over libaria_ffi. */
+/** Kotlin/JVM + Android JNI wrapper over libaria-engine_ffi. */
 class AriaEngine : AutoCloseable {
     private var handle: Long = 0L
     private var cfg: SetupConfig = defaultSetupConfig()
@@ -181,9 +181,9 @@ class AriaEngine : AutoCloseable {
         internal fun ffiLibName(osName: String = System.getProperty("os.name") ?: ""): String {
             val n = osName.lowercase()
             return when {
-                n.contains("win") -> "aria_ffi.dll"
-                n.contains("mac") || n.contains("darwin") -> "libaria_ffi.dylib"
-                else -> "libaria_ffi.so"
+                n.contains("win") -> "aria-engine_ffi.dll"
+                n.contains("mac") || n.contains("darwin") -> "libaria-engine_ffi.dylib"
+                else -> "libaria-engine_ffi.so"
             }
         }
 
@@ -204,7 +204,7 @@ class AriaEngine : AutoCloseable {
             if (os.contains("linux") && (a == "aarch64" || a == "arm64")) return "linux_arm64"
             if (os.contains("mac") || os.contains("darwin")) return "macos"
             if (os.contains("win") && (a == "amd64" || a == "x86_64")) return "windows_x86_64"
-            throw IllegalStateException("unsupported platform $osName/$arch for libaria_ffi")
+            throw IllegalStateException("unsupported platform $osName/$arch for libaria-engine_ffi")
         }
 
         private fun stripV(tag: String): String {
@@ -239,7 +239,7 @@ class AriaEngine : AutoCloseable {
                     bestTag = tag
                 }
             }
-            if (bestTag == null) throw IllegalStateException("no stable release found for libaria_ffi")
+            if (bestTag == null) throw IllegalStateException("no stable release found for libaria-engine_ffi")
             return stripV(bestTag)
         }
 
@@ -325,7 +325,7 @@ class AriaEngine : AutoCloseable {
             val raw = httpGetBytes(releasesApiUrl(org))
             val releases = JSONArray(String(raw, Charsets.UTF_8))
             val ver = selectLatestStable(releases)
-            val assetName = "libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz"
+            val assetName = "libaria-engine_ffi_${ver}_${ffiAssetOs()}.tar.gz"
             var url: String? = null
             for (i in 0 until releases.length()) {
                 val rel = releases.getJSONObject(i)

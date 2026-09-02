@@ -88,6 +88,8 @@ This process never routes. If `router` is set (config or `--router`), `serve` re
 
 Use **different ports**: engine data (`--bind`) vs router management (`--mgmt-bind`, default `127.0.0.1:8080`). Clients then talk to the **router data plane**, not engine.
 
+Install `aria-router` from GitHub/Gitee Releases (`aria-router_<ver>_<os>.tar.gz` or `.zip`; archive contains the `aria-router` binary).
+
 ```bash
 # 1. router repo — data :8899, management :8090
 cd /path/to/router
@@ -276,7 +278,7 @@ Override model ids with `--model-id family=path=id` or `backend:family=id`. Defa
 
 ## SDK Bindings
 
-Native C ABI (`ariacompute-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`.
+Native C ABI (`ariacompute-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`. **Do not** mix with `libaria-router_ffi` / `ariacompute-router` (see **router** repo).
 
 | Binding | Path | Registry |
 |---------|------|----------|

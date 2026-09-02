@@ -234,20 +234,20 @@ func TestExtractFfiAndCachedSkip(t *testing.T) {
 		t.Skip("linux .so fixture")
 	}
 	srcDir := t.TempDir()
-	lib := filepath.Join(srcDir, "libaria_ffi.so")
+	lib := filepath.Join(srcDir, "libaria-engine_ffi.so")
 	if err := os.WriteFile(lib, []byte("dummy-ffi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(home, "libaria_ffi_0.1.0_linux_x86_64.tar.gz")
-	if err := packTarGz(archive, srcDir, "libaria_ffi.so"); err != nil {
+	archive := filepath.Join(home, "libaria-engine_ffi_0.1.0_linux_x86_64.tar.gz")
+	if err := packTarGz(archive, srcDir, "libaria-engine_ffi.so"); err != nil {
 		t.Fatal(err)
 	}
 	destDir := filepath.Join(home, "lib")
-	got, err := extractFfiArchive(archive, destDir, "libaria_ffi.so")
+	got, err := extractFfiArchive(archive, destDir, "libaria-engine_ffi.so")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(got) != "libaria_ffi.so" {
+	if filepath.Base(got) != "libaria-engine_ffi.so" {
 		t.Fatalf("got %q", got)
 	}
 	raw, err := os.ReadFile(got)
