@@ -1,10 +1,10 @@
-name: Publish pub.dev (package:aria_engine)
+name: Publish pub.dev (package:ariaengine)
 
-# Publish the Flutter FFI binding (package:aria_engine) to pub.dev under
+# Publish the Flutter FFI binding (package:ariaengine) to pub.dev under
 # the verified publisher ariacompute.com, so consumers can use:
 #   dependencies:
-#     aria_engine: <version>
-#   import 'package:aria_engine/aria_engine.dart';
+#     ariaengine: <version>
+#   import 'package:ariaengine/ariaengine.dart';
 # Listed at https://pub.dev/publishers/ariacompute.com/packages
 #
 # Version is injected into bindings/flutter/pubspec.yaml and CHANGELOG.md
@@ -32,7 +32,7 @@ name: Publish pub.dev (package:aria_engine)
 # Do not use a login performed as a personal/WSL Google account.
 #
 # First publish creates the package under that pub.dev user. Transfer it
-# at https://pub.dev/packages/aria_engine/admin to publisher
+# at https://pub.dev/packages/ariaengine/admin to publisher
 # ariacompute.com.
 
 on:
@@ -46,7 +46,7 @@ on:
 
 jobs:
   publish:
-    name: pub.dev package:aria_engine
+    name: pub.dev package:ariaengine
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -86,7 +86,7 @@ jobs:
               echo
               echo "## $VERSION"
               echo
-              echo "- Release $VERSION of package:aria_engine."
+              echo "- Release $VERSION of package:ariaengine."
               echo
               awk 'NR==1 && /^# / { next } { print }' "$CHANGELOG"
             } > "$tmp"
@@ -115,7 +115,7 @@ jobs:
         run: |
           # Copy out of the git worktree: `pub publish --dry-run` fails if a
           # tracked file (pubspec.yaml after version inject) is dirty.
-          STAGE="${RUNNER_TEMP:-/tmp}/aria_engine"
+          STAGE="${RUNNER_TEMP:-/tmp}/ariaengine"
           rm -rf "$STAGE"
           mkdir -p "$STAGE"
           cp -a bindings/flutter/. "$STAGE/"

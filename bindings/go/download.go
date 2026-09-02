@@ -1,4 +1,4 @@
-package aria
+package ariaengine
 
 import (
 	"archive/tar"
@@ -163,7 +163,7 @@ func hubTokenField(source string) string {
 	return "hf_token"
 }
 
-// DownloadOptions controls hub download auth. Field names match aria-engine setup
+// DownloadOptions controls hub download auth. Field names match ariaengine setup
 // (hf_token / modelscope_api_token) plus a legacy Token and Site.
 type DownloadOptions struct {
 	Token              string
@@ -251,7 +251,7 @@ func (e *hubSetupError) Error() string {
 	if e.source == "modelscope" {
 		field = "modelscope_api_token"
 	}
-	return fmt.Sprintf("auth failed HTTP %d; set %s via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)", e.code, field)
+	return fmt.Sprintf("auth failed HTTP %d; set %s via ariaengine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)", e.code, field)
 }
 
 func fetchURLToFile(url, dest, token string) error {
@@ -307,15 +307,15 @@ func fetchHubFile(source, model, file, dest, token string, required bool) error 
 // DownloadModel downloads `model` from the regional public hub into
 // ~/.ariacompute/models/{model} and returns that path.
 //
-// Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
+// Matches ariaengine download: .com → Hugging Face, .cn → ModelScope.
 // Hub auth uses hf_token / modelscope_api_token (DownloadModelOpts, else
-// ~/.ariacompute/engine.yml from aria-engine setup). Dashboard is not used.
+// ~/.ariacompute/engine.yml from ariaengine setup). Dashboard is not used.
 func DownloadModel(model, token, site string) (string, error) {
 	return DownloadModelOpts(model, DownloadOptions{Token: token, Site: site})
 }
 
 // DownloadModelOpts is DownloadModel with explicit hub tokens (same keys as
-// aria-engine setup).
+// ariaengine setup).
 func DownloadModelOpts(model string, opts DownloadOptions) (string, error) {
 	if _, _, err := parseBundleName(model); err != nil {
 		return "", err
@@ -369,16 +369,16 @@ func DownloadModelOpts(model string, opts DownloadOptions) (string, error) {
 	return cache, nil
 }
 
-const sdkUserAgent = "aria-engine-sdk/0.1.0"
+const sdkUserAgent = "ariaengine-sdk/0.1.0"
 
 func ffiLibNameFor(goos string) string {
 	switch goos {
 	case "windows":
-		return "aria_ffi.dll"
+		return "ariaengine_ffi.dll"
 	case "darwin":
-		return "libaria_ffi.dylib"
+		return "libariaengine_ffi.dylib"
 	default:
-		return "libaria_ffi.so"
+		return "libariaengine_ffi.so"
 	}
 }
 
@@ -420,7 +420,7 @@ func ffiAssetOSFor(goos, goarch string) (string, error) {
 			return "windows_x86_64", nil
 		}
 	}
-	return "", fmt.Errorf("unsupported platform %s/%s for libaria_ffi", goos, goarch)
+	return "", fmt.Errorf("unsupported platform %s/%s for libariaengine_ffi", goos, goarch)
 }
 
 func stripV(tag string) string {
@@ -491,7 +491,7 @@ func selectLatestStable(releases []ghRelease) (string, error) {
 		}
 	}
 	if bestTag == "" {
-		return "", fmt.Errorf("no stable release found for libaria_ffi")
+		return "", fmt.Errorf("no stable release found for libariaengine_ffi")
 	}
 	return stripV(bestTag), nil
 }
@@ -598,10 +598,10 @@ func extractFfiArchive(archive, destDir, want string) (string, error) {
 	return "", fmt.Errorf("%s not found in %s", want, archive)
 }
 
-// EnsureFfiLib returns a path to libaria_ffi, downloading the latest stable
+// EnsureFfiLib returns a path to libariaengine_ffi, downloading the latest stable
 // Release into ~/.ariacompute/lib/ if it is not already present.
 func EnsureFfiLib(site string) (string, error) {
-	if env := os.Getenv("ARIA_FFI_LIB"); env != "" {
+	if env := os.Getenv("ARIAENGINE_FFI_LIB"); env != "" {
 		if fi, err := os.Stat(env); err == nil && !fi.IsDir() {
 			return env, nil
 		}
@@ -629,7 +629,7 @@ func EnsureFfiLib(site string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	assetName := fmt.Sprintf("libaria_ffi_%s_%s.tar.gz", ver, assetOS)
+	assetName := fmt.Sprintf("libariaengine_ffi_%s_%s.tar.gz", ver, assetOS)
 	var url string
 	for _, rel := range releases {
 		if stripV(rel.tag()) != ver {

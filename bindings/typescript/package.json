@@ -1,5 +1,5 @@
 {
-  "name": "@ariacompute/engine-ts",
+  "name": "@ariacompute/ariaengine-ts",
   "version": "0.1.0",
   "description": "TypeScript/Node SDK for Aria Engine",
   "main": "dist/index.js",

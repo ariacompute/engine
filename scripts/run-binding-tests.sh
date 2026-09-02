@@ -1,32 +1,32 @@
 #!/usr/bin/env bash
-# Host binding tests: build libaria_ffi, prepare fixture, run Rust/Python/Go/TS when available.
+# Host binding tests: build libariaengine_ffi, prepare fixture, run Rust/Python/Go/TS when available.
 set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-echo "== cargo test ariacompute-ffi / ariacompute-engine =="
-cargo test -p ariacompute-ffi -p ariacompute-engine
+echo "== cargo test ariacompute-ariaengine-ffi / ariacompute-ariaengine =="
+cargo test -p ariacompute-ariaengine-ffi -p ariacompute-ariaengine
 
 echo "== prepare fixture =="
 FIX="$ROOT/bindings/testdata/tiny-q4"
 mkdir -p "$FIX"
-cargo run -q -p ariacompute-ffi --example write_fixture -- "$FIX"
-cargo build -q -p ariacompute-ffi
+cargo run -q -p ariacompute-ariaengine-ffi --example write_fixture -- "$FIX"
+cargo build -q -p ariacompute-ariaengine-ffi
 
 export ARIA_BUNDLE="$FIX"
 export ARIA_INCLUDE="$ROOT/ffi/include"
 if [[ "$(uname)" == "Darwin" ]]; then
-  export ARIA_FFI_LIB="$ROOT/target/debug/libaria_ffi.dylib"
+  export ARIAENGINE_FFI_LIB="$ROOT/target/debug/libariaengine_ffi.dylib"
 elif [[ "$(uname -s)" == MINGW* || "$(uname -s)" == MSYS* ]]; then
-  export ARIA_FFI_LIB="$ROOT/target/debug/aria_ffi.dll"
+  export ARIAENGINE_FFI_LIB="$ROOT/target/debug/ariaengine_ffi.dll"
 else
-  export ARIA_FFI_LIB="$ROOT/target/debug/libaria_ffi.so"
+  export ARIAENGINE_FFI_LIB="$ROOT/target/debug/libariaengine_ffi.so"
 fi
 export LD_LIBRARY_PATH="${ROOT}/target/debug:${LD_LIBRARY_PATH:-}"
 export DYLD_LIBRARY_PATH="${ROOT}/target/debug:${DYLD_LIBRARY_PATH:-}"
 
-echo "ARIA_FFI_LIB=$ARIA_FFI_LIB"
-test -e "$ARIA_FFI_LIB"
+echo "ARIAENGINE_FFI_LIB=$ARIAENGINE_FFI_LIB"
+test -e "$ARIAENGINE_FFI_LIB"
 
 if command -v python3 >/dev/null; then
   echo "== python =="

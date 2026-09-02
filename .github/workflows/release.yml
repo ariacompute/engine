@@ -7,7 +7,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
-  BIN_NAME: aria-engine
+  BIN_NAME: ariaengine
 
 jobs:
   build:
@@ -57,11 +57,11 @@ jobs:
           TAG_NAME: ${{ github.event.release.tag_name }}
         run: |
           set -euo pipefail
-          # Embed release tag (sans leading v) into aria-engine -v/--version.
-          export ARIA_ENGINE_VERSION="${TAG_NAME#v}"
-          echo "ARIA_ENGINE_VERSION=$ARIA_ENGINE_VERSION"
-          cargo build --release -p aria-openai
-          cargo build --release -p ariacompute-ffi
+          # Embed release tag (sans leading v) into ariaengine -v/--version.
+          export ARIAENGINE_VERSION="${TAG_NAME#v}"
+          echo "ARIAENGINE_VERSION=$ARIAENGINE_VERSION"
+          cargo build --release -p ariaengine-openai
+          cargo build --release -p ariacompute-ariaengine-ffi
 
       - name: Package release archive (Unix)
         if: matrix.archive == 'tar.gz'
@@ -72,7 +72,7 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="engine_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="ariaengine_${VERSION}_${ASSET_OS}.tar.gz"
           tar -czf "$ARCHIVE_NAME" -C target/release "$BIN_NAME"
           echo "ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
 
@@ -84,11 +84,11 @@ jobs:
           ASSET_OS: ${{ matrix.asset_os }}
         run: |
           $version = $env:TAG_NAME.TrimStart('v')
-          $archiveName = "engine_${version}_$($env:ASSET_OS).zip"
+          $archiveName = "ariaengine_${version}_$($env:ASSET_OS).zip"
           Compress-Archive -Path "target/release/$($env:BIN_NAME).exe" -DestinationPath $archiveName -Force
           Add-Content -Path $env:GITHUB_ENV -Value "ASSET_PATH=$archiveName"
 
-      - name: Package libaria_ffi (Unix)
+      - name: Package libariaengine_ffi (Unix)
         if: matrix.archive == 'tar.gz'
         shell: bash
         env:
@@ -97,23 +97,23 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="libaria_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="libariaengine_ffi_${VERSION}_${ASSET_OS}.tar.gz"
           cd target/release
-          if [[ -f libaria_ffi.dylib ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.dylib
-          elif [[ -f libaria_ffi.so ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.so
-          elif [[ -f libaria_ffi.a ]]; then
-            tar -czf "../../$ARCHIVE_NAME" libaria_ffi.a
+          if [[ -f libariaengine_ffi.dylib ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libariaengine_ffi.dylib
+          elif [[ -f libariaengine_ffi.so ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libariaengine_ffi.so
+          elif [[ -f libariaengine_ffi.a ]]; then
+            tar -czf "../../$ARCHIVE_NAME" libariaengine_ffi.a
           else
-            echo "No libaria_ffi shared/static library found in target/release" >&2
+            echo "No libariaengine_ffi shared/static library found in target/release" >&2
             ls -la
             exit 1
           fi
           cd ../..
           echo "FFI_ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
 
-      - name: Package libaria_ffi (Windows)
+      - name: Package libariaengine_ffi (Windows)
         if: matrix.archive == 'zip'
         shell: bash
         env:
@@ -122,15 +122,15 @@ jobs:
         run: |
           set -euo pipefail
           VERSION="${TAG_NAME#v}"
-          ARCHIVE_NAME="libaria_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          ARCHIVE_NAME="libariaengine_ffi_${VERSION}_${ASSET_OS}.tar.gz"
           cd target/release
-          if [[ -f aria_ffi.dll ]]; then
-            FILES=(aria_ffi.dll)
-            [[ -f aria_ffi.dll.lib ]] && FILES+=(aria_ffi.dll.lib)
-            [[ -f aria_ffi.lib ]] && FILES+=(aria_ffi.lib)
+          if [[ -f ariaengine_ffi.dll ]]; then
+            FILES=(ariaengine_ffi.dll)
+            [[ -f ariaengine_ffi.dll.lib ]] && FILES+=(ariaengine_ffi.dll.lib)
+            [[ -f ariaengine_ffi.lib ]] && FILES+=(ariaengine_ffi.lib)
             tar -czf "../../$ARCHIVE_NAME" "${FILES[@]}"
           else
-            echo "No aria_ffi.dll found in target/release" >&2
+            echo "No ariaengine_ffi.dll found in target/release" >&2
             ls -la
             exit 1
           fi
@@ -162,15 +162,15 @@ jobs:
           VERSION="${GITHUB_REF_NAME#v}"
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "VERSION=$VERSION"
-      - name: npm @ariacompute/engine-ts + engine-rn
+      - name: npm @ariacompute/ariaengine-ts + engine-rn
         continue-on-error: true
         run: |
           echo "npm publish handled by publish-npm.yml (engine-ts built via tsc, engine-rn plain JS)"
           echo "npm publish stub (fail-pass)"
-      - name: pub.dev package:aria_engine
+      - name: pub.dev package:ariaengine
         continue-on-error: true
         run: |
-          echo "pub.dev publish handled by publish-pub.yml (publisher ariacompute.com, package:aria_engine)"
+          echo "pub.dev publish handled by publish-pub.yml (publisher ariacompute.com, package:ariaengine)"
           echo "pub.dev publish stub (fail-pass)"
       - name: Maven Central com.ariacompute:engine
         continue-on-error: true
@@ -182,12 +182,12 @@ jobs:
         run: |
           echo "Configure COCOAPODS_TRUNK_TOKEN then: pod trunk push bindings/swift/AriaEngine.podspec"
           echo "CocoaPods publish stub (fail-pass)"
-      - name: crates.io ariacompute-engine
+      - name: crates.io ariacompute-ariaengine
         continue-on-error: true
         run: |
-          echo "crates.io publish handled by publish-cargo.yml (ariacompute-engine + deps)"
+          echo "crates.io publish handled by publish-cargo.yml (ariacompute-ariaengine + deps)"
           echo "crates.io publish stub (fail-pass)"
-      - name: PyPI aria-engine
+      - name: PyPI ariaengine
         continue-on-error: true
         run: |
           echo "PyPI publish handled by publish-pypi.yml (cibuildwheel platform wheels)"

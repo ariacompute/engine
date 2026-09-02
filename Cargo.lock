@@ -41,11 +41,68 @@ dependencies = [
 ]
 
 [[package]]
-name = "aria-openai"
+name = "ariacompute-ariaengine"
 version = "0.1.0"
 dependencies = [
- "ariacompute-inference",
- "ariacompute-kernel",
+ "ariacompute-ariaengine-ffi",
+ "ariaengine-inference",
+ "flate2",
+ "serde_json",
+ "tar",
+ "tempfile",
+ "thiserror 2.0.19",
+ "ureq",
+]
+
+[[package]]
+name = "ariacompute-ariaengine-ffi"
+version = "0.1.0"
+dependencies = [
+ "ariaengine-inference",
+ "serde",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
+name = "ariaengine-graph"
+version = "0.1.0"
+dependencies = [
+ "ariaengine-kernel",
+ "tempfile",
+]
+
+[[package]]
+name = "ariaengine-inference"
+version = "0.1.0"
+dependencies = [
+ "ariaengine-graph",
+ "ariaengine-kernel",
+ "half",
+ "memmap2",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 2.0.19",
+ "tokenizers",
+]
+
+[[package]]
+name = "ariaengine-kernel"
+version = "0.1.0"
+dependencies = [
+ "libloading",
+ "rayon",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
+name = "ariaengine-openai"
+version = "0.1.0"
+dependencies = [
+ "ariaengine-inference",
+ "ariaengine-kernel",
  "axum",
  "bytes",
  "dirs",
@@ -64,63 +121,6 @@ dependencies = [
  "tower",
  "urlencoding",
  "zip",
-]
-
-[[package]]
-name = "ariacompute-engine"
-version = "0.1.0"
-dependencies = [
- "ariacompute-ffi",
- "ariacompute-inference",
- "flate2",
- "serde_json",
- "tar",
- "tempfile",
- "thiserror 2.0.19",
- "ureq",
-]
-
-[[package]]
-name = "ariacompute-ffi"
-version = "0.1.0"
-dependencies = [
- "ariacompute-inference",
- "serde",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
-name = "ariacompute-graph"
-version = "0.1.0"
-dependencies = [
- "ariacompute-kernel",
- "tempfile",
-]
-
-[[package]]
-name = "ariacompute-inference"
-version = "0.1.0"
-dependencies = [
- "ariacompute-graph",
- "ariacompute-kernel",
- "half",
- "memmap2",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.19",
- "tokenizers",
-]
-
-[[package]]
-name = "ariacompute-kernel"
-version = "0.1.0"
-dependencies = [
- "libloading",
- "rayon",
- "tempfile",
- "thiserror 2.0.19",
 ]
 
 [[package]]

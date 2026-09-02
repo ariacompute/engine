@@ -1,4 +1,4 @@
-"""Force platform-specific wheel tag so bundled libaria_ffi is shipped correctly."""
+"""Force platform-specific wheel tag so bundled libariaengine_ffi is shipped correctly."""
 from setuptools import setup
 from setuptools.dist import Distribution
 

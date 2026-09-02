@@ -29,9 +29,9 @@ export interface CompleteResult {
 export interface OpenOptions {
     /** Legacy generic hub token. Dashboard sk-/bfvk- keys are ignored. */
     token?: string;
-    /** Hugging Face hub token (`.com`). Same field as `aria-engine setup` `hf_token`. */
+    /** Hugging Face hub token (`.com`). Same field as `ariaengine setup` `hf_token`. */
     hfToken?: string;
-    /** ModelScope hub token (`.cn`). Same field as `aria-engine setup` `modelscope_api_token`. */
+    /** ModelScope hub token (`.cn`). Same field as `ariaengine setup` `modelscope_api_token`. */
     modelscopeApiToken?: string;
     /** Site used to pick the regional hub. Defaults to https://ariacompute.com (.com → HF, .cn → ModelScope). */
     site?: string;
@@ -65,7 +65,7 @@ export declare function resolveHubToken(source: "huggingface" | "modelscope", op
 export declare function hubFileUrls(source: "huggingface" | "modelscope", model: string, file: string, sdk?: string): string[];
 /** Download `model` from the regional public hub into
  * `~/.ariacompute/models/{model}` and return that directory.
- * Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
+ * Matches ariaengine download: .com → Hugging Face, .cn → ModelScope.
  * Dashboard is not used. Skips the download when a valid bundle is already cached. */
 export declare function downloadModel(model: string, tokenOrOpts?: string | OpenOptions, site?: string): Promise<string>;
 export declare function ffiLibName(platform?: string): string;
@@ -73,7 +73,7 @@ export declare function cachedFfiPath(platform?: string): string | undefined;
 export declare function ffiAssetOs(platform?: string, arch?: string): string;
 export declare function selectLatestStable(releases: Array<Record<string, unknown>>): string;
 export declare function extractFfiArchive(archive: string, destDir: string, want?: string): string;
-/** Return a path to libaria_ffi, downloading the latest stable Release if needed. */
+/** Return a path to libariaengine_ffi, downloading the latest stable Release if needed. */
 export declare function ensureFfiLib(site?: string): Promise<string>;
 export declare function isLocalRef(modelRef: string): boolean;
 export declare class Engine {

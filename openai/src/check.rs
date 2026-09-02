@@ -480,7 +480,7 @@ async fn get_json(
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
             format!(
-                "auth failed HTTP {}; run `aria-engine setup` to set {}",
+                "auth failed HTTP {}; run `ariaengine setup` to set {}",
                 status,
                 match source {
                     DownloadSource::HuggingFace => "hf_token",
@@ -515,7 +515,7 @@ async fn get_json_paginated(
             return Err(io::Error::new(
                 io::ErrorKind::PermissionDenied,
                 format!(
-                    "auth failed HTTP {}; run `aria-engine setup` to set hf_token",
+                    "auth failed HTTP {}; run `ariaengine setup` to set hf_token",
                     status
                 ),
             ));

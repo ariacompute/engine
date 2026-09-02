@@ -24,11 +24,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build ariacompute-ffi (host)
-        run: cargo build -p ariacompute-ffi
+      - name: Build ariacompute-ariaengine-ffi (host)
+        run: cargo build -p ariacompute-ariaengine-ffi
       - name: Note
         run: |
-          echo "Cross-compile android-arm64 libaria_ffi + install Flutter/RN example apps on emulator."
+          echo "Cross-compile android-arm64 libariaengine_ffi + install Flutter/RN example apps on emulator."
           echo "Wire Firebase Test Lab / emulator action when secrets and example apps are ready."
           echo "Required e2e cases: init_ok, complete_ok, embed_ok, transcribe_ok, destroy."
 
@@ -39,9 +39,9 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - name: Build ariacompute-ffi (host)
-        run: cargo build -p ariacompute-ffi
+      - name: Build ariacompute-ariaengine-ffi (host)
+        run: cargo build -p ariacompute-ariaengine-ffi
       - name: Note
         run: |
-          echo "Cross-compile ios-arm64/sim libaria_ffi + run Flutter/RN example on Simulator."
+          echo "Cross-compile ios-arm64/sim libariaengine_ffi + run Flutter/RN example on Simulator."
           echo "Gate PRs that touch ffi/ or mobile bindings once example apps land."

@@ -1,4 +1,4 @@
-name: Publish PyPI (aria-engine)
+name: Publish PyPI (ariaengine)
 
 # Build platform wheels via cibuildwheel (manylinux x86_64/aarch64, macOS
 # arm64, Windows x86_64) and upload to PyPI as owner `ariacompute`.
@@ -6,7 +6,7 @@ name: Publish PyPI (aria-engine)
 # hosted Intel macOS runner and its queue can stall for hours in 2026.
 #
 # Secrets required:
-#   PYPI_TOKEN  — PyPI API token (project-scoped for aria-engine, Owner role)
+#   PYPI_TOKEN  — PyPI API token (project-scoped for ariaengine, Owner role)
 
 on:
   release:
@@ -64,7 +64,7 @@ jobs:
           CIBW_BEFORE_ALL: bash scripts/build-python-ffi.sh
           # env var is authoritative (mirrors [tool.cibuildwheel] skip in
           # bindings/python/pyproject.toml): musl targets drop the cdylib
-          # crate type, so musllinux wheels cannot bundle libaria_ffi.so.
+          # crate type, so musllinux wheels cannot bundle libariaengine_ffi.so.
           # The pattern must be "*musllinux*" (fnmatch on the full
           # identifier like cp310-musllinux_x86_64); quoted because it
           # starts with an asterisk in YAML.

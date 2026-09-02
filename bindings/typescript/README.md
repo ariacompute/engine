@@ -1,13 +1,13 @@
-# @ariacompute/engine-ts
+# @ariacompute/ariaengine-ts
 
 ```bash
-npm i @ariacompute/engine-ts
+npm i @ariacompute/ariaengine-ts
 ```
 
-`libaria_ffi` is resolved as `ARIA_FFI_LIB` → package-bundled `dist/lib/` → `~/.ariacompute/lib/` (same as `aria-engine upgrade`). If none exist, `Engine.open` downloads the latest stable `libaria_ffi_{ver}_{os}.tar.gz` from regional Releases. `ARIA_FFI_LIB` remains an optional override.
+`libariaengine_ffi` is resolved as `ARIAENGINE_FFI_LIB` → package-bundled `dist/lib/` → `~/.ariacompute/lib/` (same as `ariaengine upgrade`). If none exist, `Engine.open` downloads the latest stable `libariaengine_ffi_{ver}_{os}.tar.gz` from regional Releases. `ARIAENGINE_FFI_LIB` remains an optional override.
 
 ```ts
-import { Engine } from "@ariacompute/engine-ts";
+import { Engine } from "@ariacompute/ariaengine-ts";
 const eng = new Engine("/path/to/bundle");
 console.log(eng.complete([{ role: "user", content: "hi" }]));
 eng.close();
@@ -18,13 +18,13 @@ eng.close();
 `Engine.open(modelRef, { token, site })` accepts a local bundle path **or** an
 Aria model name (e.g. `gemma-4-e2b-it_q4`). A value containing `/` or already on
 disk is loaded directly; otherwise the SDK downloads it from the regional public
-hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope;
+hub (same as `ariaengine download`: `.com` → Hugging Face, `.cn` → ModelScope;
 `site` defaults to `https://ariacompute.com`) into `~/.ariacompute/models/{model}`
 and then loads it. Dashboard is not used. A Dashboard `sk-` / `bfvk-` token is
 ignored for hub auth. Token is optional for public models. A valid cached bundle
 is reused without re-downloading.
 
-Gated files: call `eng.setup({ hf_token })` (`.com`) or `eng.setup({ modelscope_api_token, site_url })` (`.cn`) **before** `open`. Same keys as `aria-engine setup`. Instance-only; does not write `engine.yml`. If omitted, the SDK reads `~/.ariacompute/engine.yml`.
+Gated files: call `eng.setup({ hf_token })` (`.com`) or `eng.setup({ modelscope_api_token, site_url })` (`.cn`) **before** `open`. Same keys as `ariaengine setup`. Instance-only; does not write `engine.yml`. If omitted, the SDK reads `~/.ariacompute/engine.yml`.
 
 ```ts
 const eng = await Engine.open("gemma-4-e2b-it_q4");

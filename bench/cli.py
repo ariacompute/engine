@@ -17,7 +17,7 @@ def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(
         prog="python -m bench",
         description=(
-            "Compare aria-engine with llama.cpp / Ollama / vLLM over OpenAI chat "
+            "Compare ariaengine with llama.cpp / Ollama / vLLM over OpenAI chat "
             "(report-only JSON+MD; never fails CI on thresholds)"
         ),
     )

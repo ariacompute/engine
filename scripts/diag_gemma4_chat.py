@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Diagnose aria-engine /v1/chat/completions for Gemma-4 (engine.log Hello garbage).
+"""Diagnose ariaengine /v1/chat/completions for Gemma-4 (engine.log Hello garbage).
 
 Encodes the same gemma4_it string the Rust session uses, POSTs the OpenAI chat
 payload, and optionally diffs against model/scripts/diag_gemma4_chat.py JSON.
@@ -11,7 +11,7 @@ engine unpacked hub codebook tables correctly.
 
 H200 example (from engine repo root):
 
-  ./aria-engine serve gemma-4-e2b-it_q4 --bind 127.0.0.1:8080
+  ./ariaengine serve gemma-4-e2b-it_q4 --bind 127.0.0.1:8080
   python scripts/diag_gemma4_chat.py \\
     --url http://127.0.0.1:8080 \\
     --bundle ~/.ariacompute/models/gemma-4-e2b-it_q4 \\
@@ -154,7 +154,7 @@ def _compare_peer(engine: dict, peer: dict) -> list[str]:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--url", default="http://127.0.0.1:8080")
-    p.add_argument("--bundle", required=True, help="same bundle aria-engine serve loaded")
+    p.add_argument("--bundle", required=True, help="same bundle ariaengine serve loaded")
     p.add_argument("--user", default="Hello")
     p.add_argument("--max-tokens", type=int, default=32)
     p.add_argument("--timeout", type=float, default=300.0)

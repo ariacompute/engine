@@ -184,7 +184,7 @@ class _HubAuthException implements Exception {
   String toString() {
     final field =
         source == 'modelscope' ? 'modelscope_api_token' : 'hf_token';
-    return 'auth failed HTTP $code; set $field via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)';
+    return 'auth failed HTTP $code; set $field via ariaengine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)';
   }
 }
 
@@ -278,12 +278,12 @@ Future<String> downloadModel(String model,
   }
 }
 
-const _sdkUa = 'aria-engine-sdk/0.1.0';
+const _sdkUa = 'ariaengine-sdk/0.1.0';
 
 String _ffiLibName() {
-  if (Platform.isWindows) return 'aria_ffi.dll';
-  if (Platform.isMacOS || Platform.isIOS) return 'libaria_ffi.dylib';
-  return 'libaria_ffi.so';
+  if (Platform.isWindows) return 'ariaengine_ffi.dll';
+  if (Platform.isMacOS || Platform.isIOS) return 'libariaengine_ffi.dylib';
+  return 'libariaengine_ffi.so';
 }
 
 String _libDir() => '${_ariaHome()}/lib';
@@ -314,7 +314,7 @@ String ffiAssetOs({String? system, String? machine}) {
   if (sys.startsWith('win') && (mach == 'x86_64' || mach == 'amd64' || mach.isEmpty)) {
     return 'windows_x86_64';
   }
-  throw StateError('unsupported platform $sys/$mach for libaria_ffi');
+  throw StateError('unsupported platform $sys/$mach for libariaengine_ffi');
 }
 
 String _stripV(String tag) {
@@ -351,7 +351,7 @@ String selectLatestStable(List releases) {
     }
   }
   if (bestTag == null) {
-    throw StateError('no stable release found for libaria_ffi');
+    throw StateError('no stable release found for libariaengine_ffi');
   }
   return _stripV(bestTag);
 }
@@ -425,9 +425,9 @@ String extractFfiArchive(String archive, String destDir, {String? want}) {
   throw StateError('$name not found in $archive');
 }
 
-/// Return a path to libaria_ffi, downloading the latest stable Release if needed.
+/// Return a path to libariaengine_ffi, downloading the latest stable Release if needed.
 Future<String> ensureFfiLib({String? site}) async {
-  final env = Platform.environment['ARIA_FFI_LIB'];
+  final env = Platform.environment['ARIAENGINE_FFI_LIB'];
   if (env != null && File(env).existsSync()) return env;
   final cached = _cachedFfiPath();
   if (cached != null) return cached;
@@ -439,7 +439,7 @@ Future<String> ensureFfiLib({String? site}) async {
     throw StateError('unexpected releases payload from $org');
   }
   final ver = selectLatestStable(releases);
-  final assetName = 'libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz';
+  final assetName = 'libariaengine_ffi_${ver}_${ffiAssetOs()}.tar.gz';
   String? url;
   for (final rel in releases) {
     final map = rel as Map<String, dynamic>;
@@ -516,13 +516,13 @@ class AriaEngine {
   void _bindAndInit(String bundlePath, {String? libPath}) {
     final path = libPath ??
         _libPath ??
-        Platform.environment['ARIA_FFI_LIB'] ??
+        Platform.environment['ARIAENGINE_FFI_LIB'] ??
         _cachedFfiPath() ??
         (Platform.isWindows
-            ? 'aria_ffi.dll'
+            ? 'ariaengine_ffi.dll'
             : Platform.isMacOS
-                ? 'libaria_ffi.dylib'
-                : 'libaria_ffi.so');
+                ? 'libariaengine_ffi.dylib'
+                : 'libariaengine_ffi.so');
     _lib = DynamicLibrary.open(path);
     final init = _lib!.lookupFunction<AriaInitC, AriaInitDart>('aria_model_init');
     final p = bundlePath.toNativeUtf8();

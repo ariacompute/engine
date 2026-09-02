@@ -34,7 +34,7 @@ tempfile = "3"
 rayon = "1.10"
 libloading = "0.8"
 tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
-ariacompute-kernel = { path = "kernel", version = "0.1.0" }
-ariacompute-graph = { path = "graph", version = "0.1.0" }
-ariacompute-inference = { path = "inference", version = "0.1.0" }
-ariacompute-ffi = { path = "ffi", version = "0.1.0" }
+ariaengine-kernel = { path = "kernel", version = "0.1.0" }
+ariaengine-graph = { path = "graph", version = "0.1.0" }
+ariaengine-inference = { path = "inference", version = "0.1.0" }
+ariacompute-ariaengine-ffi = { path = "ffi", version = "0.1.0" }

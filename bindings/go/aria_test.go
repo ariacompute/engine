@@ -1,6 +1,6 @@
 //go:build aria_ffi
 
-package aria
+package ariaengine
 
 import (
 	"os"
@@ -27,7 +27,7 @@ func TestCompleteOk(t *testing.T) {
 }
 
 func TestInitMissing(t *testing.T) {
-	if os.Getenv("ARIA_FFI_LIB") == "" && os.Getenv("ARIA_LIBDIR") == "" {
+	if os.Getenv("ARIAENGINE_FFI_LIB") == "" && os.Getenv("ARIA_LIBDIR") == "" {
 		t.Skip("no lib")
 	}
 	_, err := Open("/no/such")

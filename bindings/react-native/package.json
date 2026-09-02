@@ -1,5 +1,5 @@
 {
-  "name": "@ariacompute/engine-rn",
+  "name": "@ariacompute/ariaengine-rn",
   "version": "0.1.0",
   "description": "React Native binding for Aria Engine",
   "main": "src/index.js",

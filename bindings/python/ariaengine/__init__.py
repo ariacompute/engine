@@ -1,4 +1,4 @@
-"""Aria Engine Python binding (ctypes over libaria_ffi)."""
+"""Aria Engine Python binding (ctypes over libariaengine_ffi)."""
 from __future__ import annotations
 
 import ctypes
@@ -15,8 +15,8 @@ import tarfile
 __version__ = "0.1.0"
 
 _LIB_NAMES = {
-    "win32": "aria_ffi.dll",
-    "darwin": "libaria_ffi.dylib",
+    "win32": "ariaengine_ffi.dll",
+    "darwin": "libariaengine_ffi.dylib",
 }
 
 DEFAULT_SITE = "https://ariacompute.com"
@@ -25,22 +25,22 @@ DEFAULT_SITE = "https://ariacompute.com"
 def _default_lib_path(package_dir: Optional[str] = None) -> Optional[str]:
     """Locate the platform dynamic library bundled inside the wheel.
 
-    Wheels ship the FFI under ``aria_engine/lib/`` (built by
+    Wheels ship the FFI under ``ariaengine/lib/`` (built by
     ``scripts/build-python-ffi.sh`` during cibuildwheel). Returns ``None``
     when the library is not present (e.g. a source checkout).
     """
     pkg_dir = os.path.dirname(os.path.abspath(__file__)) if package_dir is None else package_dir
-    name = _LIB_NAMES.get(sys.platform, "libaria_ffi.so")
+    name = _LIB_NAMES.get(sys.platform, "libariaengine_ffi.so")
     candidate = os.path.join(pkg_dir, "lib", name)
     return candidate if os.path.isfile(candidate) else None
 
 
 def _load_lib(path: Optional[str] = None, site: Optional[str] = None):
-    """Resolve the FFI library: explicit path > ARIA_FFI_LIB env > bundled lib >
-    ``~/.ariacompute/lib`` (same as ``aria-engine upgrade``) > download latest Release.
+    """Resolve the FFI library: explicit path > ARIAENGINE_FFI_LIB env > bundled lib >
+    ``~/.ariacompute/lib`` (same as ``ariaengine upgrade``) > download latest Release.
     """
     if not path:
-        path = os.environ.get("ARIA_FFI_LIB") or _default_lib_path() or _cached_ffi_path()
+        path = os.environ.get("ARIAENGINE_FFI_LIB") or _default_lib_path() or _cached_ffi_path()
     if not path:
         path = ensure_ffi_lib(site=site)
     return ctypes.CDLL(path)
@@ -55,7 +55,7 @@ def _aria_home() -> str:
 
 def _ffi_lib_name(plat: Optional[str] = None) -> str:
     p = plat or sys.platform
-    return _LIB_NAMES.get(p, "libaria_ffi.so")
+    return _LIB_NAMES.get(p, "libariaengine_ffi.so")
 
 
 def _lib_dir() -> str:
@@ -68,7 +68,7 @@ def _cached_ffi_path() -> Optional[str]:
 
 
 def _ffi_asset_os(system: Optional[str] = None, machine: Optional[str] = None) -> str:
-    """Match ``aria-engine upgrade`` asset suffixes."""
+    """Match ``ariaengine upgrade`` asset suffixes."""
     system = (system or platform.system()).lower()
     machine = (machine or platform.machine()).lower()
     if system == "linux" and machine in ("x86_64", "amd64"):
@@ -79,7 +79,7 @@ def _ffi_asset_os(system: Optional[str] = None, machine: Optional[str] = None) -
         return "macos"
     if system.startswith("win") and machine in ("x86_64", "amd64"):
         return "windows_x86_64"
-    raise RuntimeError(f"unsupported platform {system}/{machine} for libaria_ffi")
+    raise RuntimeError(f"unsupported platform {system}/{machine} for libariaengine_ffi")
 
 
 def _strip_v(tag: str) -> str:
@@ -112,7 +112,7 @@ def _select_latest_stable(releases: list) -> str:
             best_key = parsed
             best_tag = tag
     if not best_tag:
-        raise RuntimeError("no stable release found for libaria_ffi")
+        raise RuntimeError("no stable release found for libariaengine_ffi")
     return _strip_v(best_tag)
 
 
@@ -134,7 +134,7 @@ def _releases_api_url(org: str) -> str:
 
 
 def _http_get_bytes(url: str, dest: Optional[str] = None) -> bytes:
-    req = Request(url, headers={"User-Agent": f"aria-engine-sdk/{__version__}"})
+    req = Request(url, headers={"User-Agent": f"ariaengine-sdk/{__version__}"})
     with urlopen(req, timeout=600) as resp:  # nosec - release/hub URL
         data = resp.read() if dest is None else None
         if dest is not None:
@@ -173,8 +173,8 @@ def _extract_ffi_archive(archive: str, dest_dir: str, lib_name: Optional[str] = 
 
 
 def ensure_ffi_lib(site: Optional[str] = None) -> str:
-    """Return a path to libaria_ffi, downloading the latest Release if needed."""
-    env = os.environ.get("ARIA_FFI_LIB")
+    """Return a path to libariaengine_ffi, downloading the latest Release if needed."""
+    env = os.environ.get("ARIAENGINE_FFI_LIB")
     if env and os.path.isfile(env):
         return env
     bundled = _default_lib_path()
@@ -194,7 +194,7 @@ def ensure_ffi_lib(site: Optional[str] = None) -> str:
         raise RuntimeError(f"unexpected releases payload from {org}")
     ver = _select_latest_stable(releases)
     asset_os = _ffi_asset_os()
-    asset_name = f"libaria_ffi_{ver}_{asset_os}.tar.gz"
+    asset_name = f"libariaengine_ffi_{ver}_{asset_os}.tar.gz"
     url = None
     for rel in releases:
         tag = str(rel.get("tag_name") or rel.get("tag") or "")
@@ -273,7 +273,7 @@ _HUB_OPTIONAL = (
 
 
 def _preferred_public_hub(site: Optional[str]) -> str:
-    """``.cn`` → ModelScope, otherwise Hugging Face (same as aria-engine download)."""
+    """``.cn`` → ModelScope, otherwise Hugging Face (same as ariaengine download)."""
     if site and "ariacompute.cn" in site.lower():
         return "modelscope"
     return "huggingface"
@@ -294,7 +294,7 @@ def _hub_bearer(token: Optional[str]) -> Optional[str]:
 
 
 def _config_yml_scalar(key: str) -> Optional[str]:
-    """Read a top-level scalar from ``~/.ariacompute/engine.yml`` (aria-engine setup)."""
+    """Read a top-level scalar from ``~/.ariacompute/engine.yml`` (ariaengine setup)."""
     home = _aria_home()
     for name in ("engine.yml", "config.yml"):
         path = os.path.join(home, name)
@@ -337,7 +337,7 @@ def _resolve_hub_token(
 ) -> Optional[str]:
     """Named field for the active hub, then generic ``token``, then engine.yml / config.yml.
 
-    Same keys as ``aria-engine setup``: ``hf_token`` (``.com``) /
+    Same keys as ``ariaengine setup``: ``hf_token`` (``.com``) /
     ``modelscope_api_token`` (``.cn``). Does not read ``HF_TOKEN`` /
     ``MODELSCOPE_API_TOKEN``. Dashboard ``sk-`` / ``bfvk-`` values are skipped.
     """
@@ -420,7 +420,7 @@ def _fetch_hub_file(
             if e.code in (401, 403):
                 field = "modelscope_api_token" if source == "modelscope" else "hf_token"
                 raise RuntimeError(
-                    f"auth failed HTTP {e.code}; set {field} via aria-engine setup "
+                    f"auth failed HTTP {e.code}; set {field} via ariaengine setup "
                     f"(do not pass a Dashboard sk-/bfvk- key as the hub token)"
                 ) from e
             continue
@@ -442,9 +442,9 @@ def download_model(
     """Download ``model`` from the regional public hub into
     ``~/.ariacompute/models/{model}`` and return that path.
 
-    Matches ``aria-engine download``: ``.com`` → Hugging Face, ``.cn`` → ModelScope.
+    Matches ``ariaengine download``: ``.com`` → Hugging Face, ``.cn`` → ModelScope.
     Hub auth uses ``hf_token`` / ``modelscope_api_token`` (call args, else
-    ``~/.ariacompute/engine.yml`` from ``aria-engine setup``). Dashboard is not used.
+    ``~/.ariacompute/engine.yml`` from ``ariaengine setup``). Dashboard is not used.
     A Dashboard API key (``sk-`` / ``bfvk-``) is ignored for hub auth. If a valid
     bundle already exists at the cache path, the download is skipped.
     """

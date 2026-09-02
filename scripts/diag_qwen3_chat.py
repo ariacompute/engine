@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Diagnose aria-engine /v1/chat/completions (engine.log Hello garbage).
+"""Diagnose ariaengine /v1/chat/completions (engine.log Hello garbage).
 
 Encodes the same ChatML string the Rust session uses, POSTs the OpenAI chat
 payload, and optionally diffs against model/scripts/diag_qwen3_chat.py JSON.
 
 H200 example (from engine repo root):
 
-  ./aria-engine serve qwen3-0.6b_q4 --bind 127.0.0.1:8080
+  ./ariaengine serve qwen3-0.6b_q4 --bind 127.0.0.1:8080
   python scripts/diag_qwen3_chat.py \\
     --url http://127.0.0.1:8080 \\
     --bundle ~/.ariacompute/models/qwen3-0.6b_q4 \\
@@ -124,7 +124,7 @@ def _compare_peer(engine: dict, peer: dict) -> list[str]:
 def main() -> int:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--url", default="http://127.0.0.1:8080")
-    p.add_argument("--bundle", required=True, help="same bundle aria-engine serve loaded")
+    p.add_argument("--bundle", required=True, help="same bundle ariaengine serve loaded")
     p.add_argument("--user", default="Hello")
     p.add_argument("--max-tokens", type=int, default=32)
     p.add_argument("--timeout", type=float, default=300.0)

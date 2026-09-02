@@ -1,38 +1,38 @@
 use aria_kernel::ComputePref;
-use aria_openai::check;
-use aria_openai::config::{self, AriaConfig};
-use aria_openai::download;
-use aria_openai::gateway_detect;
-use aria_openai::upgrade;
-use aria_openai::{app, build_state_with_opts, register_with_router};
+use ariaengine_openai::check;
+use ariaengine_openai::config::{self, AriaConfig};
+use ariaengine_openai::download;
+use ariaengine_openai::gateway_detect;
+use ariaengine_openai::upgrade;
+use ariaengine_openai::{app, build_state_with_opts, register_with_router};
 use std::env;
 use std::io::{self, BufRead, Write};
 use std::net::SocketAddr;
 use std::process;
 
-/// Embedded at compile time; release builds set `ARIA_ENGINE_VERSION` from the git tag.
-const ENGINE_VERSION: &str = env!("ARIA_ENGINE_VERSION");
+/// Embedded at compile time; release builds set `ARIAENGINE_VERSION` from the git tag.
+const ENGINE_VERSION: &str = env!("ARIAENGINE_VERSION");
 
 fn print_usage() {
     eprintln!(
         "\
-aria-engine — Aria Compute inference engine
+ariaengine — Aria Compute inference engine
 
 Usage:
-  aria-engine setup [--status|--clear]
-  aria-engine download <model>
-  aria-engine list
-  aria-engine check [model]
-  aria-engine clean [model]
-  aria-engine upgrade [version]
-  aria-engine serve <model> [--bind host:port] [--router URL] [--router-api-key SECRET] [--compute auto|cpu|cuda] [--profile]
-  aria-engine -h | --help | help
-  aria-engine -v | --version | version
+  ariaengine setup [--status|--clear]
+  ariaengine download <model>
+  ariaengine list
+  ariaengine check [model]
+  ariaengine clean [model]
+  ariaengine upgrade [version]
+  ariaengine serve <model> [--bind host:port] [--router URL] [--router-api-key SECRET] [--compute auto|cpu|cuda] [--profile]
+  ariaengine -h | --help | help
+  ariaengine -v | --version | version
 
 Cache:
   ~/.ariacompute/engine.yml
   ~/.ariacompute/models/<model>/
-  ~/.ariacompute/lib/   (libaria_ffi from upgrade)
+  ~/.ariacompute/lib/   (libariaengine_ffi from upgrade)
 
 setup                Prompt for compute, hub token, optional router URL; no API key required
   --status           Show config status (keys redacted)
@@ -41,7 +41,7 @@ download <model>     Fetch from the regional public hub
 list                 Scan local ~/.ariacompute/models
 check [model]        Compare local bundle files (count, names, SHA-256) to regional hub
 clean [model]        Remove one cached model or all
-upgrade [version]    Replace this CLI + libaria_ffi from GitHub/Gitee (via upgrade_url)
+upgrade [version]    Replace this CLI + libariaengine_ffi from GitHub/Gitee (via upgrade_url)
 serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
   --router           aria-router management URL (process override; does not write engine.yml)
@@ -53,7 +53,7 @@ serve <model>        Start OpenAI-compatible HTTP server
 }
 
 fn print_version() {
-    println!("aria-engine {ENGINE_VERSION}");
+    println!("ariaengine {ENGINE_VERSION}");
 }
 
 fn prompt(label: &str) -> io::Result<String> {
@@ -362,7 +362,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             .map_err(|e| format!("{e}"))?;
     }
     eprintln!(
-        "aria-openai listening on http://{addr} (model={} compute={})",
+        "ariaengine-openai listening on http://{addr} (model={} compute={})",
         model_path.display(),
         compute_label
     );

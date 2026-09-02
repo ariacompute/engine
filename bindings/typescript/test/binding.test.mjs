@@ -4,7 +4,7 @@ import { createRequire } from "node:module";
 
 const require = createRequire(import.meta.url);
 
-test("complete_ok", { skip: !process.env.ARIA_FFI_LIB || !process.env.ARIA_BUNDLE }, async () => {
+test("complete_ok", { skip: !process.env.ARIAENGINE_FFI_LIB || !process.env.ARIA_BUNDLE }, async () => {
   // Prefer compiled dist; fallback skip if not built
   let Engine;
   try {

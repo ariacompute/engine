@@ -1,11 +1,11 @@
-"""Unit tests for aria_engine model-name parsing and auto-download (no network)."""
+"""Unit tests for ariaengine model-name parsing and auto-download (no network)."""
 import json
 import os
 import tempfile
 import unittest
 
-import aria_engine
-from aria_engine import (
+import ariaengine
+from ariaengine import (
     _aria_home,
     _hub_bearer,
     _hub_file_urls,

@@ -1,5 +1,5 @@
 [package]
-name = "aria-openai"
+name = "ariaengine-openai"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -9,15 +9,15 @@ publish = false
 
 [features]
 default = []
-cuda = ["ariacompute-kernel/cuda"]
+cuda = ["ariaengine-kernel/cuda"]
 
 [[bin]]
-name = "aria-engine"
+name = "ariaengine"
 path = "src/main.rs"
 
 [dependencies]
-ariacompute-kernel = { workspace = true }
-ariacompute-inference = { workspace = true }
+ariaengine-kernel = { workspace = true }
+ariaengine-inference = { workspace = true }
 axum = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }

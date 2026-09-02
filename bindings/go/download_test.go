@@ -1,6 +1,6 @@
 //go:build aria_ffi
 
-package aria
+package ariaengine
 
 import (
 	"testing"
