@@ -1,20 +1,20 @@
 [package]
-name = "ariacompute-ariaengine"
+name = "ariacompute-engine"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "Rust SDK for Aria engine (thin wrapper over ariaengine-inference / ariacompute-ariaengine-ffi)"
+description = "Rust SDK for Aria engine (thin wrapper over ariacompute-inference / ariacompute-ffi)"
 readme = "README.md"
 keywords = ["aria", "llm", "inference"]
 categories = ["api-bindings"]
 
 [lib]
-name = "ariaengine"
+name = "aria_engine"
 
 [dependencies]
-ariaengine-inference = { workspace = true }
-ariacompute-ariaengine-ffi = { workspace = true }
+ariacompute-inference = { workspace = true }
+ariacompute-ffi = { workspace = true }
 serde_json = { workspace = true }
 ureq = { version = "2", features = ["tls"] }
 thiserror = { workspace = true }

@@ -202,7 +202,7 @@ public final class AriaEngine {
                 let field = source == "modelscope" ? "modelscope_api_token" : "hf_token"
                 throw AriaDownloadError.requestFailed(
                     code,
-                    "auth failed HTTP \(code); set \(field) via ariaengine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                    "auth failed HTTP \(code); set \(field) via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
                 )
             } catch {
                 last = error
@@ -254,17 +254,17 @@ public final class AriaEngine {
         }
     }
 
-    // MARK: - libariaengine_ffi
+    // MARK: - libaria_ffi
 
-    private static let sdkUA = "ariaengine-sdk/0.1.0"
+    private static let sdkUA = "aria-engine-sdk/0.1.0"
 
     private static func ffiLibName() -> String {
         #if os(Windows)
-        return "ariaengine_ffi.dll"
+        return "aria_ffi.dll"
         #elseif os(macOS) || os(iOS)
-        return "libariaengine_ffi.dylib"
+        return "libaria_ffi.dylib"
         #else
-        return "libariaengine_ffi.so"
+        return "libaria_ffi.so"
         #endif
     }
 
@@ -289,7 +289,7 @@ public final class AriaEngine {
         return "linux_x86_64"
         #endif
         #else
-        throw AriaDownloadError.requestFailed(0, "unsupported platform for libariaengine_ffi")
+        throw AriaDownloadError.requestFailed(0, "unsupported platform for libaria_ffi")
         #endif
     }
 
@@ -315,7 +315,7 @@ public final class AriaEngine {
             }
         }
         guard let bestTag else {
-            throw AriaDownloadError.requestFailed(0, "no stable release found for libariaengine_ffi")
+            throw AriaDownloadError.requestFailed(0, "no stable release found for libaria_ffi")
         }
         return stripV(bestTag)
     }
@@ -358,7 +358,7 @@ public final class AriaEngine {
     static func extractFfiArchive(archive: String, destDir: String, want: String) throws -> String {
         try FileManager.default.createDirectory(atPath: destDir, withIntermediateDirectories: true)
         #if os(iOS)
-        throw AriaDownloadError.requestFailed(0, "\(want) missing; embed libariaengine_ffi in the app bundle or set ARIAENGINE_FFI_LIB")
+        throw AriaDownloadError.requestFailed(0, "\(want) missing; embed libaria_ffi in the app bundle or set ARIA_FFI_LIB")
         #else
         let proc = Process()
         proc.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
@@ -387,16 +387,16 @@ public final class AriaEngine {
         #endif
     }
 
-    /// Return a path to libariaengine_ffi, downloading the latest stable Release if needed.
+    /// Return a path to libaria_ffi, downloading the latest stable Release if needed.
     @discardableResult
     public static func ensureFfiLib(site: String = "https://ariacompute.com") throws -> String {
-        if let env = ProcessInfo.processInfo.environment["ARIAENGINE_FFI_LIB"],
+        if let env = ProcessInfo.processInfo.environment["ARIA_FFI_LIB"],
            FileManager.default.fileExists(atPath: env) {
             return env
         }
         if let cached = cachedFfiPath() { return cached }
         #if os(iOS)
-        throw AriaDownloadError.requestFailed(0, "libariaengine_ffi not found; embed it in the app bundle or set ARIAENGINE_FFI_LIB")
+        throw AriaDownloadError.requestFailed(0, "libaria_ffi not found; embed it in the app bundle or set ARIA_FFI_LIB")
         #endif
 
         let org = upgradeOrg(site)
@@ -405,7 +405,7 @@ public final class AriaEngine {
             throw AriaDownloadError.requestFailed(0, "invalid releases JSON from \(org)")
         }
         let ver = try selectLatestStable(releases)
-        let assetName = "libariaengine_ffi_\(ver)_\(try ffiAssetOS()).tar.gz"
+        let assetName = "libaria_ffi_\(ver)_\(try ffiAssetOS()).tar.gz"
         var url: String?
         for rel in releases {
             let tag = (rel["tag_name"] as? String) ?? (rel["tag"] as? String) ?? ""
@@ -444,7 +444,7 @@ public final class AriaEngine {
     public init() {}
 
     public init(bundlePath: String) throws {
-        // Link libariaengine_ffi and call aria_model_init via bridging header / module map.
+        // Link libaria_ffi and call aria_model_init via bridging header / module map.
         // Stub for host documentation; wire C calls when XCFramework is linked.
         _ = try Self.ensureFfiLib()
         self.handle = nil

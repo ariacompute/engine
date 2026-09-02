@@ -1,6 +1,6 @@
 //! Regional public-hub model auto-download for the Rust SDK.
 //!
-//! Matches `ariaengine download`: `.com` → Hugging Face, `.cn` → ModelScope.
+//! Matches `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope.
 //! Dashboard zip meta is not used. A Dashboard `sk-` / `bfvk-` token is ignored
 //! for hub auth.
 
@@ -282,7 +282,7 @@ fn auth_error(source: &str, code: u16) -> DownloadError {
         "hf_token"
     };
     DownloadError::Request(format!(
-        "auth failed HTTP {code}; set {field} via ariaengine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+        "auth failed HTTP {code}; set {field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
     ))
 }
 
@@ -358,7 +358,7 @@ fn fetch_hub_file(
 ///
 /// If a valid bundle already exists at the cache path, the download is skipped.
 /// Hub auth: explicit `hf_token` / `modelscope_api_token`, then generic `token`,
-/// then `~/.ariacompute/engine.yml` (same keys as `ariaengine setup`).
+/// then `~/.ariacompute/engine.yml` (same keys as `aria-engine setup`).
 /// Dashboard `sk-` / `bfvk-` keys are not sent to the hub.
 pub fn download_model(
     model: &str,
@@ -368,7 +368,7 @@ pub fn download_model(
     download_model_setup(model, token, site, None, None)
 }
 
-/// Like [`download_model`], with named hub tokens matching `ariaengine setup`.
+/// Like [`download_model`], with named hub tokens matching `aria-engine setup`.
 pub fn download_model_setup(
     model: &str,
     token: &str,
@@ -413,15 +413,15 @@ pub fn download_model_setup(
     result
 }
 
-const SDK_UA: &str = "ariaengine-sdk/0.1.0";
+const SDK_UA: &str = "aria-engine-sdk/0.1.0";
 
 fn ffi_lib_name() -> &'static str {
     if cfg!(windows) {
-        "ariaengine_ffi.dll"
+        "aria_ffi.dll"
     } else if cfg!(target_os = "macos") {
-        "libariaengine_ffi.dylib"
+        "libaria_ffi.dylib"
     } else {
-        "libariaengine_ffi.so"
+        "libaria_ffi.so"
     }
 }
 
@@ -441,7 +441,7 @@ pub(crate) fn ffi_asset_os(os: &str, arch: &str) -> Result<&'static str, Downloa
         ("macos", _) => Ok("macos"),
         ("windows", "x86_64") => Ok("windows_x86_64"),
         _ => Err(DownloadError::Request(format!(
-            "unsupported platform {os}/{arch} for libariaengine_ffi"
+            "unsupported platform {os}/{arch} for libaria_ffi"
         ))),
     }
 }
@@ -485,7 +485,7 @@ pub(crate) fn select_latest_stable(releases: &[serde_json::Value]) -> Result<Str
     }
     best_tag
         .map(|t| strip_v(t).to_string())
-        .ok_or_else(|| DownloadError::Request("no stable release found for libariaengine_ffi".into()))
+        .ok_or_else(|| DownloadError::Request("no stable release found for libaria_ffi".into()))
 }
 
 fn upgrade_org(site: Option<&str>) -> String {
@@ -570,9 +570,9 @@ pub(crate) fn extract_ffi_archive(
     )))
 }
 
-/// Return a path to libariaengine_ffi, downloading the latest stable Release if needed.
+/// Return a path to libaria_ffi, downloading the latest stable Release if needed.
 pub fn ensure_ffi_lib(site: Option<&str>) -> Result<PathBuf, DownloadError> {
-    if let Ok(env) = std::env::var("ARIAENGINE_FFI_LIB") {
+    if let Ok(env) = std::env::var("ARIA_FFI_LIB") {
         let p = PathBuf::from(&env);
         if p.is_file() {
             return Ok(p);
@@ -588,7 +588,7 @@ pub fn ensure_ffi_lib(site: Option<&str>) -> Result<PathBuf, DownloadError> {
         .map_err(|e| DownloadError::Request(format!("invalid releases JSON from {org}: {e}")))?;
     let ver = select_latest_stable(&releases)?;
     let asset_os = ffi_asset_os(std::env::consts::OS, std::env::consts::ARCH)?;
-    let asset_name = format!("libariaengine_ffi_{ver}_{asset_os}.tar.gz");
+    let asset_name = format!("libaria_ffi_{ver}_{asset_os}.tar.gz");
     let mut url = None;
     for rel in &releases {
         let tag = rel
@@ -761,19 +761,19 @@ mod tests {
         let _guard = ENV_LOCK.lock().unwrap();
         let tmp = tempfile::tempdir().unwrap();
         std::env::set_var("ARIA_COMPUTE_HOME", tmp.path());
-        let prev_lib = std::env::var("ARIAENGINE_FFI_LIB").ok();
-        std::env::remove_var("ARIAENGINE_FFI_LIB");
+        let prev_lib = std::env::var("ARIA_FFI_LIB").ok();
+        std::env::remove_var("ARIA_FFI_LIB");
         let src_dir = tmp.path().join("src");
         std::fs::create_dir_all(&src_dir).unwrap();
         let want = if cfg!(windows) {
-            "ariaengine_ffi.dll"
+            "aria_ffi.dll"
         } else if cfg!(target_os = "macos") {
-            "libariaengine_ffi.dylib"
+            "libaria_ffi.dylib"
         } else {
-            "libariaengine_ffi.so"
+            "libaria_ffi.so"
         };
         std::fs::write(src_dir.join(want), b"dummy-ffi").unwrap();
-        let archive = tmp.path().join("libariaengine_ffi.tar.gz");
+        let archive = tmp.path().join("libaria_ffi.tar.gz");
         {
             let f = std::fs::File::create(&archive).unwrap();
             let enc = flate2::write::GzEncoder::new(f, flate2::Compression::default());
@@ -789,8 +789,8 @@ mod tests {
         assert_eq!(cached, got);
         std::env::remove_var("ARIA_COMPUTE_HOME");
         match prev_lib {
-            Some(v) => std::env::set_var("ARIAENGINE_FFI_LIB", v),
-            None => std::env::remove_var("ARIAENGINE_FFI_LIB"),
+            Some(v) => std::env::set_var("ARIA_FFI_LIB", v),
+            None => std::env::remove_var("ARIA_FFI_LIB"),
         }
     }
 }

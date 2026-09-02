@@ -16,11 +16,11 @@
 反量化：rotated-space 码本；embedding 加载期整表 unrotate；线性层原域 `linear` 或融合 HDM。v2 = blocked tiles。
 
 ## 目录
-- `openai/`：`ariaengine-openai` — HTTP（chat / audio·embeddings·tools）；可选 `--router` 向 `aria-router` 注册本机为 provider
-- `inference/`：`ariaengine-inference` — Bundle 加载、Prefill/Decode、家族注册表
-- `graph/`：`ariaengine-graph` — Op DAG、BufferPool、mmap / external 零拷贝
-- `kernel/`：`ariaengine-kernel` — matmul / attention / norm / RoPE / dequant / FWHT / CUDA GEMM
-- `ffi/`：`ariacompute-ariaengine-ffi` — C ABI（cdylib/staticlib）；`bindings/` 八语言 SDK（均支持按模型名从本区公开 hub 自动下载到 `~/.ariacompute/models` 再加载）
+- `openai/`：`aria-openai` — HTTP（chat / audio·embeddings·tools）；可选 `--router` 向 `aria-router` 注册本机为 provider
+- `inference/`：`ariacompute-inference` — Bundle 加载、Prefill/Decode、家族注册表
+- `graph/`：`ariacompute-graph` — Op DAG、BufferPool、mmap / external 零拷贝
+- `kernel/`：`ariacompute-kernel` — matmul / attention / norm / RoPE / dequant / FWHT / CUDA GEMM
+- `ffi/`：`ariacompute-ffi` — C ABI（cdylib/staticlib）；`bindings/` 八语言 SDK（均支持按模型名从本区公开 hub 自动下载到 `~/.ariacompute/models` 再加载）
 - `bench/`：Python 引擎对标评测（§1.1 全家族；性能+质量；JSON+MD）
 - 根：`AGENTS.md` / `requirements.md` / `task.md` / `README.md` / `Cargo.toml`
 
@@ -33,8 +33,8 @@
 
 ## 常用命令
 - `cargo test`
-- `cargo run -p ariaengine-openai --bin ariaengine -- serve <model|bundle_dir>`
-- `ariaengine setup` / `download` / `list` / `check` / `clean` / `upgrade`
+- `cargo run -p aria-openai --bin aria-engine -- serve <model|bundle_dir>`
+- `aria-engine setup` / `download` / `list` / `check` / `clean` / `upgrade`
 - `./scripts/run-binding-tests.sh`
 - `python -m unittest discover -s bench/tests -t .`
 - `python -m bench run --backend aria=http://127.0.0.1:8080 --report ./out/bench_report.json`

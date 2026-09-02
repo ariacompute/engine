@@ -13,7 +13,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## 配置 / 运行
 
-凭证保存在 `~/.ariacompute/engine.yml`（通过 `ariaengine setup` 写入）。
+凭证保存在 `~/.ariacompute/engine.yml`（通过 `aria-engine setup` 写入）。
 
 | 字段 | 含义 | 默认 |
 |------|------|------|
@@ -27,37 +27,37 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ```bash
 # 配置
-ariaengine setup
-ariaengine setup --status
+aria-engine setup
+aria-engine setup --status
 
 # 下载模型
-# 可选：ariaengine setup 按区提示 hf_token（.com）或 modelscope_api_token（.cn）
-ariaengine download gemma-4-e2b-it_q4
-ariaengine list
-ariaengine check gemma-4-e2b-it_q4
-# 或：ariaengine check   # 校验全部本地缓存
-ariaengine clean gemma-4-e2b-it_q4
+# 可选：aria-engine setup 按区提示 hf_token（.com）或 modelscope_api_token（.cn）
+aria-engine download gemma-4-e2b-it_q4
+aria-engine list
+aria-engine check gemma-4-e2b-it_q4
+# 或：aria-engine check   # 校验全部本地缓存
+aria-engine clean gemma-4-e2b-it_q4
 
-# 升级 CLI + libariaengine_ffi（最新正式版，或指定版本）
-# FFI 安装到 ~/.ariacompute/lib/，必要时设置 ARIAENGINE_FFI_LIB
-ariaengine upgrade
-ariaengine upgrade 0.7.2
+# 升级 CLI + libaria_ffi（最新正式版，或指定版本）
+# FFI 安装到 ~/.ariacompute/lib/，必要时设置 ARIA_FFI_LIB
+aria-engine upgrade
+aria-engine upgrade 0.7.2
 
 # 服务（纯本地）
 # 或：serve /path/to/aria-bundle
-ariaengine serve gemma-4-e2b-it_q4 \
+aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto
 
 # 服务并向 aria-router 注册为本地 provider（仅覆盖本进程，不写 engine.yml）
-ariaengine serve gemma-4-e2b-it_q4 \
+aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
   --router-api-key sk-aria_… \
   --compute auto
 ```
 
-`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `ariaengine setup` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/engine.yml`。
+`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `aria-engine setup` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/engine.yml`。
 
 `list` 只扫描本地 `~/.ariacompute/models`。
 
@@ -68,8 +68,8 @@ ariaengine serve gemma-4-e2b-it_q4 \
 `--compute auto|cpu|cuda` 选择**本机** GEMM：`auto` 在能加载 `libcudart`/`libcublas` 且 `cudaGetDeviceCount>0` 时用 CUDA，否则 CPU（x86_64 AVX2+FMA，aarch64 NEON）。`--compute cuda` 在无 NVIDIA 设备时**硬失败**，不会静默降到 CPU。CUDA 为运行时 libloading（编译不依赖 CUDA toolkit）；H200 上仍可用 `--features cuda` 作为文档旗标：
 
 ```bash
-cargo build -p ariaengine-openai --release --features cuda
-ariaengine serve qwen3-0.6b_q4 --compute auto --profile
+cargo build -p aria-openai --release --features cuda
+aria-engine serve qwen3-0.6b_q4 --compute auto --profile
 ```
 
 `--profile` 记录加载/生成分段计时。用 `GET /v1/engine/profile` 读取，或：
@@ -97,14 +97,14 @@ cargo run -p aria-router -- serve \
   --mgmt-bind 127.0.0.1:8090
 
 # 2. engine 仓 — OpenAI 在 :8080，再 PUT 到管理面
-ariaengine serve gemma-4-e2b-it_q4 \
+aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
   --router-api-key sk-aria_… \
   --compute auto
 
 # 也可写入配置，不必每次带旗标：
-#   ariaengine setup  # 可选填写 router URL + router API key（来自 Dashboard）
+#   aria-engine setup  # 可选填写 router URL + router API key（来自 Dashboard）
 #   # 或 ~/.ariacompute/engine.yml：
 #   # router: http://127.0.0.1:8090
 #   # router_api_key: sk-aria_…
@@ -195,7 +195,7 @@ python scripts/diag_qwen3_chat.py \
 
 ```bash
 # 在 engine
-./ariaengine serve qwen3-0.6b_q4 \
+./aria-engine serve qwen3-0.6b_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto --profile
 python scripts/diag_qwen3_chat.py \
@@ -242,7 +242,7 @@ python scripts/diag_gemma4_chat.py \
 
 ```bash
 # 在 engine
-./ariaengine serve gemma-4-e2b-it_q4 \
+./aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto --profile
 python scripts/diag_gemma4_chat.py \
@@ -275,15 +275,15 @@ python -m bench run \
 
 ## SDK Bindings
 
-原生 C ABI（`ariacompute-ariaengine-ffi` / `libariaengine_ffi`）与 `bindings/` 下薄封装
+原生 C ABI（`ariacompute-ffi` / `libaria_ffi`）与 `bindings/` 下薄封装
 
 | Binding | 路径 | Registry |
 |---------|------|----------|
-| Rust | `bindings/rust`（`ariacompute-ariaengine`） | crates.io |
+| Rust | `bindings/rust`（`ariacompute-engine`） | crates.io |
 | Python | `bindings/python` | PyPI |
 | Go | `bindings/go` | Go module |
-| TypeScript | `bindings/typescript` | npm `@ariacompute/ariaengine-ts` |
-| React Native | `bindings/react-native` | npm `@ariacompute/ariaengine-rn` |
+| TypeScript | `bindings/typescript` | npm `@ariacompute/engine-ts` |
+| React Native | `bindings/react-native` | npm `@ariacompute/engine-rn` |
 | Flutter | `bindings/flutter` | pub.dev |
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
@@ -292,48 +292,48 @@ C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`�
 
 ### 按模型名自动下载
 
-所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `ariaengine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**。需授权的 hub 文件使用与 `ariaengine setup` 相同的字段，通过实例 `setup`（空构造 → `setup` → `open`）设置；**仅内存**，绝不写入 `engine.yml`（CLI `ariaengine setup` 仍写该文件）。实例字段为空时下载仍可读 `~/.ariacompute/engine.yml`。Dashboard 的 `sk-`/`bfvk-` token 不会当作 hub 凭证。不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
+所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `aria-engine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**。需授权的 hub 文件使用与 `aria-engine setup` 相同的字段，通过实例 `setup`（空构造 → `setup` → `open`）设置；**仅内存**，绝不写入 `engine.yml`（CLI `aria-engine setup` 仍写该文件）。实例字段为空时下载仍可读 `~/.ariacompute/engine.yml`。Dashboard 的 `sk-`/`bfvk-` token 不会当作 hub 凭证。不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
 
 ```bash
-cargo test -p ariacompute-ariaengine-ffi -p ariacompute-ariaengine
+cargo test -p ariacompute-ffi -p ariacompute-engine
 ./scripts/run-binding-tests.sh   # 主机矩阵（Rust / Python / Go / TS）
 ```
 
 移动端 e2e（Flutter + React Native，iOS + Android）：[`.github/workflows/bindings-mobile.yml`](.github/workflows/bindings-mobile.yml)。
 
-### libariaengine_ffi（Release 资产）
+### libaria_ffi（Release 资产）
 
 每次 GitHub Release，[`.github/workflows/release.yml`](.github/workflows/release.yml) 会在 CLI 包之外上传各平台归档：
 
 | 资产 | 内容 |
 |------|------|
-| `libariaengine_ffi_<ver>_linux_x86_64.tar.gz` | `libariaengine_ffi.so` |
-| `libariaengine_ffi_<ver>_linux_arm64.tar.gz` | `libariaengine_ffi.so` |
-| `libariaengine_ffi_<ver>_macos.tar.gz` | `libariaengine_ffi.dylib` |
-| `libariaengine_ffi_<ver>_windows_x86_64.tar.gz` | `ariaengine_ffi.dll`（及可选 import lib） |
+| `libaria_ffi_<ver>_linux_x86_64.tar.gz` | `libaria_ffi.so` |
+| `libaria_ffi_<ver>_linux_arm64.tar.gz` | `libaria_ffi.so` |
+| `libaria_ffi_<ver>_macos.tar.gz` | `libaria_ffi.dylib` |
+| `libaria_ffi_<ver>_windows_x86_64.tar.gz` | `aria_ffi.dll`（及可选 import lib） |
 
-各语言 SDK 在首次 `Engine.open` / 等价入口时，若 `ARIAENGINE_FFI_LIB`、语言包捆绑路径、`~/.ariacompute/lib/` 均不存在，会自动下载对应归档并解压到 `~/.ariacompute/lib/`。`ariaengine download` 只拉模型 bundle（CLI 二进制不 dlopen FFI）。
+各语言 SDK 在首次 `Engine.open` / 等价入口时，若 `ARIA_FFI_LIB`、语言包捆绑路径、`~/.ariacompute/lib/` 均不存在，会自动下载对应归档并解压到 `~/.ariacompute/lib/`。`aria-engine download` 只拉模型 bundle（CLI 二进制不 dlopen FFI）。
 
 ```bash
 # 示例：Linux x86_64（手动解压；SDK 会自动完成）
-tar -xzf libariaengine_ffi_0.7.1_linux_x86_64.tar.gz
-export ARIAENGINE_FFI_LIB="$PWD/libariaengine_ffi.so"
+tar -xzf libaria_ffi_0.7.1_linux_x86_64.tar.gz
+export ARIA_FFI_LIB="$PWD/libaria_ffi.so"
 # 可选：export LD_LIBRARY_PATH="$PWD:${LD_LIBRARY_PATH:-}"
 ```
 
-绑定还需本地 Aria bundle（`weight.bin` + `config.json` + tokenizer），例如经 `ariaengine download …` 落到 `~/.ariacompute/models/`。
+绑定还需本地 Aria bundle（`weight.bin` + `config.json` + tokenizer），例如经 `aria-engine download …` 落到 `~/.ariacompute/models/`。
 
 ### 示例
 
-**Python**（自动安装 `libariaengine_ffi`；`ARIAENGINE_FFI_LIB` 可覆盖）：
+**Python**（自动安装 `libaria_ffi`；`ARIA_FFI_LIB` 可覆盖）：
 
 ```bash
-pip install ariaengine
-# 可选覆盖：export ARIAENGINE_FFI_LIB=/path/to/libariaengine_ffi.so
+pip install aria-engine
+# 可选覆盖：export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 ```
 
 ```python
-from ariaengine import Engine
+from aria_engine import Engine
 
 # 本地 bundle 路径：
 with Engine("/path/to/aria-bundle") as eng:
@@ -359,15 +359,15 @@ eng_ms.open("gemma-4-e2b-it_q4")
 print(eng_ms.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
 
-**TypeScript / Node**（`@ariacompute/ariaengine-ts`）：
+**TypeScript / Node**（`@ariacompute/engine-ts`）：
 
 ```bash
-npm install @ariacompute/ariaengine-ts
-# 可选覆盖：export ARIAENGINE_FFI_LIB=/path/to/libariaengine_ffi.so
+npm install @ariacompute/engine-ts
+# 可选覆盖：export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 ```
 
 ```ts
-import { Engine } from "@ariacompute/ariaengine-ts";
+import { Engine } from "@ariacompute/engine-ts";
 
 // 本地 bundle 路径：
 const eng = new Engine("/path/to/aria-bundle");
@@ -394,11 +394,11 @@ engHf.close();
 engMs.close();
 ```
 
-**Go**（cgo；链接 `libariaengine_ffi`）：
+**Go**（cgo；链接 `libaria_ffi`）：
 
 ```bash
 export CGO_ENABLED=1
-# 可选：export ARIAENGINE_FFI_LIB=/path/to/libariaengine_ffi.so
+# 可选：export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 # 确保链接器能找到该库（或在模块 cgo 中指定 -L）。
 go get github.com/ariacompute/engine/bindings/go@latest
 ```
@@ -460,14 +460,14 @@ func main() {
 }
 ```
 
-**Rust**（`ariacompute-ariaengine` crate — 原生 API；一般无需解压 `libariaengine_ffi`）：
+**Rust**（`ariacompute-engine` crate — 原生 API；一般无需解压 `libaria_ffi`）：
 
 ```bash
-cargo add ariacompute-ariaengine
+cargo add ariacompute-engine
 ```
 
 ```rust
-use ariaengine::{SetupUpdates, Engine, GenerateOpts, OpenOptions};
+use aria_engine::{SetupUpdates, Engine, GenerateOpts, OpenOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 本地 bundle 路径：
@@ -504,7 +504,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### 从各 Registry 安装
 
-创建 **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) 构建 CLI + `libariaengine_ffi` 包并尝试发布语言包（npm / pub.dev / Maven / CocoaPods / crates.io / PyPI）。**发布失败为 fail-pass**，不阻塞 CLI / `libariaengine_ffi` 资产。crates.io（`ariacompute-ariaengine`）由 [`.github/workflows/publish-cargo.yml`](.github/workflows/publish-cargo.yml) 发布。所需 secrets：`NPM_TOKEN`、pub 凭证、Maven + GPG、`COCOAPODS_TRUNK_TOKEN`、`CARGO_REGISTRY_TOKEN`、`PYPI_TOKEN`，以及 Release 上传用的 `ARIACOMPUTE_TOKEN`。
+创建 **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) 构建 CLI + `libaria_ffi` 包并尝试发布语言包（npm / pub.dev / Maven / CocoaPods / crates.io / PyPI）。**发布失败为 fail-pass**，不阻塞 CLI / `libaria_ffi` 资产。crates.io（`ariacompute-engine`）由 [`.github/workflows/publish-cargo.yml`](.github/workflows/publish-cargo.yml) 发布。所需 secrets：`NPM_TOKEN`、pub 凭证、Maven + GPG、`COCOAPODS_TRUNK_TOKEN`、`CARGO_REGISTRY_TOKEN`、`PYPI_TOKEN`，以及 Release 上传用的 `ARIACOMPUTE_TOKEN`。
 
 版本 = release tag 去掉前导 `v`。
 

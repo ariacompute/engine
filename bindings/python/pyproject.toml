@@ -1,7 +1,7 @@
 [project]
-name = "ariaengine"
+name = "aria-engine"
 version = "0.1.0"
-description = "Python SDK for Aria Engine (ctypes over libariaengine_ffi)"
+description = "Python SDK for Aria Engine (ctypes over libaria_ffi)"
 requires-python = ">=3.10"
 license = { text = "MIT" }
 authors = [{ name = "Aria Compute" }]
@@ -12,17 +12,17 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["ariaengine*"]
+include = ["aria_engine*"]
 
 [tool.setuptools.package-data]
-ariaengine = ["lib/*.so", "lib/*.dylib", "lib/*.dll"]
+aria_engine = ["lib/*.so", "lib/*.dylib", "lib/*.dll"]
 
 [tool.cibuildwheel]
 build = "cp310-* cp311-* cp312-* cp313-*"
 # musl targets drop the cdylib crate type (crt-static default), so no
-# libariaengine_ffi.so can be produced for musllinux containers; build manylinux only.
+# libaria_ffi.so can be produced for musllinux containers; build manylinux only.
 # NB: skip patterns match the FULL build identifier (e.g. cp310-musllinux_x86_64),
 # so a leading "*" is required for a platform substring match.
 skip = "*musllinux*"
 archs = ["auto"]
-test-command = "python -c \"from ariaengine import _load_lib; _load_lib(); print('ffi ok')\""
+test-command = "python -c \"from aria_engine import _load_lib; _load_lib(); print('ffi ok')\""

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build libariaengine_ffi and copy the platform dynamic library into the Python wheel.
+# Build libaria_ffi and copy the platform dynamic library into the Python wheel.
 # Used as cibuildwheel CIBW_BEFORE_ALL so each platform wheel bundles its own lib.
 #
 # Context: on Linux this runs INSIDE a manylinux container (no Rust preinstalled);
@@ -36,7 +36,7 @@ case "$HOST_TRIPLE" in
   *-musl*)
     echo "ERROR: rust host triple is '$HOST_TRIPLE' (musl)." >&2
     echo "Rust drops the cdylib crate type on musl targets (crt-static default)," >&2
-    echo "so libariaengine_ffi.so cannot be produced here. musllinux wheels are" >&2
+    echo "so libaria_ffi.so cannot be produced here. musllinux wheels are" >&2
     echo "disabled; make sure CIBW_SKIP=musllinux* is applied so only manylinux" >&2
     echo "builds run." >&2
     exit 1
@@ -45,13 +45,13 @@ esac
 
 # --- locate the built library (CARGO_TARGET_DIR aware) ------------------
 case "$(uname -s)" in
-  Darwin)          LIB="libariaengine_ffi.dylib";;
-  MINGW*|MSYS*|CYGWIN*) LIB="ariaengine_ffi.dll";;
-  *)               LIB="libariaengine_ffi.so";;
+  Darwin)          LIB="libaria_ffi.dylib";;
+  MINGW*|MSYS*|CYGWIN*) LIB="aria_ffi.dll";;
+  *)               LIB="libaria_ffi.so";;
 esac
 
 # --- build the FFI cdylib ------------------------------------------------
-cargo build --release -p ariacompute-ariaengine-ffi
+cargo build --release -p ariacompute-ffi
 
 SRC=""
 for c in "target/release/$LIB" "${CARGO_TARGET_DIR:+$CARGO_TARGET_DIR/release/$LIB}"; do
@@ -65,7 +65,7 @@ if [ -z "$SRC" ]; then
   SRC="$(find . -maxdepth 4 -type f -name "$LIB" -path '*/release/*' 2>/dev/null | head -1 || true)"
 fi
 if [ -z "$SRC" ]; then
-  echo "ERROR: $LIB not found after 'cargo build --release -p ariacompute-ariaengine-ffi'" >&2
+  echo "ERROR: $LIB not found after 'cargo build --release -p ariacompute-ffi'" >&2
   echo "--- target/release ---" >&2
   ls -la target/release 2>/dev/null | head -20 || true
   echo "--- found libs ---" >&2
@@ -73,7 +73,7 @@ if [ -z "$SRC" ]; then
   exit 1
 fi
 
-DEST="bindings/python/ariaengine/lib"
+DEST="bindings/python/aria_engine/lib"
 mkdir -p "$DEST"
 cp "$SRC" "$DEST/"
 echo "FFI copied $SRC -> $DEST"

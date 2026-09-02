@@ -1,7 +1,7 @@
-name: Publish npm (@ariacompute/ariaengine-ts, @ariacompute/ariaengine-rn)
+name: Publish npm (@ariacompute/engine-ts, @ariacompute/engine-rn)
 
-# Publish the TypeScript SDK (@ariacompute/ariaengine-ts) and the React Native
-# binding (@ariacompute/ariaengine-rn) to npmjs.com under the `ariacompute`
+# Publish the TypeScript SDK (@ariacompute/engine-ts) and the React Native
+# binding (@ariacompute/engine-rn) to npmjs.com under the `ariacompute`
 # account. engine-ts is built (npm ci + tsc) before publishing so the
 # `files: ["dist"]` package is not empty; engine-rn is plain JS and ships
 # src/ directly. Version is injected from the release tag via
@@ -11,7 +11,7 @@ name: Publish npm (@ariacompute/ariaengine-ts, @ariacompute/ariaengine-rn)
 #
 # Secrets required:
 #   NPM_TOKEN — npmjs.com token for ~ariacompute with publish permission
-#               on @ariacompute/ariaengine-ts and @ariacompute/ariaengine-rn
+#               on @ariacompute/engine-ts and @ariacompute/engine-rn
 #               (granular access token, bypass 2FA for automation)
 
 on:
@@ -25,7 +25,7 @@ on:
 
 jobs:
   engine-ts:
-    name: npm @ariacompute/ariaengine-ts
+    name: npm @ariacompute/engine-ts
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -62,7 +62,7 @@ jobs:
           npm publish --access public
 
   engine-rn:
-    name: npm @ariacompute/ariaengine-rn
+    name: npm @ariacompute/engine-rn
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

@@ -1,4 +1,4 @@
-package ariaengine
+package aria
 
 import (
 	"archive/tar"
@@ -229,25 +229,25 @@ func TestUpgradeOrgFromSite(t *testing.T) {
 func TestExtractFfiAndCachedSkip(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("ARIA_COMPUTE_HOME", home)
-	t.Setenv("ARIAENGINE_FFI_LIB", "")
+	t.Setenv("ARIA_FFI_LIB", "")
 	if runtime.GOOS != "linux" {
 		t.Skip("linux .so fixture")
 	}
 	srcDir := t.TempDir()
-	lib := filepath.Join(srcDir, "libariaengine_ffi.so")
+	lib := filepath.Join(srcDir, "libaria_ffi.so")
 	if err := os.WriteFile(lib, []byte("dummy-ffi"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	archive := filepath.Join(home, "libariaengine_ffi_0.1.0_linux_x86_64.tar.gz")
-	if err := packTarGz(archive, srcDir, "libariaengine_ffi.so"); err != nil {
+	archive := filepath.Join(home, "libaria_ffi_0.1.0_linux_x86_64.tar.gz")
+	if err := packTarGz(archive, srcDir, "libaria_ffi.so"); err != nil {
 		t.Fatal(err)
 	}
 	destDir := filepath.Join(home, "lib")
-	got, err := extractFfiArchive(archive, destDir, "libariaengine_ffi.so")
+	got, err := extractFfiArchive(archive, destDir, "libaria_ffi.so")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if filepath.Base(got) != "libariaengine_ffi.so" {
+	if filepath.Base(got) != "libaria_ffi.so" {
 		t.Fatalf("got %q", got)
 	}
 	raw, err := os.ReadFile(got)

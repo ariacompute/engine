@@ -1,4 +1,4 @@
-import 'package:ariaengine/setup.dart';
+import 'package:aria_engine/setup.dart';
 import 'package:test/test.dart';
 
 void main() {

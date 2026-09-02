@@ -1,10 +1,10 @@
 //go:build aria_ffi
 
-package ariaengine
+package aria
 
 /*
 #cgo CFLAGS: -I${SRCDIR}/../../ffi/include
-#cgo LDFLAGS: -L${SRCDIR}/../../target/debug -L${SRCDIR}/../../target/release -lariaengine_ffi
+#cgo LDFLAGS: -L${SRCDIR}/../../target/debug -L${SRCDIR}/../../target/release -laria_ffi
 #include "aria.h"
 #include <stdlib.h>
 */

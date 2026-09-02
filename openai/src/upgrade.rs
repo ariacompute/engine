@@ -1,4 +1,4 @@
-//! Upgrade CLI binary + libariaengine_ffi from GitHub/Gitee Releases.
+//! Upgrade CLI binary + libaria_ffi from GitHub/Gitee Releases.
 
 use crate::config;
 use crate::download;
@@ -45,14 +45,14 @@ enum ReleaseHost {
     Gitee,
 }
 
-/// Run `ariaengine upgrade [version]`.
+/// Run `aria-engine upgrade [version]`.
 pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()> {
     let cfg = config::load_config()?;
     let upgrade_url = cfg.upgrade_url.trim();
     if upgrade_url.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
-            "upgrade_url not set; run `ariaengine setup` first",
+            "upgrade_url not set; run `aria-engine setup` first",
         ));
     }
     let org = upgrade_url.trim_end_matches('/');
@@ -67,8 +67,8 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
     }
 
     let asset_os = detect_asset_os()?;
-    let engine_name = ariaengine_asset_name(&ver, asset_os);
-    let ffi_name = format!("libariaengine_ffi_{ver}_{asset_os}.tar.gz");
+    let engine_name = engine_asset_name(&ver, asset_os);
+    let ffi_name = format!("libaria_ffi_{ver}_{asset_os}.tar.gz");
     let engine_asset = find_asset(&target.assets, &engine_name)?;
     let ffi_asset = find_asset(&target.assets, &ffi_name)?;
 
@@ -90,7 +90,7 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
     download_url(
         &ffi_asset.download_url,
         &ffi_archive,
-        &format!("libariaengine_ffi {ver}"),
+        &format!("libaria_ffi {ver}"),
     )
     .await?;
 
@@ -107,7 +107,7 @@ pub async fn run(version: Option<&str>, current_version: &str) -> io::Result<()>
     let _ = fs::remove_dir_all(&staging);
     println!("upgraded to {ver}");
     println!(
-        "libariaengine_ffi installed under {} (set ARIAENGINE_FFI_LIB if needed)",
+        "libaria_ffi installed under {} (set ARIA_FFI_LIB if needed)",
         config::lib_dir()?.display()
     );
     Ok(())
@@ -145,8 +145,8 @@ async fn fetch_releases(host: ReleaseHost, org: &str) -> io::Result<Vec<ReleaseI
     let client = reqwest::Client::builder()
         .timeout(Duration::from_secs(30))
         .user_agent(format!(
-            "ariaengine-upgrade/{}",
-            env!("ARIAENGINE_VERSION")
+            "aria-engine-upgrade/{}",
+            env!("ARIA_ENGINE_VERSION")
         ))
         .build()
         .map_err(io_err)?;
@@ -250,11 +250,11 @@ pub fn detect_asset_os() -> io::Result<&'static str> {
     }
 }
 
-pub fn ariaengine_asset_name(version: &str, asset_os: &str) -> String {
+pub fn engine_asset_name(version: &str, asset_os: &str) -> String {
     if asset_os.starts_with("windows") {
-        format!("ariaengine_{version}_{asset_os}.zip")
+        format!("engine_{version}_{asset_os}.zip")
     } else {
-        format!("ariaengine_{version}_{asset_os}.tar.gz")
+        format!("engine_{version}_{asset_os}.tar.gz")
     }
 }
 
@@ -272,8 +272,8 @@ async fn download_url(url: &str, path: &Path, label: &str) -> io::Result<()> {
         .timeout(Duration::from_secs(600))
         .redirect(reqwest::redirect::Policy::limited(10))
         .user_agent(format!(
-            "ariaengine-upgrade/{}",
-            env!("ARIAENGINE_VERSION")
+            "aria-engine-upgrade/{}",
+            env!("ARIA_ENGINE_VERSION")
         ))
         .build()
         .map_err(io_err)?;
@@ -342,9 +342,9 @@ fn extract_tar_gz(archive: &Path, dest: &Path) -> io::Result<()> {
 
 fn install_cli(extract_dir: &Path) -> io::Result<()> {
     let bin_name = if cfg!(windows) {
-        "ariaengine.exe"
+        "aria-engine.exe"
     } else {
-        "ariaengine"
+        "aria-engine"
     };
     let src = find_named_file(extract_dir, bin_name)?.ok_or_else(|| {
         io::Error::new(
@@ -356,7 +356,7 @@ fn install_cli(extract_dir: &Path) -> io::Result<()> {
     let dest_dir = dest
         .parent()
         .ok_or_else(|| io::Error::other("current_exe has no parent"))?;
-    let tmp = dest_dir.join(format!(".ariaengine-upgrade-{}.tmp", std::process::id()));
+    let tmp = dest_dir.join(format!(".aria-engine-upgrade-{}.tmp", std::process::id()));
     fs::copy(&src, &tmp)?;
     #[cfg(unix)]
     {
@@ -386,12 +386,12 @@ fn install_ffi(extract_dir: &Path) -> io::Result<()> {
     let lib = config::lib_dir()?;
     fs::create_dir_all(&lib)?;
     let names = [
-        "libariaengine_ffi.so",
-        "libariaengine_ffi.dylib",
-        "libariaengine_ffi.a",
-        "ariaengine_ffi.dll",
-        "ariaengine_ffi.dll.lib",
-        "ariaengine_ffi.lib",
+        "libaria_ffi.so",
+        "libaria_ffi.dylib",
+        "libaria_ffi.a",
+        "aria_ffi.dll",
+        "aria_ffi.dll.lib",
+        "aria_ffi.lib",
     ];
     let mut any = false;
     for name in names {
@@ -408,7 +408,7 @@ fn install_ffi(extract_dir: &Path) -> io::Result<()> {
                 .and_then(|s| s.to_str())
                 .unwrap_or("")
                 .to_string();
-            if name.contains("ariaengine_ffi") || name.contains("libariaengine_ffi") {
+            if name.contains("aria_ffi") || name.contains("libaria_ffi") {
                 fs::copy(&entry, lib.join(&name))?;
                 any = true;
             }
@@ -417,7 +417,7 @@ fn install_ffi(extract_dir: &Path) -> io::Result<()> {
     if !any {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            "no libariaengine_ffi library found in archive",
+            "no libaria_ffi library found in archive",
         ));
     }
     Ok(())
@@ -485,11 +485,11 @@ mod tests {
                 draft: false,
                 assets: vec![
                     ReleaseAsset {
-                        name: "ariaengine_0.7.2_linux_x86_64.tar.gz".into(),
+                        name: "engine_0.7.2_linux_x86_64.tar.gz".into(),
                         download_url: "https://example/e".into(),
                     },
                     ReleaseAsset {
-                        name: "libariaengine_ffi_0.7.2_linux_x86_64.tar.gz".into(),
+                        name: "libaria_ffi_0.7.2_linux_x86_64.tar.gz".into(),
                         download_url: "https://example/f".into(),
                     },
                 ],
@@ -562,14 +562,14 @@ mod tests {
     }
 
     #[test]
-    fn ariaengine_asset_names() {
+    fn engine_asset_names() {
         assert_eq!(
-            ariaengine_asset_name("0.7.2", "linux_x86_64"),
-            "ariaengine_0.7.2_linux_x86_64.tar.gz"
+            engine_asset_name("0.7.2", "linux_x86_64"),
+            "engine_0.7.2_linux_x86_64.tar.gz"
         );
         assert_eq!(
-            ariaengine_asset_name("0.7.2", "windows_x86_64"),
-            "ariaengine_0.7.2_windows_x86_64.zip"
+            engine_asset_name("0.7.2", "windows_x86_64"),
+            "engine_0.7.2_windows_x86_64.zip"
         );
     }
 

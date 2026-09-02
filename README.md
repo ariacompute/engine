@@ -13,7 +13,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 ## Config / Run
 
-Credentials live in `~/.ariacompute/engine.yml` (via `ariaengine setup`).
+Credentials live in `~/.ariacompute/engine.yml` (via `aria-engine setup`).
 
 | Field | Meaning | Default |
 |-------|---------|---------|
@@ -27,37 +27,37 @@ Credentials live in `~/.ariacompute/engine.yml` (via `ariaengine setup`).
 
 ```bash
 # Setup
-ariaengine setup
-ariaengine setup --status
+aria-engine setup
+aria-engine setup --status
 
 # Download models
-# Optional: ariaengine setup prompts hf_token (.com) or modelscope_api_token (.cn)
-ariaengine download gemma-4-e2b-it_q4
-ariaengine list
-ariaengine check gemma-4-e2b-it_q4
-# or: ariaengine check   # all cached models
-ariaengine clean gemma-4-e2b-it_q4
+# Optional: aria-engine setup prompts hf_token (.com) or modelscope_api_token (.cn)
+aria-engine download gemma-4-e2b-it_q4
+aria-engine list
+aria-engine check gemma-4-e2b-it_q4
+# or: aria-engine check   # all cached models
+aria-engine clean gemma-4-e2b-it_q4
 
-# Upgrade CLI + libariaengine_ffi (latest stable, or a tag)
-# FFI lands in ~/.ariacompute/lib/ — set ARIAENGINE_FFI_LIB if needed
-ariaengine upgrade
-ariaengine upgrade 0.7.2
+# Upgrade CLI + libaria_ffi (latest stable, or a tag)
+# FFI lands in ~/.ariacompute/lib/ — set ARIA_FFI_LIB if needed
+aria-engine upgrade
+aria-engine upgrade 0.7.2
 
 # Serve (local only)
 # or: serve /path/to/aria-bundle
-ariaengine serve gemma-4-e2b-it_q4 \
+aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto
 
 # Serve and register as a local provider on aria-router (process override; does not write engine.yml)
-ariaengine serve gemma-4-e2b-it_q4 \
+aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
   --router-api-key sk-aria_… \
   --compute auto
 ```
 
-`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless `ariaengine setup` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/engine.yml`.
+`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless `aria-engine setup` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/engine.yml`.
 
 `list` scans local `~/.ariacompute/models` only.
 
@@ -68,8 +68,8 @@ ariaengine serve gemma-4-e2b-it_q4 \
 `--compute auto|cpu|cuda` selects **local** GEMM: `auto` uses CUDA when `libcudart`/`libcublas` load and `cudaGetDeviceCount>0`, otherwise CPU (AVX2+FMA on x86_64, NEON on aarch64). `--compute cuda` **fails** if no NVIDIA device — it does not silently fall back. CUDA is runtime-loaded (no toolkit at compile time); on H200 you can still pass `--features cuda` as a documentation flag:
 
 ```bash
-cargo build -p ariaengine-openai --release --features cuda
-ariaengine serve qwen3-0.6b_q4 --compute auto --profile
+cargo build -p aria-openai --release --features cuda
+aria-engine serve qwen3-0.6b_q4 --compute auto --profile
 ```
 
 `--profile` records load/generate timings. Read them with `GET /v1/engine/profile` or:
@@ -97,14 +97,14 @@ cargo run -p aria-router -- serve \
   --mgmt-bind 127.0.0.1:8090
 
 # 2. engine repo — OpenAI on :8080, then PUT to management
-ariaengine serve gemma-4-e2b-it_q4 \
+aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --router http://127.0.0.1:8090 \
   --router-api-key sk-aria_… \
   --compute auto
 
 # Persist the URL / key instead of passing flags each time:
-#   ariaengine setup  # optional router URL + router API key (from Dashboard)
+#   aria-engine setup  # optional router URL + router API key (from Dashboard)
 #   # or in ~/.ariacompute/engine.yml:
 #   # router: http://127.0.0.1:8090
 #   # router_api_key: sk-aria_…
@@ -196,7 +196,7 @@ Read `chat.fp32` vs `chat.reconstruct`, plus `template_string_match` / `prompt_i
 
 ```bash
 # from engine
-./ariaengine serve qwen3-0.6b_q4 \
+./aria-engine serve qwen3-0.6b_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto --profile
 python scripts/diag_qwen3_chat.py \
@@ -243,7 +243,7 @@ python scripts/diag_gemma4_chat.py \
 
 ```bash
 # from engine
-./ariaengine serve gemma-4-e2b-it_q4 \
+./aria-engine serve gemma-4-e2b-it_q4 \
   --bind 127.0.0.1:8080 \
   --compute auto --profile
 python scripts/diag_gemma4_chat.py \
@@ -276,15 +276,15 @@ Override model ids with `--model-id family=path=id` or `backend:family=id`. Defa
 
 ## SDK Bindings
 
-Native C ABI (`ariacompute-ariaengine-ffi` / `libariaengine_ffi`) plus thin wrappers under `bindings/`.
+Native C ABI (`ariacompute-ffi` / `libaria_ffi`) plus thin wrappers under `bindings/`.
 
 | Binding | Path | Registry |
 |---------|------|----------|
-| Rust | `bindings/rust` (`ariacompute-ariaengine`) | crates.io |
+| Rust | `bindings/rust` (`ariacompute-engine`) | crates.io |
 | Python | `bindings/python` | PyPI |
 | Go | `bindings/go` | Go module |
-| TypeScript | `bindings/typescript` | npm `@ariacompute/ariaengine-ts` |
-| React Native | `bindings/react-native` | npm `@ariacompute/ariaengine-rn` |
+| TypeScript | `bindings/typescript` | npm `@ariacompute/engine-ts` |
+| React Native | `bindings/react-native` | npm `@ariacompute/engine-rn` |
 | Flutter | `bindings/flutter` | pub.dev |
 | Swift | `bindings/swift` | CocoaPods |
 | Kotlin | `bindings/kotlin` | Maven |
@@ -293,48 +293,48 @@ C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `ari
 
 ### Auto-download by model name
 
-Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `ariaengine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard. Gated hub files use the same fields as `ariaengine setup` via instance `setup` (empty construct → `setup` → `open`); this is in-memory only and **never** writes `engine.yml` (CLI `ariaengine setup` still does). Empty instance fields still fall back to reading `~/.ariacompute/engine.yml`. Dashboard `sk-`/`bfvk-` tokens are ignored. Env `HF_TOKEN` / `MODELSCOPE_API_TOKEN` are not used. Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
+Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard. Gated hub files use the same fields as `aria-engine setup` via instance `setup` (empty construct → `setup` → `open`); this is in-memory only and **never** writes `engine.yml` (CLI `aria-engine setup` still does). Empty instance fields still fall back to reading `~/.ariacompute/engine.yml`. Dashboard `sk-`/`bfvk-` tokens are ignored. Env `HF_TOKEN` / `MODELSCOPE_API_TOKEN` are not used. Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
 
 ```bash
-cargo test -p ariacompute-ariaengine-ffi -p ariacompute-ariaengine
+cargo test -p ariacompute-ffi -p ariacompute-engine
 ./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS)
 ```
 
 Mobile e2e (Flutter + React Native, iOS + Android): [`.github/workflows/bindings-mobile.yml`](.github/workflows/bindings-mobile.yml).
 
-### libariaengine_ffi (Release assets)
+### libaria_ffi (Release assets)
 
 On each GitHub Release, [`.github/workflows/release.yml`](.github/workflows/release.yml) uploads platform archives next to the CLI:
 
 | Asset | Contents |
 |-------|----------|
-| `libariaengine_ffi_<ver>_linux_x86_64.tar.gz` | `libariaengine_ffi.so` |
-| `libariaengine_ffi_<ver>_linux_arm64.tar.gz` | `libariaengine_ffi.so` |
-| `libariaengine_ffi_<ver>_macos.tar.gz` | `libariaengine_ffi.dylib` |
-| `libariaengine_ffi_<ver>_windows_x86_64.tar.gz` | `ariaengine_ffi.dll` (+ optional import libs) |
+| `libaria_ffi_<ver>_linux_x86_64.tar.gz` | `libaria_ffi.so` |
+| `libaria_ffi_<ver>_linux_arm64.tar.gz` | `libaria_ffi.so` |
+| `libaria_ffi_<ver>_macos.tar.gz` | `libaria_ffi.dylib` |
+| `libaria_ffi_<ver>_windows_x86_64.tar.gz` | `aria_ffi.dll` (+ optional import libs) |
 
-Language SDKs auto-install the matching archive into `~/.ariacompute/lib/` on first `Engine.open` / equivalent if the library is not already on `ARIAENGINE_FFI_LIB`, bundled in the package, or cached. `ariaengine download` only fetches the model bundle (the CLI binary does not dlopen FFI).
+Language SDKs auto-install the matching archive into `~/.ariacompute/lib/` on first `Engine.open` / equivalent if the library is not already on `ARIA_FFI_LIB`, bundled in the package, or cached. `aria-engine download` only fetches the model bundle (the CLI binary does not dlopen FFI).
 
 ```bash
 # Example: Linux x86_64 (manual unpack; SDKs do this automatically)
-tar -xzf libariaengine_ffi_0.7.1_linux_x86_64.tar.gz
-export ARIAENGINE_FFI_LIB="$PWD/libariaengine_ffi.so"
+tar -xzf libaria_ffi_0.7.1_linux_x86_64.tar.gz
+export ARIA_FFI_LIB="$PWD/libaria_ffi.so"
 # optional: export LD_LIBRARY_PATH="$PWD:${LD_LIBRARY_PATH:-}"
 ```
 
-Point bindings at a local Aria bundle (`weight.bin` + `config.json` + tokenizer), e.g. from `ariaengine download …` under `~/.ariacompute/models/`.
+Point bindings at a local Aria bundle (`weight.bin` + `config.json` + tokenizer), e.g. from `aria-engine download …` under `~/.ariacompute/models/`.
 
 ### Examples
 
-**Python** (auto-installs `libariaengine_ffi`; `ARIAENGINE_FFI_LIB` optional):
+**Python** (auto-installs `libaria_ffi`; `ARIA_FFI_LIB` optional):
 
 ```bash
-pip install ariaengine
-# optional override: export ARIAENGINE_FFI_LIB=/path/to/libariaengine_ffi.so
+pip install aria-engine
+# optional override: export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 ```
 
 ```python
-from ariaengine import Engine
+from aria_engine import Engine
 
 # Local bundle path:
 with Engine("/path/to/aria-bundle") as eng:
@@ -360,15 +360,15 @@ eng_ms.open("gemma-4-e2b-it_q4")
 print(eng_ms.complete([{"role": "user", "content": "Hello"}], {"max_tokens": 32})["response"])
 ```
 
-**TypeScript / Node** (`@ariacompute/ariaengine-ts`):
+**TypeScript / Node** (`@ariacompute/engine-ts`):
 
 ```bash
-npm install @ariacompute/ariaengine-ts
-# optional override: export ARIAENGINE_FFI_LIB=/path/to/libariaengine_ffi.so
+npm install @ariacompute/engine-ts
+# optional override: export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 ```
 
 ```ts
-import { Engine } from "@ariacompute/ariaengine-ts";
+import { Engine } from "@ariacompute/engine-ts";
 
 // Local bundle path:
 const eng = new Engine("/path/to/aria-bundle");
@@ -395,11 +395,11 @@ engHf.close();
 engMs.close();
 ```
 
-**Go** (cgo; link against `libariaengine_ffi`):
+**Go** (cgo; link against `libaria_ffi`):
 
 ```bash
 export CGO_ENABLED=1
-# optional: export ARIAENGINE_FFI_LIB=/path/to/libariaengine_ffi.so
+# optional: export ARIA_FFI_LIB=/path/to/libaria_ffi.so
 # Ensure the linker can find the library (or use -L via cgo in the module).
 go get github.com/ariacompute/engine/bindings/go@latest
 ```
@@ -460,14 +460,14 @@ func main() {
 }
 ```
 
-**Rust** (`ariacompute-ariaengine` crate — native API; does not require unpacking `libariaengine_ffi`):
+**Rust** (`ariacompute-engine` crate — native API; does not require unpacking `libaria_ffi`):
 
 ```bash
-cargo add ariacompute-ariaengine
+cargo add ariacompute-engine
 ```
 
 ```rust
-use ariaengine::{SetupUpdates, Engine, GenerateOpts, OpenOptions};
+use aria_engine::{SetupUpdates, Engine, GenerateOpts, OpenOptions};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut eng = Engine::open("/path/to/aria-bundle")?;
@@ -503,7 +503,7 @@ More detail per language: `bindings/*/README.md`.
 
 ### Install from registries
 
-Cut a **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds CLI + `libariaengine_ffi` archives and attempts package publish (npm / pub.dev / Maven / CocoaPods / crates.io / PyPI). **Publish failures are fail-pass** and do not block CLI/`libariaengine_ffi` assets. crates.io (`ariacompute-ariaengine`) is published by [`.github/workflows/publish-cargo.yml`](.github/workflows/publish-cargo.yml). Secrets: `NPM_TOKEN`, pub credentials, Maven + GPG, `COCOAPODS_TRUNK_TOKEN`, `CARGO_REGISTRY_TOKEN`, `PYPI_TOKEN`, plus `ARIACOMPUTE_TOKEN` for Release uploads.
+Cut a **GitHub Release** — [`.github/workflows/release.yml`](.github/workflows/release.yml) builds CLI + `libaria_ffi` archives and attempts package publish (npm / pub.dev / Maven / CocoaPods / crates.io / PyPI). **Publish failures are fail-pass** and do not block CLI/`libaria_ffi` assets. crates.io (`ariacompute-engine`) is published by [`.github/workflows/publish-cargo.yml`](.github/workflows/publish-cargo.yml). Secrets: `NPM_TOKEN`, pub credentials, Maven + GPG, `COCOAPODS_TRUNK_TOKEN`, `CARGO_REGISTRY_TOKEN`, `PYPI_TOKEN`, plus `ARIACOMPUTE_TOKEN` for Release uploads.
 
 Version = release tag without leading `v`.
 

@@ -2,10 +2,10 @@ import json
 import os
 import unittest
 
-from ariaengine import Engine
+from aria_engine import Engine
 
 
-@unittest.skipUnless(os.environ.get("ARIAENGINE_FFI_LIB") and os.environ.get("ARIA_BUNDLE"), "need ARIAENGINE_FFI_LIB and ARIA_BUNDLE")
+@unittest.skipUnless(os.environ.get("ARIA_FFI_LIB") and os.environ.get("ARIA_BUNDLE"), "need ARIA_FFI_LIB and ARIA_BUNDLE")
 class BindingTests(unittest.TestCase):
     def setUp(self):
         self.eng = Engine(os.environ["ARIA_BUNDLE"])

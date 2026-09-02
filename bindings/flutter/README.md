@@ -1,34 +1,34 @@
-# ariaengine (Flutter)
+# aria_engine (Flutter)
 
 Flutter FFI binding for Aria Engine. Published to pub.dev under publisher
 [ariacompute.com](https://pub.dev/publishers/ariacompute.com/packages).
 
 ```yaml
 dependencies:
-  ariaengine: ^0.1.0
+  aria_engine: ^0.1.0
 ```
 
 ```dart
-import 'package:ariaengine/ariaengine.dart';
+import 'package:aria_engine/aria_engine.dart';
 
 final eng = AriaEngine('/path/to/bundle');
 print(eng.complete('[{"role":"user","content":"hi"}]'));
 eng.dispose();
 ```
 
-JNI/FFI must load `libariaengine_ffi`. `AriaEngine.open` installs it into `~/.ariacompute/lib/` when missing (`ARIAENGINE_FFI_LIB` / `libPath` still override).
+JNI/FFI must load `libaria_ffi`. `AriaEngine.open` installs it into `~/.ariacompute/lib/` when missing (`ARIA_FFI_LIB` / `libPath` still override).
 
 ## Auto-download by model name
 
 `AriaEngine.open(modelRef, token: site: libPath:)` accepts a local bundle path
 **or** an Aria model name (e.g. `gemma-4-e2b-it_q4`). A value containing `/` or
 already on disk is loaded directly; otherwise the SDK downloads it from the
-regional public hub (same as `ariaengine download`: `.com` → Hugging Face,
+regional public hub (same as `aria-engine download`: `.com` → Hugging Face,
 `.cn` → ModelScope; `site` defaults to `https://ariacompute.com`) into
 `~/.ariacompute/models/{model}` and then loads it. Dashboard is not used. A
 Dashboard `sk-` / `bfvk-` token is ignored for hub auth. Token is optional for
 public models. Gated files: pass `hfToken` / `modelscopeApiToken` (same as
-`ariaengine setup`); if omitted, reads `~/.ariacompute/engine.yml`. Instance
+`aria-engine setup`); if omitted, reads `~/.ariacompute/engine.yml`. Instance
 `setup` is in-memory only (does not write that file). A valid cached bundle is
 reused without re-downloading.
 

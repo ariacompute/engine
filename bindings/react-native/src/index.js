@@ -1,10 +1,10 @@
 /**
- * React Native surface — native module bridges to libariaengine_ffi (Turbo Module / JSI).
- * JS API mirrors @ariacompute/ariaengine-ts for docs samples.
+ * React Native surface — native module bridges to libaria_ffi (Turbo Module / JSI).
+ * JS API mirrors @ariacompute/engine-ts for docs samples.
  *
  * Auto-download: `AriaEngine.open(modelRef, { token, site })` resolves a model
  * name via the regional public hub (Hugging Face / ModelScope — same as
- * `ariaengine download`; Dashboard is not used), writes files to
+ * `aria-engine download`; Dashboard is not used), writes files to
  * `~/.ariacompute/models/{model}`, then loads via native init.
  */
 import { NativeModules } from 'react-native';
@@ -216,7 +216,7 @@ async function fetchHubFile(source, model, file, dest, token, required) {
       if (e && (e.status === 401 || e.status === 403)) {
         const field = source === 'modelscope' ? 'modelscope_api_token' : 'hf_token';
         throw new Error(
-          `auth failed HTTP ${e.status}; set ${field} via ariaengine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
+          `auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
         );
       }
     }
@@ -268,13 +268,13 @@ async function downloadModel(model, tokenOrOpts, site = DEFAULT_SITE) {
   }
 }
 
-const SDK_UA = 'ariaengine-sdk/0.1.0';
+const SDK_UA = 'aria-engine-sdk/0.1.0';
 const zlib = require('zlib');
 
 function ffiLibName(platform = process.platform) {
-  if (platform === 'win32' || String(platform).toLowerCase().startsWith('win')) return 'ariaengine_ffi.dll';
-  if (platform === 'darwin') return 'libariaengine_ffi.dylib';
-  return 'libariaengine_ffi.so';
+  if (platform === 'win32' || String(platform).toLowerCase().startsWith('win')) return 'aria_ffi.dll';
+  if (platform === 'darwin') return 'libaria_ffi.dylib';
+  return 'libaria_ffi.so';
 }
 
 function libDir() {
@@ -298,7 +298,7 @@ function ffiAssetOs(platform = process.platform, arch = process.arch) {
   if ((p === 'win32' || p.startsWith('win')) && (a === 'x64' || a === 'x86_64' || a === 'amd64')) {
     return 'windows_x86_64';
   }
-  throw new Error(`unsupported platform ${platform}/${arch} for libariaengine_ffi`);
+  throw new Error(`unsupported platform ${platform}/${arch} for libaria_ffi`);
 }
 
 function stripV(tag) {
@@ -329,7 +329,7 @@ function selectLatestStable(releases) {
       bestTag = tag;
     }
   }
-  if (!bestTag) throw new Error('no stable release found for libariaengine_ffi');
+  if (!bestTag) throw new Error('no stable release found for libaria_ffi');
   return stripV(bestTag);
 }
 
@@ -390,7 +390,7 @@ async function httpGetBytes(url) {
 async function ensureFfiLib(site) {
   const fs = require('fs');
   const path = require('path');
-  const env = process.env.ARIAENGINE_FFI_LIB;
+  const env = process.env.ARIA_FFI_LIB;
   if (env && fs.existsSync(env)) return env;
   const cached = cachedFfiPath();
   if (cached) return cached;
@@ -399,7 +399,7 @@ async function ensureFfiLib(site) {
   const releases = JSON.parse(raw.toString('utf8'));
   if (!Array.isArray(releases)) throw new Error('unexpected releases payload');
   const ver = selectLatestStable(releases);
-  const assetName = `libariaengine_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
+  const assetName = `libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
   let url;
   for (const rel of releases) {
     const tag = String(rel.tag_name || rel.tag || '');
@@ -479,7 +479,7 @@ export class AriaEngine {
       success: true,
       response: '',
       function_calls: [],
-      note: 'Link native module to libariaengine_ffi',
+      note: 'Link native module to libaria_ffi',
     };
   }
 

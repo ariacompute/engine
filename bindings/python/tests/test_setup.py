@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-from ariaengine import (
+from aria_engine import (
     CN_SITE,
     CN_UPGRADE,
     Engine,

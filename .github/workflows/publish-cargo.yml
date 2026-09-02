@@ -1,14 +1,14 @@
-name: Publish crates.io (ariacompute-ariaengine)
+name: Publish crates.io (ariacompute-engine)
 
 # Publish the Rust SDK and its workspace closure to crates.io so consumers
 # can use:
-#   cargo add ariacompute-ariaengine
-#   use ariaengine::{Engine, GenerateOpts};
+#   cargo add ariacompute-engine
+#   use aria_engine::{Engine, GenerateOpts};
 #
-# crates.io already has an unrelated crate named `ariaengine` (hyphens and
+# crates.io already has an unrelated crate named `aria-engine` (hyphens and
 # underscores are the same name), so published packages use the
-# `ariacompute-*` prefix (`ariacompute-ariaengine` / `ariaengine-{kernel,graph,inference}` /
-# `ariacompute-ariaengine-ffi`) with SDK [lib] name `ariaengine`.
+# `ariacompute-*` prefix (`ariacompute-engine` / `-kernel` / `-graph` /
+# `-inference` / `-ffi`) with [lib] names `aria_*`.
 #
 # Path+version workspace deps cannot be packaged until each dependency
 # exists on the registry, so crates are published in topological order
@@ -31,7 +31,7 @@ on:
 
 jobs:
   publish:
-    name: crates.io ariacompute-ariaengine
+    name: crates.io ariacompute-engine
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -88,7 +88,7 @@ jobs:
             exit 1
           fi
       - name: Build publish closure
-        run: cargo check -p ariaengine-kernel -p ariaengine-graph -p ariaengine-inference -p ariacompute-ariaengine-ffi -p ariacompute-ariaengine
+        run: cargo check -p ariacompute-kernel -p ariacompute-graph -p ariacompute-inference -p ariacompute-ffi -p ariacompute-engine
       - name: Publish to crates.io
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
@@ -146,8 +146,8 @@ jobs:
           }
 
           # Topological order: dependents need the previous crate on crates.io.
-          publish_pkg ariaengine-kernel
-          publish_pkg ariaengine-graph
-          publish_pkg ariaengine-inference
-          publish_pkg ariacompute-ariaengine-ffi
-          publish_pkg ariacompute-ariaengine
+          publish_pkg ariacompute-kernel
+          publish_pkg ariacompute-graph
+          publish_pkg ariacompute-inference
+          publish_pkg ariacompute-ffi
+          publish_pkg ariacompute-engine

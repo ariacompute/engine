@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Profile ariaengine serve load + generate (H200 / local).
+"""Profile aria-engine serve load + generate (H200 / local).
 
 `hybrid_execution` is removed; local GEMM is selected
 with `--compute auto|cpu|cuda`. This script POSTs the same Hello
@@ -76,13 +76,13 @@ def _wait_up(url: str, timeout_s: float) -> None:
 
 
 def _find_engine() -> list[str]:
-    env = os.environ.get("ARIAENGINE_BIN")
+    env = os.environ.get("ARIA_ENGINE_BIN")
     if env:
         return [env]
     root = Path(__file__).resolve().parents[1]
     for cand in (
-        root / "target" / "release" / "ariaengine",
-        root / "target" / "debug" / "ariaengine",
+        root / "target" / "release" / "aria-engine",
+        root / "target" / "debug" / "aria-engine",
     ):
         if cand.is_file():
             return [str(cand)]
@@ -93,12 +93,12 @@ def _find_engine() -> list[str]:
             "run",
             "-q",
             "-p",
-            "ariaengine-openai",
+            "aria-openai",
             "--bin",
-            "ariaengine",
+            "aria-engine",
             "--",
         ]
-    raise SystemExit("ariaengine binary not found; build it or set ARIAENGINE_BIN")
+    raise SystemExit("aria-engine binary not found; build it or set ARIA_ENGINE_BIN")
 
 
 def main() -> int:
@@ -114,7 +114,7 @@ def main() -> int:
     p.add_argument(
         "--spawn",
         action="store_true",
-        help="start ariaengine serve with --profile",
+        help="start aria-engine serve with --profile",
     )
     p.add_argument("--report", default="./out/engine_profile_qwen3.json")
     args = p.parse_args()

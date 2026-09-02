@@ -1,4 +1,4 @@
-package ariaengine
+package aria
 
 import (
 	"os"

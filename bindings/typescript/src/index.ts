@@ -38,9 +38,9 @@ export interface CompleteResult {
 export interface OpenOptions {
   /** Legacy generic hub token. Dashboard sk-/bfvk- keys are ignored. */
   token?: string;
-  /** Hugging Face hub token (`.com`). Same field as `ariaengine setup` `hf_token`. */
+  /** Hugging Face hub token (`.com`). Same field as `aria-engine setup` `hf_token`. */
   hfToken?: string;
-  /** ModelScope hub token (`.cn`). Same field as `ariaengine setup` `modelscope_api_token`. */
+  /** ModelScope hub token (`.cn`). Same field as `aria-engine setup` `modelscope_api_token`. */
   modelscopeApiToken?: string;
   /** Site used to pick the regional hub. Defaults to https://ariacompute.com (.com → HF, .cn → ModelScope). */
   site?: string;
@@ -305,7 +305,7 @@ async function fetchHubFile(
       if (e instanceof HubHttpError && (e.status === 401 || e.status === 403)) {
         const field = source === "modelscope" ? "modelscope_api_token" : "hf_token";
         throw new Error(
-          `auth failed HTTP ${e.status}; set ${field} via ariaengine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
+          `auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
         );
       }
     }
@@ -318,7 +318,7 @@ const encoder = new TextEncoder();
 
 /** Download `model` from the regional public hub into
  * `~/.ariacompute/models/{model}` and return that directory.
- * Matches ariaengine download: .com → Hugging Face, .cn → ModelScope.
+ * Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
  * Dashboard is not used. Skips the download when a valid bundle is already cached. */
 export async function downloadModel(
   model: string,
@@ -364,12 +364,12 @@ export async function downloadModel(
   }
 }
 
-const SDK_UA = "ariaengine-sdk/0.1.0";
+const SDK_UA = "aria-engine-sdk/0.1.0";
 
 export function ffiLibName(platform: string = process.platform): string {
-  if (platform === "win32" || platform.toLowerCase().startsWith("win")) return "ariaengine_ffi.dll";
-  if (platform === "darwin") return "libariaengine_ffi.dylib";
-  return "libariaengine_ffi.so";
+  if (platform === "win32" || platform.toLowerCase().startsWith("win")) return "aria_ffi.dll";
+  if (platform === "darwin") return "libaria_ffi.dylib";
+  return "libaria_ffi.so";
 }
 
 function libDir(): string {
@@ -395,7 +395,7 @@ export function ffiAssetOs(platform: string = process.platform, arch: string = p
   if ((p === "win32" || p.startsWith("win")) && (a === "x64" || a === "x86_64" || a === "amd64")) {
     return "windows_x86_64";
   }
-  throw new Error(`unsupported platform ${platform}/${arch} for libariaengine_ffi`);
+  throw new Error(`unsupported platform ${platform}/${arch} for libaria_ffi`);
 }
 
 function stripV(tag: string): string {
@@ -431,7 +431,7 @@ export function selectLatestStable(releases: Array<Record<string, unknown>>): st
       bestTag = tag;
     }
   }
-  if (!bestTag) throw new Error("no stable release found for libariaengine_ffi");
+  if (!bestTag) throw new Error("no stable release found for libaria_ffi");
   return stripV(bestTag);
 }
 
@@ -483,7 +483,7 @@ export function extractFfiArchive(archive: string, destDir: string, want: string
 
 function httpGetBytesSync(url: string): Buffer {
   const script =
-    'fetch(process.env.ARIA_FFI_URL,{headers:{"User-Agent":"ariaengine-sdk/0.1.0"},redirect:"follow"}).then(async r=>{if(!r.ok){process.stderr.write("HTTP "+r.status);process.exit(1)}process.stdout.write(Buffer.from(await r.arrayBuffer()))}).catch(e=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})';
+    'fetch(process.env.ARIA_FFI_URL,{headers:{"User-Agent":"aria-engine-sdk/0.1.0"},redirect:"follow"}).then(async r=>{if(!r.ok){process.stderr.write("HTTP "+r.status);process.exit(1)}process.stdout.write(Buffer.from(await r.arrayBuffer()))}).catch(e=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})';
   const r = spawnSync(process.execPath, ["-e", script], {
     env: { ...process.env, ARIA_FFI_URL: url },
     encoding: "buffer",
@@ -510,7 +510,7 @@ function installFfiFromReleases(raw: Buffer, archiveBytes: (assetUrl: string) =>
   }
   if (!Array.isArray(releases)) throw new Error("unexpected releases payload");
   const ver = selectLatestStable(releases);
-  const assetName = `libariaengine_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
+  const assetName = `libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
   let url: string | undefined;
   for (const rel of releases) {
     const tag = String(rel.tag_name || rel.tag || "");
@@ -537,9 +537,9 @@ function installFfiFromReleases(raw: Buffer, archiveBytes: (assetUrl: string) =>
   }
 }
 
-/** Return a path to libariaengine_ffi, downloading the latest stable Release if needed. */
+/** Return a path to libaria_ffi, downloading the latest stable Release if needed. */
 export async function ensureFfiLib(site?: string): Promise<string> {
-  const env = process.env.ARIAENGINE_FFI_LIB;
+  const env = process.env.ARIA_FFI_LIB;
   if (env && fs.existsSync(env)) return env;
   const bundled = bundledFfiPath();
   if (bundled) return bundled;
@@ -551,7 +551,7 @@ export async function ensureFfiLib(site?: string): Promise<string> {
 }
 
 function ensureFfiLibSync(site?: string): string {
-  const env = process.env.ARIAENGINE_FFI_LIB;
+  const env = process.env.ARIA_FFI_LIB;
   if (env && fs.existsSync(env)) return env;
   const bundled = bundledFfiPath();
   if (bundled) return bundled;
@@ -565,11 +565,11 @@ function ensureFfiLibSync(site?: string): string {
 function loadLib(ffiLib?: string, site?: string): any {
   const libPath =
     ffiLib ||
-    process.env.ARIAENGINE_FFI_LIB ||
+    process.env.ARIA_FFI_LIB ||
     bundledFfiPath() ||
     cachedFfiPath() ||
     ensureFfiLibSync(site);
-  if (!libPath) throw new Error("Cannot locate libariaengine_ffi");
+  if (!libPath) throw new Error("Cannot locate libaria_ffi");
   const koffiNS = require("koffi") as unknown as { load: (p: string) => any };
   return koffiNS.load(libPath);
 }

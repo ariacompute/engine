@@ -1,6 +1,6 @@
 //! Thin Rust SDK: prefer `aria_inference` for native use; re-exports FFI for embedding tests.
 
-pub use ariaengine_ffi::{
+pub use aria_ffi::{
     aria_complete, aria_complete_stream, aria_embed, aria_last_error, aria_model_destroy,
     aria_model_init, aria_transcribe, AriaModelHandle,
 };
@@ -18,9 +18,9 @@ pub use setup::{
 pub struct OpenOptions {
     /// Legacy generic hub token. Dashboard `sk-` / `bfvk-` keys are ignored.
     pub token: Option<String>,
-    /// Hugging Face hub token (`.com`). Same field as `ariaengine setup` `hf_token`.
+    /// Hugging Face hub token (`.com`). Same field as `aria-engine setup` `hf_token`.
     pub hf_token: Option<String>,
-    /// ModelScope hub token (`.cn`). Same field as `ariaengine setup` `modelscope_api_token`.
+    /// ModelScope hub token (`.cn`). Same field as `aria-engine setup` `modelscope_api_token`.
     pub modelscope_api_token: Option<String>,
     /// Site used to pick the regional hub. Defaults to `https://ariacompute.com` (`.com` → HF, `.cn` → ModelScope).
     pub site: Option<String>,
@@ -210,11 +210,11 @@ mod tests {
         let libdir = home.path().join("lib");
         std::fs::create_dir_all(&libdir).unwrap();
         let name = if cfg!(windows) {
-            "ariaengine_ffi.dll"
+            "aria_ffi.dll"
         } else if cfg!(target_os = "macos") {
-            "libariaengine_ffi.dylib"
+            "libaria_ffi.dylib"
         } else {
-            "libariaengine_ffi.so"
+            "libaria_ffi.so"
         };
         std::fs::write(libdir.join(name), b"x").unwrap();
         let dir = tempfile::tempdir().unwrap();

@@ -39,7 +39,7 @@ mavenPublishing {
 
     pom {
         name = 'Aria Engine'
-        description = 'Kotlin/JVM + Android JNI binding for the Aria inference engine (libariaengine_ffi).'
+        description = 'Kotlin/JVM + Android JNI binding for the Aria inference engine (libaria_ffi).'
         url = 'https://github.com/ariacompute/engine'
         licenses {
             license {

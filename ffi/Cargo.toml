@@ -1,5 +1,5 @@
 [package]
-name = "ariacompute-ariaengine-ffi"
+name = "ariacompute-ffi"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -7,12 +7,12 @@ repository.workspace = true
 description = "C ABI for Aria engine (cdylib/staticlib)"
 
 [lib]
-name = "ariaengine_ffi"
+name = "aria_ffi"
 crate-type = ["cdylib", "staticlib", "rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-ariaengine-inference = { workspace = true }
+ariacompute-inference = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 

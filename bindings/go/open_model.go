@@ -1,6 +1,6 @@
 //go:build aria_ffi
 
-package ariaengine
+package aria
 
 import (
 	"os"

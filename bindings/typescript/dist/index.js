@@ -292,7 +292,7 @@ async function fetchHubFile(source, model, file, dest, token, required) {
             last = e;
             if (e instanceof HubHttpError && (e.status === 401 || e.status === 403)) {
                 const field = source === "modelscope" ? "modelscope_api_token" : "hf_token";
-                throw new Error(`auth failed HTTP ${e.status}; set ${field} via ariaengine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`);
+                throw new Error(`auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`);
             }
         }
     }
@@ -303,7 +303,7 @@ async function fetchHubFile(source, model, file, dest, token, required) {
 const encoder = new TextEncoder();
 /** Download `model` from the regional public hub into
  * `~/.ariacompute/models/{model}` and return that directory.
- * Matches ariaengine download: .com → Hugging Face, .cn → ModelScope.
+ * Matches aria-engine download: .com → Hugging Face, .cn → ModelScope.
  * Dashboard is not used. Skips the download when a valid bundle is already cached. */
 async function downloadModel(model, tokenOrOpts, site = DEFAULT_SITE) {
     const opts = tokenOrOpts && typeof tokenOrOpts === "object"
@@ -346,13 +346,13 @@ async function downloadModel(model, tokenOrOpts, site = DEFAULT_SITE) {
         throw e;
     }
 }
-const SDK_UA = "ariaengine-sdk/0.1.0";
+const SDK_UA = "aria-engine-sdk/0.1.0";
 function ffiLibName(platform = process.platform) {
     if (platform === "win32" || platform.toLowerCase().startsWith("win"))
-        return "ariaengine_ffi.dll";
+        return "aria_ffi.dll";
     if (platform === "darwin")
-        return "libariaengine_ffi.dylib";
-    return "libariaengine_ffi.so";
+        return "libaria_ffi.dylib";
+    return "libaria_ffi.so";
 }
 function libDir() {
     return path.join(ariaHome(), "lib");
@@ -377,7 +377,7 @@ function ffiAssetOs(platform = process.platform, arch = process.arch) {
     if ((p === "win32" || p.startsWith("win")) && (a === "x64" || a === "x86_64" || a === "amd64")) {
         return "windows_x86_64";
     }
-    throw new Error(`unsupported platform ${platform}/${arch} for libariaengine_ffi`);
+    throw new Error(`unsupported platform ${platform}/${arch} for libaria_ffi`);
 }
 function stripV(tag) {
     const t = tag.trim();
@@ -412,7 +412,7 @@ function selectLatestStable(releases) {
         }
     }
     if (!bestTag)
-        throw new Error("no stable release found for libariaengine_ffi");
+        throw new Error("no stable release found for libaria_ffi");
     return stripV(bestTag);
 }
 function upgradeOrg(site) {
@@ -462,7 +462,7 @@ function extractFfiArchive(archive, destDir, want = ffiLibName()) {
     throw new Error(`${want} not found in ${archive}`);
 }
 function httpGetBytesSync(url) {
-    const script = 'fetch(process.env.ARIA_FFI_URL,{headers:{"User-Agent":"ariaengine-sdk/0.1.0"},redirect:"follow"}).then(async r=>{if(!r.ok){process.stderr.write("HTTP "+r.status);process.exit(1)}process.stdout.write(Buffer.from(await r.arrayBuffer()))}).catch(e=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})';
+    const script = 'fetch(process.env.ARIA_FFI_URL,{headers:{"User-Agent":"aria-engine-sdk/0.1.0"},redirect:"follow"}).then(async r=>{if(!r.ok){process.stderr.write("HTTP "+r.status);process.exit(1)}process.stdout.write(Buffer.from(await r.arrayBuffer()))}).catch(e=>{process.stderr.write(String(e&&e.message||e));process.exit(1)})';
     const r = (0, node_child_process_1.spawnSync)(process.execPath, ["-e", script], {
         env: { ...process.env, ARIA_FFI_URL: url },
         encoding: "buffer",
@@ -490,7 +490,7 @@ function installFfiFromReleases(raw, archiveBytes) {
     if (!Array.isArray(releases))
         throw new Error("unexpected releases payload");
     const ver = selectLatestStable(releases);
-    const assetName = `libariaengine_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
+    const assetName = `libaria_ffi_${ver}_${ffiAssetOs()}.tar.gz`;
     let url;
     for (const rel of releases) {
         const tag = String(rel.tag_name || rel.tag || "");
@@ -520,9 +520,9 @@ function installFfiFromReleases(raw, archiveBytes) {
         fs.rmSync(staging, { recursive: true, force: true });
     }
 }
-/** Return a path to libariaengine_ffi, downloading the latest stable Release if needed. */
+/** Return a path to libaria_ffi, downloading the latest stable Release if needed. */
 async function ensureFfiLib(site) {
-    const env = process.env.ARIAENGINE_FFI_LIB;
+    const env = process.env.ARIA_FFI_LIB;
     if (env && fs.existsSync(env))
         return env;
     const bundled = bundledFfiPath();
@@ -536,7 +536,7 @@ async function ensureFfiLib(site) {
     return installFfiFromReleases(raw, (assetUrl) => httpGetBytesSync(assetUrl));
 }
 function ensureFfiLibSync(site) {
-    const env = process.env.ARIAENGINE_FFI_LIB;
+    const env = process.env.ARIA_FFI_LIB;
     if (env && fs.existsSync(env))
         return env;
     const bundled = bundledFfiPath();
@@ -551,12 +551,12 @@ function ensureFfiLibSync(site) {
 }
 function loadLib(ffiLib, site) {
     const libPath = ffiLib ||
-        process.env.ARIAENGINE_FFI_LIB ||
+        process.env.ARIA_FFI_LIB ||
         bundledFfiPath() ||
         cachedFfiPath() ||
         ensureFfiLibSync(site);
     if (!libPath)
-        throw new Error("Cannot locate libariaengine_ffi");
+        throw new Error("Cannot locate libaria_ffi");
     const koffiNS = require("koffi");
     return koffiNS.load(libPath);
 }
