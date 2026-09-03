@@ -6,13 +6,8 @@ public let cnSite = "https://ariacompute.cn"
 public let cnUpgrade = "https://gitee.com/ariacompute"
 
 public struct SetupConfig: Equatable {
-    // Local (router registration)
     public var router: String = ""
     public var routerApiKey: String = ""
-    // OAuth (Aria Compute)
-    public var serveSite: String = ""
-    public var serveApiKey: String = ""
-    // Hub / compute
     public var siteUrl: String = ""
     public var upgradeUrl: String = ""
     public var compute: String = "auto"
@@ -25,8 +20,6 @@ public struct SetupConfig: Equatable {
 public struct SetupUpdates {
     public var router: String?
     public var routerApiKey: String?
-    public var serveSite: String?
-    public var serveApiKey: String?
     public var siteUrl: String?
     public var upgradeUrl: String?
     public var compute: String?
@@ -36,8 +29,6 @@ public struct SetupUpdates {
     public init(
         router: String? = nil,
         routerApiKey: String? = nil,
-        serveSite: String? = nil,
-        serveApiKey: String? = nil,
         siteUrl: String? = nil,
         upgradeUrl: String? = nil,
         compute: String? = nil,
@@ -46,8 +37,6 @@ public struct SetupUpdates {
     ) {
         self.router = router
         self.routerApiKey = routerApiKey
-        self.serveSite = serveSite
-        self.serveApiKey = serveApiKey
         self.siteUrl = siteUrl
         self.upgradeUrl = upgradeUrl
         self.compute = compute
@@ -58,7 +47,6 @@ public struct SetupUpdates {
 
 public enum AriaSetupError: Error, Equatable {
     case invalidCompute(String)
-    case invalidKey(String)
 }
 
 func gatewayRegion(_ url: String) -> String? {
@@ -81,41 +69,10 @@ func fillSetupUrls(_ cfg: SetupConfig) -> SetupConfig {
     return out
 }
 
-func validateRouterApiKey(_ key: String) throws {
-    let t = key.trimmingCharacters(in: .whitespacesAndNewlines)
-    if t.isEmpty { return }
-    if t.hasPrefix("bfvk-") {
-        throw AriaSetupError.invalidKey(
-            "OAuth key detected (bfvk-); use serveApiKey / [2/2] OAuth (Aria Compute)"
-        )
-    }
-}
-
-func validateServeApiKey(_ key: String) throws {
-    let t = key.trimmingCharacters(in: .whitespacesAndNewlines)
-    if t.isEmpty { return }
-    if t.hasPrefix("sk-aria_") {
-        throw AriaSetupError.invalidKey(
-            "Local router key detected (sk-aria_); use routerApiKey / [1/2] Local"
-        )
-    }
-    if !t.hasPrefix("bfvk-") {
-        throw AriaSetupError.invalidKey("serve_api_key must start with bfvk-")
-    }
-}
-
 public func applySetup(_ existing: SetupConfig, _ updates: SetupUpdates) throws -> SetupConfig {
     var out = existing
     if let v = updates.router { out.router = v }
-    if let v = updates.routerApiKey {
-        try validateRouterApiKey(v)
-        out.routerApiKey = v
-    }
-    if let v = updates.serveSite { out.serveSite = v }
-    if let v = updates.serveApiKey {
-        try validateServeApiKey(v)
-        out.serveApiKey = v
-    }
+    if let v = updates.routerApiKey { out.routerApiKey = v }
     if let v = updates.siteUrl { out.siteUrl = v }
     if let v = updates.upgradeUrl { out.upgradeUrl = v }
     if let v = updates.compute { out.compute = v }
@@ -127,7 +84,5 @@ public func applySetup(_ existing: SetupConfig, _ updates: SetupUpdates) throws 
     default:
         throw AriaSetupError.invalidCompute(out.compute)
     }
-    try validateRouterApiKey(out.routerApiKey)
-    try validateServeApiKey(out.serveApiKey)
     return fillSetupUrls(out)
 }

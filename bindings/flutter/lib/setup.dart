@@ -9,13 +9,8 @@ const cnUpgrade = 'https://gitee.com/ariacompute';
 const computes = {'auto', 'cpu', 'cuda'};
 
 class SetupConfig {
-  // Local (router registration)
   String router;
   String routerApiKey;
-  // OAuth (Aria Compute)
-  String serveSite;
-  String serveApiKey;
-  // Hub / compute
   String siteUrl;
   String upgradeUrl;
   String compute;
@@ -25,8 +20,6 @@ class SetupConfig {
   SetupConfig({
     this.router = '',
     this.routerApiKey = '',
-    this.serveSite = '',
-    this.serveApiKey = '',
     this.siteUrl = '',
     this.upgradeUrl = '',
     this.compute = 'auto',
@@ -37,8 +30,6 @@ class SetupConfig {
   SetupConfig copy() => SetupConfig(
         router: router,
         routerApiKey: routerApiKey,
-        serveSite: serveSite,
-        serveApiKey: serveApiKey,
         siteUrl: siteUrl,
         upgradeUrl: upgradeUrl,
         compute: compute,
@@ -49,8 +40,6 @@ class SetupConfig {
   Map<String, Object> toMap() => {
         'router': router,
         'router_api_key': routerApiKey,
-        'serve_site': serveSite,
-        'serve_api_key': serveApiKey,
         'site_url': siteUrl,
         'upgrade_url': upgradeUrl,
         'compute': compute,
@@ -86,32 +75,9 @@ SetupConfig fillSetupUrls(SetupConfig cfg) {
   return cfg;
 }
 
-void _validateRouterApiKey(String key) {
-  final t = key.trim();
-  if (t.isEmpty) return;
-  if (t.startsWith('bfvk-')) {
-    throw ArgumentError(
-        'OAuth key detected (bfvk-); use serveApiKey / [2/2] OAuth (Aria Compute)');
-  }
-}
-
-void _validateServeApiKey(String key) {
-  final t = key.trim();
-  if (t.isEmpty) return;
-  if (t.startsWith('sk-aria_')) {
-    throw ArgumentError(
-        'Local router key detected (sk-aria_); use routerApiKey / [1/2] Local');
-  }
-  if (!t.startsWith('bfvk-')) {
-    throw ArgumentError('serve_api_key must start with bfvk-');
-  }
-}
-
 SetupConfig applySetup(SetupConfig existing,
     {String? router,
     String? routerApiKey,
-    String? serveSite,
-    String? serveApiKey,
     String? siteUrl,
     String? upgradeUrl,
     String? compute,
@@ -119,15 +85,7 @@ SetupConfig applySetup(SetupConfig existing,
     String? modelscopeApiToken}) {
   final out = existing.copy();
   if (router != null) out.router = router;
-  if (routerApiKey != null) {
-    _validateRouterApiKey(routerApiKey);
-    out.routerApiKey = routerApiKey;
-  }
-  if (serveSite != null) out.serveSite = serveSite;
-  if (serveApiKey != null) {
-    _validateServeApiKey(serveApiKey);
-    out.serveApiKey = serveApiKey;
-  }
+  if (routerApiKey != null) out.routerApiKey = routerApiKey;
   if (siteUrl != null) out.siteUrl = siteUrl;
   if (upgradeUrl != null) out.upgradeUrl = upgradeUrl;
   if (compute != null) out.compute = compute;
@@ -136,7 +94,5 @@ SetupConfig applySetup(SetupConfig existing,
   if (!computes.contains(out.compute)) {
     throw ArgumentError('invalid compute: ${out.compute}');
   }
-  _validateRouterApiKey(out.routerApiKey);
-  _validateServeApiKey(out.serveApiKey);
   return fillSetupUrls(out);
 }

@@ -298,8 +298,4 @@
 - [x] `register_with_router` 非空时带 `Authorization: Bearer`；SDK Setup 字段
 - [x] 单测：Bearer 头断言
 
-### T94 — OAuth serve_api_key（与 router H 协同）
-- [x] `AriaConfig.serve_site` / `serve_api_key`；setup 分段 Local vs OAuth；前缀互斥
-- [x] `--status` 分组；SDK Setup 字段；单测
-
 

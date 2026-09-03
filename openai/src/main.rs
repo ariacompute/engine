@@ -18,20 +18,14 @@ fn print_usage() {
         "\
 aria-engine — Aria Compute inference engine
 
-Credentials (two sections — do not mix):
-  [1/2] Local (router registration)  — router URL; API keys sk-aria_… only
-  [2/2] OAuth (Aria Compute)         — serve_site + bfvk-… (stored only)
-
 Usage:
   aria-engine setup [--status|--clear]
-    Local flags:  --router URL --router-api-key sk-aria_…
-    OAuth flags:  --serve-site com|cn --serve-api-key bfvk-…
   aria-engine download <model>
   aria-engine list
   aria-engine check [model]
   aria-engine clean [model]
   aria-engine upgrade [version]
-  aria-engine serve <model> [--bind host:port] [--router URL] [--router-api-key sk-aria_…] [--compute auto|cpu|cuda] [--profile]
+  aria-engine serve <model> [--bind host:port] [--router URL] [--router-api-key SECRET] [--compute auto|cpu|cuda] [--profile]
   aria-engine -h | --help | help
   aria-engine -v | --version | version
 
@@ -40,8 +34,8 @@ Cache:
   ~/.ariacompute/models/<model>/
   ~/.ariacompute/lib/   (libaria-engine_ffi from upgrade)
 
-setup                Sectioned Local vs OAuth prompts; hub/compute after
-  --status           Show config status (grouped; keys redacted)
+setup                Prompt for compute, hub token, optional router URL; no API key required
+  --status           Show config status (keys redacted)
   --clear            Remove engine.yml (and leftover config.yml)
 download <model>     Fetch from the regional public hub
 list                 Scan local ~/.ariacompute/models
@@ -51,7 +45,7 @@ upgrade [version]    Replace this CLI + libaria-engine_ffi from GitHub/Gitee (vi
 serve <model>        Start OpenAI-compatible HTTP server
   --bind             Listen address (default: 127.0.0.1:8080)
   --router           aria-router management URL (process override; does not write engine.yml)
-  --router-api-key   Local sk-aria_… only for provider registration Bearer (process override)
+  --router-api-key   Dashboard-issued secret for provider registration Bearer (process override)
   --compute          auto | cpu | cuda (local GEMM)
   --profile          record load/generate timings; GET /v1/engine/profile
 "
@@ -109,32 +103,11 @@ fn redact_secret(value: &str) -> String {
     }
 }
 
-fn take_flag(args: &mut Vec<String>, name: &str) -> Option<String> {
-    if let Some(i) = args.iter().position(|a| a == name) {
-        args.remove(i);
-        if i < args.len() {
-            return Some(args.remove(i));
-        }
-    }
-    None
-}
-
-fn prompt_yn(label: &str, default_yes: bool) -> io::Result<bool> {
-    let hint = if default_yes { "Y/n" } else { "y/N" };
-    let raw = prompt(&format!("{label} [{hint}]: "))?;
-    if raw.is_empty() {
-        return Ok(default_yes);
-    }
-    Ok(matches!(raw.to_ascii_lowercase().as_str(), "y" | "yes"))
-}
-
 async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let mut args: Vec<String> = args.to_vec();
     if args.iter().any(|a| a == "--status") {
         let cfg = config::load_config()?;
-        println!("Local (router registration):");
         println!(
-            "  router: {}",
+            "router: {}",
             if cfg.router.is_empty() {
                 "(not set)"
             } else {
@@ -142,25 +115,11 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             }
         );
         println!(
-            "  router_api_key: {}",
+            "router_api_key: {}",
             redact_secret(&cfg.router_api_key)
         );
-        println!("OAuth (Aria Compute):");
         println!(
-            "  serve_site: {}",
-            if cfg.serve_site.is_empty() {
-                "(not set)"
-            } else {
-                &cfg.serve_site
-            }
-        );
-        println!(
-            "  serve_api_key: {}",
-            redact_secret(&cfg.serve_api_key)
-        );
-        println!("Hub / compute:");
-        println!(
-            "  site_url: {}",
+            "site_url: {}",
             if cfg.site_url.is_empty() {
                 "(not set)"
             } else {
@@ -168,17 +127,17 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             }
         );
         println!(
-            "  upgrade_url: {}",
+            "upgrade_url: {}",
             if cfg.upgrade_url.is_empty() {
                 "(not set)"
             } else {
                 &cfg.upgrade_url
             }
         );
-        println!("  compute: {}", cfg.compute);
-        println!("  hf_token: {}", redact_secret(&cfg.hf_token));
+        println!("compute: {}", cfg.compute);
+        println!("hf_token: {}", redact_secret(&cfg.hf_token));
         println!(
-            "  modelscope_api_token: {}",
+            "modelscope_api_token: {}",
             redact_secret(&cfg.modelscope_api_token)
         );
         println!("config: {}", config::config_path()?.display());
@@ -192,24 +151,14 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let existing = config::load_config().unwrap_or_default();
-
-    eprintln!("── [1/2] Local (router registration) ──────────────────────");
-    eprintln!("  Register this engine on aria-router with a LOCAL key.");
-    eprintln!("  Source: Router Dashboard → Keys (sk-aria_…).");
-    eprintln!("  Do NOT paste OAuth keys (bfvk-) here.");
-    eprintln!();
-
-    let site_url = take_flag(&mut args, "--site-url").unwrap_or_else(|| {
-        prompt(&format!(
-            "site_url (default: {}): ",
-            if existing.site_url.is_empty() {
-                "https://ariacompute.com"
-            } else {
-                &existing.site_url
-            }
-        ))
-        .unwrap_or_default()
-    });
+    let site_url = prompt(&format!(
+        "site_url (default: {}): ",
+        if existing.site_url.is_empty() {
+            "https://ariacompute.com"
+        } else {
+            &existing.site_url
+        }
+    ))?;
     let site_url = if site_url.is_empty() {
         if existing.site_url.is_empty() {
             "https://ariacompute.com".into()
@@ -221,17 +170,14 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     let pair = gateway_detect::GatewayPair::from_url(&site_url)
         .unwrap_or(gateway_detect::GatewayPair::INTL);
-    let upgrade_url = take_flag(&mut args, "--upgrade-url").unwrap_or_else(|| {
-        prompt(&format!(
-            "upgrade_url (default: {}): ",
-            if existing.upgrade_url.is_empty() {
-                pair.upgrade_url()
-            } else {
-                &existing.upgrade_url
-            }
-        ))
-        .unwrap_or_default()
-    });
+    let upgrade_url = prompt(&format!(
+        "upgrade_url (default: {}): ",
+        if existing.upgrade_url.is_empty() {
+            pair.upgrade_url()
+        } else {
+            &existing.upgrade_url
+        }
+    ))?;
     let upgrade_url = if upgrade_url.is_empty() {
         if existing.upgrade_url.is_empty() {
             pair.upgrade_url().to_string()
@@ -241,112 +187,38 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         upgrade_url
     };
-
-    let router = take_flag(&mut args, "--router").unwrap_or_else(|| {
-        prompt(&format!(
-            "router URL (mgmt, optional, default: {}): ",
-            if existing.router.is_empty() {
-                "(none)"
-            } else {
-                &existing.router
-            }
-        ))
-        .unwrap_or_default()
-    });
+    let router = prompt(&format!(
+        "router URL (optional, default: {}): ",
+        if existing.router.is_empty() {
+            "(none)"
+        } else {
+            &existing.router
+        }
+    ))?;
     let router = if router.is_empty() {
         existing.router.clone()
     } else {
         router
     };
-
-    let router_api_key = take_flag(&mut args, "--router-api-key").unwrap_or_else(|| {
-        prompt(&format!(
-            "local router API key sk-aria_… (optional, default: {}): ",
-            if existing.router_api_key.is_empty() {
-                "(none)"
-            } else {
-                "(set)"
-            }
-        ))
-        .unwrap_or_default()
-    });
+    let router_api_key = prompt(&format!(
+        "router API key from Dashboard (optional, default: {}): ",
+        if existing.router_api_key.is_empty() {
+            "(none)"
+        } else {
+            "(set)"
+        }
+    ))?;
     let router_api_key = if router_api_key.is_empty() {
         existing.router_api_key.clone()
     } else {
         router_api_key
     };
-    config::validate_router_api_key(&router_api_key).map_err(|e| e)?;
-
-    eprintln!();
-    eprintln!("── [2/2] OAuth (Aria Compute) ───────────────────────");
-    eprintln!("  Optional. Same cloud key as Router Dashboard → Account.");
-    eprintln!("  Prefix bfvk-… only. Not used for PUT /providers this release.");
-    eprintln!();
-
-    let flag_serve_site = take_flag(&mut args, "--serve-site");
-    let flag_serve_key = take_flag(&mut args, "--serve-api-key");
-    let configure_oauth = if flag_serve_site.is_some() || flag_serve_key.is_some() {
-        true
-    } else {
-        prompt_yn("configure OAuth API key?", false)?
-    };
-
-    let (serve_site, serve_api_key) = if configure_oauth {
-        let site_raw = flag_serve_site.unwrap_or_else(|| {
-            let choice = prompt(&format!(
-                "Serve site [1] https://ariacompute.com  [2] https://ariacompute.cn (default: {}): ",
-                if existing.serve_site.is_empty() {
-                    "1"
-                } else {
-                    &existing.serve_site
-                }
-            ))
-            .unwrap_or_default();
-            if choice.is_empty() {
-                if existing.serve_site.is_empty() {
-                    "1".into()
-                } else {
-                    existing.serve_site.clone()
-                }
-            } else {
-                choice
-            }
-        });
-        let serve_site = config::normalize_serve_site(&site_raw);
-        let key_raw = flag_serve_key.unwrap_or_else(|| {
-            prompt(&format!(
-                "Serve API key (bfvk-…, default: {}): ",
-                if existing.serve_api_key.is_empty() {
-                    "(none)"
-                } else {
-                    "(set)"
-                }
-            ))
-            .unwrap_or_default()
-        });
-        let serve_api_key = if key_raw.is_empty() {
-            existing.serve_api_key.clone()
-        } else {
-            key_raw
-        };
-        config::validate_serve_api_key(&serve_api_key).map_err(|e| e)?;
-        (serve_site, serve_api_key)
-    } else {
-        (existing.serve_site.clone(), existing.serve_api_key.clone())
-    };
-
-    eprintln!();
-    eprintln!("── Hub / compute ──────────────────────────────────────────");
-    let compute = take_flag(&mut args, "--compute").unwrap_or_else(|| {
-        prompt_choice("compute", &["auto", "cpu", "cuda"], "auto").unwrap_or_else(|_| "auto".into())
-    });
+    let compute = prompt_choice("compute", &["auto", "cpu", "cuda"], "auto")?;
     let (hf_token, modelscope_api_token) = prompt_regional_hub_token(pair, &existing)?;
 
     let cfg = AriaConfig {
         router,
         router_api_key,
-        serve_site,
-        serve_api_key,
         site_url,
         upgrade_url,
         compute,
@@ -426,12 +298,8 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
             }
             "--router-api-key" => {
                 i += 1;
-                let secret = args
-                    .get(i)
-                    .cloned()
-                    .ok_or("--router-api-key requires a secret")?;
-                config::validate_router_api_key(&secret).map_err(|e| e)?;
-                router_api_key_override = Some(secret);
+                router_api_key_override =
+                    Some(args.get(i).cloned().ok_or("--router-api-key requires a secret")?);
             }
             "--compute" => {
                 i += 1;

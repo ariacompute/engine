@@ -10,15 +10,9 @@ pub struct AriaConfig {
     /// Optional aria-router management URL (empty = do not register).
     #[serde(default)]
     pub router: String,
-    /// Local Dashboard key (`sk-aria_…`) for `PUT /v1/router/providers` (Bearer).
+    /// Dashboard-issued secret for `PUT /v1/router/providers` (Bearer).
     #[serde(default)]
     pub router_api_key: String,
-    /// OAuth site label or URL (`intl` / `cn` / `https://ariacompute.com`).
-    #[serde(default)]
-    pub serve_site: String,
-    /// OAuth Aria Compute key (`bfvk-…`); stored only (not used for PUT/Hybrid this release).
-    #[serde(default)]
-    pub serve_api_key: String,
     #[serde(default)]
     pub site_url: String,
     /// Org root for CLI/FFI upgrades (`…/ariacompute`); runtime appends `/engine`.
@@ -32,50 +26,6 @@ pub struct AriaConfig {
     /// Optional ModelScope hub token (`.cn` gated/private files).
     #[serde(default)]
     pub modelscope_api_token: String,
-}
-
-/// Reject OAuth `bfvk-` keys in the Local router slot.
-pub fn validate_router_api_key(key: &str) -> Result<(), String> {
-    let t = key.trim();
-    if t.is_empty() {
-        return Ok(());
-    }
-    if t.starts_with("bfvk-") {
-        return Err(
-            "OAuth key detected (bfvk-); use [2/2] OAuth (Aria Compute) / serve_api_key".into(),
-        );
-    }
-    Ok(())
-}
-
-/// Non-empty serve keys must use the `bfvk-` prefix.
-pub fn validate_serve_api_key(key: &str) -> Result<(), String> {
-    let t = key.trim();
-    if t.is_empty() {
-        return Ok(());
-    }
-    if t.starts_with("sk-aria_") {
-        return Err(
-            "Local router key detected (sk-aria_); use [1/2] Local / router_api_key".into(),
-        );
-    }
-    if !t.starts_with("bfvk-") {
-        return Err("serve_api_key must start with bfvk-".into());
-    }
-    Ok(())
-}
-
-/// Normalize `intl`/`cn`/`1`/`2` or full URL into a site URL for storage display.
-pub fn normalize_serve_site(raw: &str) -> String {
-    let t = raw.trim();
-    match t.to_ascii_lowercase().as_str() {
-        "" => String::new(),
-        "1" | "intl" | "com" | "https://ariacompute.com" => {
-            "https://ariacompute.com".into()
-        }
-        "2" | "cn" | "https://ariacompute.cn" => "https://ariacompute.cn".into(),
-        _ => t.to_string(),
-    }
 }
 
 fn default_compute() -> String {
@@ -112,8 +62,6 @@ impl Default for AriaConfig {
         Self {
             router: String::new(),
             router_api_key: String::new(),
-            serve_site: String::new(),
-            serve_api_key: String::new(),
             site_url: String::new(),
             upgrade_url: String::new(),
             compute: default_compute(),
@@ -295,9 +243,7 @@ mod tests {
         std::env::set_var("ARIA_COMPUTE_HOME", dir.path());
         let cfg = AriaConfig {
             router: "http://127.0.0.1:8080".into(),
-            router_api_key: "sk-aria_test".into(),
-            serve_site: "https://ariacompute.com".into(),
-            serve_api_key: "bfvk-testkey".into(),
+            router_api_key: String::new(),
             site_url: "https://ariacompute.com".into(),
             upgrade_url: "https://github.com/ariacompute".into(),
             compute: "cpu".into(),
@@ -307,29 +253,9 @@ mod tests {
         save_config(&cfg).unwrap();
         let loaded = load_config().unwrap();
         assert_eq!(loaded, cfg);
-        assert_eq!(loaded.serve_site, "https://ariacompute.com");
-        assert_eq!(loaded.serve_api_key, "bfvk-testkey");
         clear_config().unwrap();
         assert!(!config_path().unwrap().exists());
         restore_aria_home(prev);
-    }
-
-    #[test]
-    fn serve_fields_do_not_overwrite_router_key() {
-        let raw = "router_api_key: sk-aria_local\nserve_api_key: bfvk-cloud\nserve_site: cn\n";
-        let cfg: AriaConfig = serde_yaml::from_str(raw).unwrap();
-        assert_eq!(cfg.router_api_key, "sk-aria_local");
-        assert_eq!(cfg.serve_api_key, "bfvk-cloud");
-        assert_eq!(cfg.serve_site, "cn");
-    }
-
-    #[test]
-    fn key_prefix_validation() {
-        assert!(validate_router_api_key("sk-aria_abc").is_ok());
-        assert!(validate_router_api_key("bfvk-xyz").is_err());
-        assert!(validate_serve_api_key("bfvk-xyz").is_ok());
-        assert!(validate_serve_api_key("sk-aria_abc").is_err());
-        assert!(validate_serve_api_key("").is_ok());
     }
 
     #[test]
