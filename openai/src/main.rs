@@ -275,7 +275,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     } else {
         router_api_key
     };
-    config::validate_router_api_key(&router_api_key).map_err(|e| e)?;
+    config::validate_router_api_key(&router_api_key)?;
 
     eprintln!();
     eprintln!("── [2/2] OAuth (Aria Compute) ───────────────────────");
@@ -329,7 +329,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         } else {
             key_raw
         };
-        config::validate_serve_api_key(&serve_api_key).map_err(|e| e)?;
+        config::validate_serve_api_key(&serve_api_key)?;
         (serve_site, serve_api_key)
     } else {
         (existing.serve_site.clone(), existing.serve_api_key.clone())
@@ -430,7 +430,7 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                     .get(i)
                     .cloned()
                     .ok_or("--router-api-key requires a secret")?;
-                config::validate_router_api_key(&secret).map_err(|e| e)?;
+                config::validate_router_api_key(&secret)?;
                 router_api_key_override = Some(secret);
             }
             "--compute" => {
