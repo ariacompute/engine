@@ -15,8 +15,13 @@ const (
 
 // SetupConfig holds Config / Run fields on an Engine instance (memory only).
 type SetupConfig struct {
-	Router             string
-	RouterAPIKey       string
+	// Local (router registration)
+	Router       string
+	RouterAPIKey string
+	// OAuth (Aria Compute)
+	ServeSite   string
+	ServeAPIKey string
+	// Hub / compute
 	SiteURL            string
 	UpgradeURL         string
 	Compute            string
@@ -26,8 +31,13 @@ type SetupConfig struct {
 
 // SetupUpdates is a partial merge. Nil fields are omitted.
 type SetupUpdates struct {
-	Router             *string
-	RouterAPIKey       *string
+	// Local
+	Router       *string
+	RouterAPIKey *string
+	// OAuth
+	ServeSite   *string
+	ServeAPIKey *string
+	// Hub / compute
 	SiteURL            *string
 	UpgradeURL         *string
 	Compute            *string
@@ -76,6 +86,31 @@ func FillSetupUrls(cfg SetupConfig) SetupConfig {
 	return cfg
 }
 
+func validateRouterAPIKey(key string) error {
+	t := strings.TrimSpace(key)
+	if t == "" {
+		return nil
+	}
+	if strings.HasPrefix(t, "bfvk-") {
+		return fmt.Errorf("OAuth key detected (bfvk-); use ServeAPIKey / [2/2] OAuth (Aria Compute)")
+	}
+	return nil
+}
+
+func validateServeAPIKey(key string) error {
+	t := strings.TrimSpace(key)
+	if t == "" {
+		return nil
+	}
+	if strings.HasPrefix(t, "sk-aria_") {
+		return fmt.Errorf("Local router key detected (sk-aria_); use RouterAPIKey / [1/2] Local")
+	}
+	if !strings.HasPrefix(t, "bfvk-") {
+		return fmt.Errorf("serve_api_key must start with bfvk-")
+	}
+	return nil
+}
+
 // ApplySetup merges updates into existing. Validates; does not mutate existing.
 func ApplySetup(existing SetupConfig, updates SetupUpdates) (SetupConfig, error) {
 	out := existing
@@ -83,7 +118,19 @@ func ApplySetup(existing SetupConfig, updates SetupUpdates) (SetupConfig, error)
 		out.Router = *updates.Router
 	}
 	if updates.RouterAPIKey != nil {
+		if err := validateRouterAPIKey(*updates.RouterAPIKey); err != nil {
+			return SetupConfig{}, err
+		}
 		out.RouterAPIKey = *updates.RouterAPIKey
+	}
+	if updates.ServeSite != nil {
+		out.ServeSite = *updates.ServeSite
+	}
+	if updates.ServeAPIKey != nil {
+		if err := validateServeAPIKey(*updates.ServeAPIKey); err != nil {
+			return SetupConfig{}, err
+		}
+		out.ServeAPIKey = *updates.ServeAPIKey
 	}
 	if updates.SiteURL != nil {
 		out.SiteURL = *updates.SiteURL
@@ -104,6 +151,12 @@ func ApplySetup(existing SetupConfig, updates SetupUpdates) (SetupConfig, error)
 	case "auto", "cpu", "cuda":
 	default:
 		return SetupConfig{}, fmt.Errorf("invalid compute: %s", out.Compute)
+	}
+	if err := validateRouterAPIKey(out.RouterAPIKey); err != nil {
+		return SetupConfig{}, err
+	}
+	if err := validateServeAPIKey(out.ServeAPIKey); err != nil {
+		return SetupConfig{}, err
 	}
 	return FillSetupUrls(out), nil
 }
