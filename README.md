@@ -18,7 +18,9 @@ Credentials live in `~/.ariacompute/engine.yml` (via `aria-engine setup`).
 | Field | Meaning | Default |
 |-------|---------|---------|
 | `router` | Optional aria-router management URL | _(empty → local-only serve)_ |
-| `router_api_key` | Dashboard-issued secret for provider registration Bearer | _(empty)_ |
+| `router_api_key` | Local Dashboard `sk-aria_…` for provider registration Bearer | _(empty)_ |
+| `serve_site` | OAuth site (`intl`/`cn` or URL) | _(empty)_ |
+| `serve_api_key` | OAuth `bfvk-…` (stored only; not used for PUT this release) | _(empty)_ |
 | `site_url` | Site for hub region (`.com` / `.cn`) | — |
 | `upgrade_url` | Org root for CLI/FFI upgrades (`.com`→GitHub, `.cn`→Gitee) | — |
 | `compute` | `auto` / `cpu` / `cuda` (local GEMM) | `auto` |
@@ -26,9 +28,13 @@ Credentials live in `~/.ariacompute/engine.yml` (via `aria-engine setup`).
 | `modelscope_api_token` | ModelScope hub token (optional; `.cn` gated files) | _(empty)_ |
 
 ```bash
-# Setup
+# Setup — two credential sections (do not mix):
+#   [1/2] Local (router registration) — router URL + sk-aria_…
+#   [2/2] OAuth (Aria Compute)        — optional serve_site + bfvk-…
+#   then Hub / compute
 aria-engine setup
 aria-engine setup --status
+# Flags: --router --router-api-key | --serve-site com|cn --serve-api-key bfvk-…
 
 # Download models
 # Optional: aria-engine setup prompts hf_token (.com) or modelscope_api_token (.cn)
@@ -105,11 +111,10 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --router-api-key sk-aria_… \
   --compute auto
 
-# Persist the URL / key instead of passing flags each time:
-#   aria-engine setup  # optional router URL + router API key (from Dashboard)
-#   # or in ~/.ariacompute/engine.yml:
-#   # router: http://127.0.0.1:8090
-#   # router_api_key: sk-aria_…
+# Persist instead of flags each time:
+#   aria-engine setup
+#   # [1/2] Local: router + router_api_key: sk-aria_…
+#   # [2/2] OAuth: serve_site + serve_api_key: bfvk-… (optional; stored only)
 
 # 3. Chat via the gateway (concrete name = bypass; forwards to this engine)
 curl -s http://127.0.0.1:8899/v1/chat/completions \

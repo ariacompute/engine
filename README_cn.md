@@ -18,7 +18,9 @@ cargo clippy --workspace --all-targets -- -D warnings
 | 字段 | 含义 | 默认 |
 |------|------|------|
 | `router` | 可选 aria-router 管理面 URL | _(空 → 纯本地 serve)_ |
-| `router_api_key` | Dashboard 签发的注册 Bearer secret | _(空)_ |
+| `router_api_key` | 本地 Dashboard `sk-aria_…` 注册 Bearer | _(空)_ |
+| `serve_site` | OAuth 站点（`intl`/`cn` 或 URL） | _(空)_ |
+| `serve_api_key` | OAuth `bfvk-…`（仅持久化；本增量不参与 PUT） | _(空)_ |
 | `site_url` | 站点（`.com` / `.cn`），用于 hub 分区 | — |
 | `upgrade_url` | 组织根（`.com`→GitHub，`.cn`→Gitee） | — |
 | `compute` | `auto` / `cpu` / `cuda`（本机 GEMM） | `auto` |
@@ -26,9 +28,12 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `modelscope_api_token` | ModelScope hub token（可选） | _(空)_ |
 
 ```bash
-# 配置
+# 配置 — 两段凭证（勿混用）：
+#   [1/2] Local (router registration) — router URL + sk-aria_…
+#   [2/2] OAuth (Aria Compute)        — 可选 serve_site + bfvk-…
 aria-engine setup
 aria-engine setup --status
+# Flags: --router --router-api-key | --serve-site com|cn --serve-api-key bfvk-…
 
 # 下载模型
 # 可选：aria-engine setup 按区提示 hf_token（.com）或 modelscope_api_token（.cn）
