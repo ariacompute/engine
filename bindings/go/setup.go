@@ -16,7 +16,7 @@ const (
 // SetupConfig holds Config / Run fields on an Engine instance (memory only).
 type SetupConfig struct {
 	Router             string
-	RouterAPIKey       string // sk-aria_ or bfvk-
+	RouterAPIKey       string // sk-aria_ or sk-bf-
 	SiteURL            string
 	UpgradeURL         string
 	Compute            string
@@ -81,10 +81,10 @@ func validateRouterAPIKey(key string) error {
 	if t == "" {
 		return nil
 	}
-	if strings.HasPrefix(t, "sk-aria_") || strings.HasPrefix(t, "bfvk-") {
+	if strings.HasPrefix(t, "sk-aria_") || strings.HasPrefix(t, "sk-bf-") {
 		return nil
 	}
-	return fmt.Errorf("router_api_key must start with sk-aria_ or bfvk-")
+	return fmt.Errorf("router_api_key must start with sk-aria_ or sk-bf-")
 }
 
 // ApplySetup merges updates into existing. Validates; does not mutate existing.

@@ -20,7 +20,7 @@
     {"id": "open_model_name_token_optional", "intent": "Model name without token", "assert": "open_model/open attempts hub download; token is optional for public models"},
     {"id": "open_local_path_ignores_token", "intent": "Local path with no token", "assert": "loads directly; token optional"},
     {"id": "download_cached_skip", "intent": "Valid cached bundle present", "assert": "download_model returns cache path without network"},
-    {"id": "download_dashboard_token_ignored", "intent": "Dashboard sk-/bfvk- token", "assert": "not sent as hub Bearer; falls back to engine.yml hub token if present"},
+    {"id": "download_dashboard_token_ignored", "intent": "Dashboard sk-/sk-bf- token", "assert": "not sent as hub Bearer; falls back to engine.yml hub token if present"},
     {"id": "download_hub_token_from_config", "intent": "engine.yml hf_token / modelscope_api_token", "assert": "SDK uses the regional field from ~/.ariacompute/engine.yml when call args are empty"},
     {"id": "download_named_hub_token", "intent": "Explicit hf_token or modelscope_api_token", "assert": "named field for the active hub is sent; the other region field is ignored"},
     {"id": "ensure_ffi_lib_cached", "intent": "libaria-engine_ffi already in ~/.ariacompute/lib", "assert": "SDK loads that path; no Releases download"},

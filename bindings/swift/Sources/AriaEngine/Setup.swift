@@ -73,8 +73,8 @@ func fillSetupUrls(_ cfg: SetupConfig) -> SetupConfig {
 func validateRouterApiKey(_ key: String) throws {
     let t = key.trimmingCharacters(in: .whitespacesAndNewlines)
     if t.isEmpty { return }
-    if t.hasPrefix("sk-aria_") || t.hasPrefix("bfvk-") { return }
-    throw AriaSetupError.invalidKey("router_api_key must start with sk-aria_ or bfvk-")
+    if t.hasPrefix("sk-aria_") || t.hasPrefix("sk-bf-") { return }
+    throw AriaSetupError.invalidKey("router_api_key must start with sk-aria_ or sk-bf-")
 }
 
 public func applySetup(_ existing: SetupConfig, _ updates: SetupUpdates) throws -> SetupConfig {

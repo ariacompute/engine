@@ -18,7 +18,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | 字段 | 含义 | 默认 |
 |------|------|------|
 | `router` | 可选 aria-router 管理面 URL | _(空 → 纯本地 serve)_ |
-| `router_api_key` | `sk-aria_…` 或 `bfvk-…`（router 按前缀关联） | _(空)_ |
+| `router_api_key` | `sk-aria_…` 或 `sk-bf-…`（router 按前缀关联） | _(空)_ |
 | `site_url` | 站点（`.com` / `.cn`），用于 hub 分区 | — |
 | `upgrade_url` | 组织根（`.com`→GitHub，`.cn`→Gitee） | — |
 | `compute` | `auto` / `cpu` / `cuda`（本机 GEMM） | `auto` |
@@ -26,7 +26,7 @@ cargo clippy --workspace --all-targets -- -D warnings
 | `modelscope_api_token` | ModelScope hub token（可选） | _(空)_ |
 
 ```bash
-# 配置 — hub / compute / 可选 router URL + router API key（sk-aria_ 或 bfvk-）
+# 配置 — hub / compute / 可选 router URL + router API key（sk-aria_ 或 sk-bf-）
 aria-engine setup
 aria-engine setup --status
 # Flags: --router --router-api-key
@@ -295,7 +295,7 @@ C 头文件：[`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`�
 
 ### 按模型名自动下载
 
-所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `aria-engine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**。需授权的 hub 文件使用与 `aria-engine setup` 相同的字段，通过实例 `setup`（空构造 → `setup` → `open`）设置；**仅内存**，绝不写入 `engine.yml`（CLI `aria-engine setup` 仍写该文件）。实例字段为空时下载仍可读 `~/.ariacompute/engine.yml`。Dashboard 的 `sk-`/`bfvk-` token 不会当作 hub 凭证。不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
+所有语言 SDK 现在同时接受**本地 bundle 路径**或 **Aria 模型名**。含 `/`（或本地已存在）的值视为本地路径直接加载；否则视为模型名。各语言 SDK 均从本区公开 hub 下载（与 `aria-engine download` 相同：`.com`→Hugging Face，`.cn`→ModelScope），**不再请求 Dashboard**。需授权的 hub 文件使用与 `aria-engine setup` 相同的字段，通过实例 `setup`（空构造 → `setup` → `open`）设置；**仅内存**，绝不写入 `engine.yml`（CLI `aria-engine setup` 仍写该文件）。实例字段为空时下载仍可读 `~/.ariacompute/engine.yml`。Dashboard 的 `sk-` token 不会当作 hub 凭证。不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。公开模型无需 token。缓存中已存在有效 bundle 时直接复用、不重复下载。下载失败抛出明确错误——绝不静默吞掉。
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine

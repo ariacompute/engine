@@ -48,7 +48,7 @@ enum Command {
         /// aria-router management URL
         #[arg(long)]
         router: Option<String>,
-        /// aria-router API key (sk-aria_… or bfvk-…)
+        /// aria-router API key (sk-aria_… or serve sk-bf-…)
         #[arg(long)]
         router_api_key: Option<String>,
         /// Local GEMM preference: auto | cpu | cuda

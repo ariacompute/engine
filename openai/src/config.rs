@@ -10,7 +10,7 @@ pub struct AriaConfig {
     /// Optional aria-router management URL (empty = do not register).
     #[serde(default)]
     pub router: String,
-    /// Router API key for `PUT /v1/router/providers` (`sk-aria_…` or `bfvk-…`).
+    /// Router API key for `PUT /v1/router/providers` (`sk-aria_…` or serve `sk-bf-…`).
     #[serde(default)]
     pub router_api_key: String,
     #[serde(default)]
@@ -28,16 +28,17 @@ pub struct AriaConfig {
     pub modelscope_api_token: String,
 }
 
-/// Accept local (`sk-aria_`) or OAuth (`bfvk-`) keys; association is done by aria-router.
+/// Accept local (`sk-aria_`) or Aria Compute serve (`sk-bf-`) keys;
+/// association is done by aria-router.
 pub fn validate_router_api_key(key: &str) -> Result<(), String> {
     let t = key.trim();
     if t.is_empty() {
         return Ok(());
     }
-    if t.starts_with("sk-aria_") || t.starts_with("bfvk-") {
+    if t.starts_with("sk-aria_") || t.starts_with("sk-bf-") {
         return Ok(());
     }
-    Err("router_api_key must start with sk-aria_ or bfvk-".into())
+    Err("router_api_key must start with sk-aria_ or sk-bf-".into())
 }
 
 fn default_compute() -> String {
@@ -272,7 +273,7 @@ mod tests {
 
     #[test]
     fn unknown_serve_fields_ignored_on_load() {
-        let raw = "router_api_key: sk-aria_local\nserve_api_key: bfvk-cloud\nserve_site: cn\n";
+        let raw = "router_api_key: sk-aria_local\nserve_api_key: sk-bf-cloud\nserve_site: cn\n";
         let cfg: AriaConfig = serde_yaml::from_str(raw).unwrap();
         assert_eq!(cfg.router_api_key, "sk-aria_local");
     }
@@ -280,7 +281,8 @@ mod tests {
     #[test]
     fn key_prefix_validation() {
         assert!(validate_router_api_key("sk-aria_abc").is_ok());
-        assert!(validate_router_api_key("bfvk-xyz").is_ok());
+        assert!(validate_router_api_key("bfvk-xyz").is_err());
+        assert!(validate_router_api_key("sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c").is_ok());
         assert!(validate_router_api_key("").is_ok());
         assert!(validate_router_api_key("other").is_err());
     }

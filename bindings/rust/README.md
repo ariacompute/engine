@@ -26,7 +26,7 @@ containing `/` or already on disk is loaded directly; otherwise the SDK
 downloads it from the regional public hub (same as `aria-engine download`:
 `.com` → Hugging Face, `.cn` → ModelScope; `site` defaults to
 `https://ariacompute.com`) into `~/.ariacompute/models/{model}` and loads it.
-Dashboard is not used. A Dashboard `sk-` / `bfvk-` token is ignored for hub auth.
+Dashboard is not used. A Dashboard `sk-` / `sk-bf-` token is ignored for hub auth.
 Token is optional for public models. A valid cached bundle is reused without
 re-downloading.
 

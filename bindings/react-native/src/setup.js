@@ -41,8 +41,8 @@ function fillSetupUrls(cfg) {
 function validateRouterApiKey(key) {
   const t = (key || '').trim();
   if (!t) return;
-  if (t.startsWith('sk-aria_') || t.startsWith('bfvk-')) return;
-  throw new Error('router_api_key must start with sk-aria_ or bfvk-');
+  if (t.startsWith('sk-aria_') || t.startsWith('sk-bf-')) return;
+  throw new Error('router_api_key must start with sk-aria_ or sk-bf-');
 }
 
 function applySetup(existing, updates) {

@@ -80,7 +80,7 @@ public final class AriaEngine {
         let t = token.trimmingCharacters(in: .whitespacesAndNewlines)
         if t.isEmpty { return nil }
         let low = t.lowercased()
-        if low.hasPrefix("sk-") || low.hasPrefix("bfvk-") { return nil }
+        if low.hasPrefix("sk-") { return nil }
         return t
     }
 
@@ -202,7 +202,7 @@ public final class AriaEngine {
                 let field = source == "modelscope" ? "modelscope_api_token" : "hf_token"
                 throw AriaDownloadError.requestFailed(
                     code,
-                    "auth failed HTTP \(code); set \(field) via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                    "auth failed HTTP \(code); set \(field) via aria-engine setup (do not pass a Dashboard sk-/sk-bf- key as the hub token)"
                 )
             } catch {
                 last = error

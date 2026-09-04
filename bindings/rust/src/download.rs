@@ -1,7 +1,7 @@
 //! Regional public-hub model auto-download for the Rust SDK.
 //!
 //! Matches `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope.
-//! Dashboard zip meta is not used. A Dashboard `sk-` / `bfvk-` token is ignored
+//! Dashboard zip meta is not used. A Dashboard `sk-` / `sk-bf-` token is ignored
 //! for hub auth.
 
 use std::io::{Read, Write};
@@ -116,7 +116,7 @@ fn hub_bearer(token: &str) -> Option<&str> {
         return None;
     }
     let low = t.to_ascii_lowercase();
-    if low.starts_with("sk-") || low.starts_with("bfvk-") {
+    if low.starts_with("sk-") {
         None
     } else {
         Some(t)
@@ -282,7 +282,7 @@ fn auth_error(source: &str, code: u16) -> DownloadError {
         "hf_token"
     };
     DownloadError::Request(format!(
-        "auth failed HTTP {code}; set {field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+        "auth failed HTTP {code}; set {field} via aria-engine setup (do not pass a Dashboard sk-/sk-bf- key as the hub token)"
     ))
 }
 
@@ -359,7 +359,7 @@ fn fetch_hub_file(
 /// If a valid bundle already exists at the cache path, the download is skipped.
 /// Hub auth: explicit `hf_token` / `modelscope_api_token`, then generic `token`,
 /// then `~/.ariacompute/engine.yml` (same keys as `aria-engine setup`).
-/// Dashboard `sk-` / `bfvk-` keys are not sent to the hub.
+/// Dashboard `sk-` / `sk-bf-` keys are not sent to the hub.
 pub fn download_model(
     model: &str,
     token: &str,
@@ -660,7 +660,7 @@ mod tests {
     #[test]
     fn dashboard_token_not_sent_to_hub() {
         assert!(hub_bearer("sk-bf-95076ed1-8c1a-4efa-b33c-f52c1d7f9f24").is_none());
-        assert!(hub_bearer("bfvk-test").is_none());
+        assert!(hub_bearer("sk-bf-test").is_none());
         assert_eq!(hub_bearer("hf_abc"), Some("hf_abc"));
     }
 

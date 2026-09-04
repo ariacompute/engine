@@ -36,7 +36,7 @@ export interface CompleteResult {
 }
 
 export interface OpenOptions {
-  /** Legacy generic hub token. Dashboard sk-/bfvk- keys are ignored. */
+  /** Legacy generic hub token. Dashboard sk-/sk-bf- keys are ignored. */
   token?: string;
   /** Hugging Face hub token (`.com`). Same field as `aria-engine setup` `hf_token`. */
   hfToken?: string;
@@ -56,7 +56,7 @@ export const CN_UPGRADE = "https://gitee.com/ariacompute";
 
 export interface SetupConfig {
   router: string;
-  /** sk-aria_ or bfvk-; router associates by prefix */
+  /** sk-aria_ or sk-bf-; router associates by prefix */
   router_api_key: string;
   site_url: string;
   upgrade_url: string;
@@ -101,8 +101,8 @@ export function fillSetupUrls(cfg: SetupConfig): SetupConfig {
 function validateRouterApiKey(key: string): void {
   const t = (key || "").trim();
   if (!t) return;
-  if (t.startsWith("sk-aria_") || t.startsWith("bfvk-")) return;
-  throw new Error("router_api_key must start with sk-aria_ or bfvk-");
+  if (t.startsWith("sk-aria_") || t.startsWith("sk-bf-")) return;
+  throw new Error("router_api_key must start with sk-aria_ or sk-bf-");
 }
 
 export function applySetup(existing: SetupConfig, updates: Partial<SetupConfig>): SetupConfig {
@@ -184,7 +184,7 @@ export function hubBearer(token?: string): string | undefined {
   const t = (token || "").trim();
   if (!t) return undefined;
   const low = t.toLowerCase();
-  if (low.startsWith("sk-") || low.startsWith("bfvk-")) return undefined;
+  if (low.startsWith("sk-")) return undefined;
   return t;
 }
 
@@ -314,7 +314,7 @@ async function fetchHubFile(
       if (e instanceof HubHttpError && (e.status === 401 || e.status === 403)) {
         const field = source === "modelscope" ? "modelscope_api_token" : "hf_token";
         throw new Error(
-          `auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`,
+          `auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/sk-bf- key as the hub token)`,
         );
       }
     }

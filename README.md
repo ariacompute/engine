@@ -18,7 +18,7 @@ Credentials live in `~/.ariacompute/engine.yml` (via `aria-engine setup`).
 | Field | Meaning | Default |
 |-------|---------|---------|
 | `router` | Optional aria-router management URL | _(empty → local-only serve)_ |
-| `router_api_key` | `sk-aria_…` or `bfvk-…` (router associates by prefix) | _(empty)_ |
+| `router_api_key` | `sk-aria_…` or `sk-bf-…` (router associates by prefix) | _(empty)_ |
 | `site_url` | Site for hub region (`.com` / `.cn`) | — |
 | `upgrade_url` | Org root for CLI/FFI upgrades (`.com`→GitHub, `.cn`→Gitee) | — |
 | `compute` | `auto` / `cpu` / `cuda` (local GEMM) | `auto` |
@@ -26,7 +26,7 @@ Credentials live in `~/.ariacompute/engine.yml` (via `aria-engine setup`).
 | `modelscope_api_token` | ModelScope hub token (optional; `.cn` gated files) | _(empty)_ |
 
 ```bash
-# Setup — hub / compute / optional router URL + router API key (sk-aria_ or bfvk-)
+# Setup — hub / compute / optional router URL + router API key (sk-aria_ or sk-bf-)
 aria-engine setup
 aria-engine setup --status
 # Flags: --router --router-api-key
@@ -108,7 +108,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
 
 # Persist instead of flags each time:
 #   aria-engine setup
-#   # router + router_api_key (sk-aria_ or bfvk-)
+#   # router + router_api_key (sk-aria_ or sk-bf-)
 
 # 3. Chat via the gateway (concrete name = bypass; forwards to this engine)
 curl -s http://127.0.0.1:8899/v1/chat/completions \
@@ -294,7 +294,7 @@ C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `ari
 
 ### Auto-download by model name
 
-Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard. Gated hub files use the same fields as `aria-engine setup` via instance `setup` (empty construct → `setup` → `open`); this is in-memory only and **never** writes `engine.yml` (CLI `aria-engine setup` still does). Empty instance fields still fall back to reading `~/.ariacompute/engine.yml`. Dashboard `sk-`/`bfvk-` tokens are ignored. Env `HF_TOKEN` / `MODELSCOPE_API_TOKEN` are not used. Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
+Every binding now accepts **either** a local bundle path **or** an Aria model name. A value containing `/` (or already on disk) is treated as a local path and loaded directly; otherwise it is a model name. All language SDKs download from the regional public hub (same as `aria-engine download`: `.com` → Hugging Face, `.cn` → ModelScope) and do **not** call Dashboard. Gated hub files use the same fields as `aria-engine setup` via instance `setup` (empty construct → `setup` → `open`); this is in-memory only and **never** writes `engine.yml` (CLI `aria-engine setup` still does). Empty instance fields still fall back to reading `~/.ariacompute/engine.yml`. Dashboard `sk-` tokens are ignored. Env `HF_TOKEN` / `MODELSCOPE_API_TOKEN` are not used. Token is optional for public models. A valid cached bundle at `~/.ariacompute/models/{model}` is reused without re-downloading. Download failures raise a clear error — they never fail silently.
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine

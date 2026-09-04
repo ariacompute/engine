@@ -16,7 +16,7 @@ pub use setup::{
 /// Options controlling model auto-download from the regional public hub.
 #[derive(Default, Clone)]
 pub struct OpenOptions {
-    /// Legacy generic hub token. Dashboard `sk-` / `bfvk-` keys are ignored.
+    /// Legacy generic hub token. Dashboard `sk-` / `sk-bf-` keys are ignored.
     pub token: Option<String>,
     /// Hugging Face hub token (`.com`). Same field as `aria-engine setup` `hf_token`.
     pub hf_token: Option<String>,
@@ -250,14 +250,22 @@ mod tests {
     }
 
     #[test]
-    fn setup_accepts_bfvk_router_api_key() {
+    fn setup_accepts_serve_router_api_key() {
         let mut eng = Engine::new();
+        let key = "sk-bf-59af311a-803d-41c0-8000-b82ee4d46b7c";
         eng.setup(&SetupUpdates {
-            router_api_key: Some("bfvk-cloud".into()),
+            router_api_key: Some(key.into()),
             ..Default::default()
         })
         .unwrap();
-        assert_eq!(eng.setup_status().router_api_key, "bfvk-cloud");
+        assert_eq!(eng.setup_status().router_api_key, key);
+        // Legacy bfvk- prefix is no longer accepted.
+        assert!(eng
+            .setup(&SetupUpdates {
+                router_api_key: Some("bfvk-cloud".into()),
+                ..Default::default()
+            })
+            .is_err());
         assert!(eng
             .setup(&SetupUpdates {
                 router_api_key: Some("bad-key".into()),

@@ -375,7 +375,7 @@ class AriaEngine : AutoCloseable {
             val t = token.trim()
             if (t.isEmpty()) return null
             val low = t.lowercase()
-            if (low.startsWith("sk-") || low.startsWith("bfvk-")) return null
+            if (low.startsWith("sk-")) return null
             return t
         }
 
@@ -507,7 +507,7 @@ class AriaEngine : AutoCloseable {
                         val field = if (source == "modelscope") "modelscope_api_token" else "hf_token"
                         val code = if (msg.contains("401")) 401 else 403
                         throw RuntimeException(
-                            "auth failed HTTP $code; set $field via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                            "auth failed HTTP $code; set $field via aria-engine setup (do not pass a Dashboard sk-/sk-bf- key as the hub token)"
                         )
                     }
                 }
@@ -519,7 +519,7 @@ class AriaEngine : AutoCloseable {
 
         /** Download `model` from the regional public hub into
          * `~/.ariacompute/models/{model}`; skips when a valid bundle is cached.
-         * Dashboard is not used. Token is optional; Dashboard sk-/bfvk- keys are ignored. */
+         * Dashboard is not used. Token is optional; Dashboard sk-/sk-bf- keys are ignored. */
         @JvmOverloads
         @JvmStatic
         fun downloadModel(

@@ -27,7 +27,7 @@ export interface CompleteResult {
     generation?: Generation;
 }
 export interface OpenOptions {
-    /** Legacy generic hub token. Dashboard sk-/bfvk- keys are ignored. */
+    /** Legacy generic hub token. Dashboard sk-/sk-bf- keys are ignored. */
     token?: string;
     /** Hugging Face hub token (`.com`). Same field as `aria-engine setup` `hf_token`. */
     hfToken?: string;

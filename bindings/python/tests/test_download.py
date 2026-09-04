@@ -118,7 +118,7 @@ class DownloadTests(unittest.TestCase):
 
     def test_dashboard_token_not_sent_to_hub(self):
         self.assertIsNone(_hub_bearer("sk-bf-95076ed1-8c1a-4efa-b33c-f52c1d7f9f24"))
-        self.assertIsNone(_hub_bearer("bfvk-test"))
+        self.assertIsNone(_hub_bearer("sk-bf-test"))
         self.assertEqual(_hub_bearer("hf_abc"), "hf_abc")
 
     def test_hub_urls_follow_upload_layout(self):

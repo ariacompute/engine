@@ -299,7 +299,7 @@
 - [x] 单测：Bearer 头断言
 
 ### T94 — OAuth serve_api_key（与 router H 协同）
-- [x] 删除 `serve_site`/`serve_api_key`；`router_api_key` 接受 sk-aria_ 或 bfvk-
+- [x] 删除 `serve_site`/`serve_api_key`；`router_api_key` 接受 sk-aria_ 或 sk-bf-
 - [x] `--status`；SDK Setup；单测
 
 ## CLI help 对齐 memo（clap）

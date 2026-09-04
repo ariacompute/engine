@@ -172,7 +172,7 @@ function hubBearer(token) {
     if (!t)
         return undefined;
     const low = t.toLowerCase();
-    if (low.startsWith("sk-") || low.startsWith("bfvk-"))
+    if (low.startsWith("sk-"))
         return undefined;
     return t;
 }
@@ -292,7 +292,7 @@ async function fetchHubFile(source, model, file, dest, token, required) {
             last = e;
             if (e instanceof HubHttpError && (e.status === 401 || e.status === 403)) {
                 const field = source === "modelscope" ? "modelscope_api_token" : "hf_token";
-                throw new Error(`auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)`);
+                throw new Error(`auth failed HTTP ${e.status}; set ${field} via aria-engine setup (do not pass a Dashboard sk-/sk-bf- key as the hub token)`);
             }
         }
     }

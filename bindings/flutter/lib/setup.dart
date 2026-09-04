@@ -78,8 +78,8 @@ SetupConfig fillSetupUrls(SetupConfig cfg) {
 void _validateRouterApiKey(String key) {
   final t = key.trim();
   if (t.isEmpty) return;
-  if (t.startsWith('sk-aria_') || t.startsWith('bfvk-')) return;
-  throw ArgumentError('router_api_key must start with sk-aria_ or bfvk-');
+  if (t.startsWith('sk-aria_') || t.startsWith('sk-bf-')) return;
+  throw ArgumentError('router_api_key must start with sk-aria_ or sk-bf-');
 }
 
 SetupConfig applySetup(SetupConfig existing,

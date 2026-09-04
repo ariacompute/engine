@@ -73,7 +73,7 @@ test("dashboard token is not sent to hub", () => {
   }
   const { hubBearer } = mod;
   assert.equal(hubBearer("sk-bf-95076ed1-8c1a-4efa-b33c-f52c1d7f9f24"), undefined);
-  assert.equal(hubBearer("bfvk-test"), undefined);
+  assert.equal(hubBearer("sk-bf-test"), undefined);
   assert.equal(hubBearer("hf_abc"), "hf_abc");
 });
 

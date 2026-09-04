@@ -83,7 +83,7 @@ String? _hubBearer(String? token) {
   final t = token?.trim() ?? '';
   if (t.isEmpty) return null;
   final low = t.toLowerCase();
-  if (low.startsWith('sk-') || low.startsWith('bfvk-')) return null;
+  if (low.startsWith('sk-')) return null;
   return t;
 }
 
@@ -184,7 +184,7 @@ class _HubAuthException implements Exception {
   String toString() {
     final field =
         source == 'modelscope' ? 'modelscope_api_token' : 'hf_token';
-    return 'auth failed HTTP $code; set $field via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)';
+    return 'auth failed HTTP $code; set $field via aria-engine setup (do not pass a Dashboard sk-/sk-bf- key as the hub token)';
   }
 }
 

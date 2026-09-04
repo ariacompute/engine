@@ -283,7 +283,7 @@ def _is_dashboard_token(token: Optional[str]) -> bool:
     if not token:
         return False
     t = token.strip().lower()
-    return t.startswith("sk-") or t.startswith("bfvk-")
+    return t.startswith("sk-")
 
 
 def _hub_bearer(token: Optional[str]) -> Optional[str]:
@@ -339,7 +339,7 @@ def _resolve_hub_token(
 
     Same keys as ``aria-engine setup``: ``hf_token`` (``.com``) /
     ``modelscope_api_token`` (``.cn``). Does not read ``HF_TOKEN`` /
-    ``MODELSCOPE_API_TOKEN``. Dashboard ``sk-`` / ``bfvk-`` values are skipped.
+    ``MODELSCOPE_API_TOKEN``. Dashboard ``sk-`` / ``sk-bf-`` values are skipped.
     """
     named = modelscope_api_token if source == "modelscope" else hf_token
     for cand in (named, token, _config_yml_scalar(_hub_token_field(source))):
@@ -421,7 +421,7 @@ def _fetch_hub_file(
                 field = "modelscope_api_token" if source == "modelscope" else "hf_token"
                 raise RuntimeError(
                     f"auth failed HTTP {e.code}; set {field} via aria-engine setup "
-                    f"(do not pass a Dashboard sk-/bfvk- key as the hub token)"
+                    f"(do not pass a Dashboard sk-/sk-bf- key as the hub token)"
                 ) from e
             continue
         except OSError as e:
@@ -445,7 +445,7 @@ def download_model(
     Matches ``aria-engine download``: ``.com`` → Hugging Face, ``.cn`` → ModelScope.
     Hub auth uses ``hf_token`` / ``modelscope_api_token`` (call args, else
     ``~/.ariacompute/engine.yml`` from ``aria-engine setup``). Dashboard is not used.
-    A Dashboard API key (``sk-`` / ``bfvk-``) is ignored for hub auth. If a valid
+    A Dashboard API key (``sk-`` / ``sk-bf-``) is ignored for hub auth. If a valid
     bundle already exists at the cache path, the download is skipped.
     """
     import shutil
@@ -562,9 +562,9 @@ def _validate_router_api_key(key: str) -> None:
     t = (key or "").strip()
     if not t:
         return
-    if t.startswith("sk-aria_") or t.startswith("bfvk-"):
+    if t.startswith("sk-aria_") or t.startswith("sk-bf-"):
         return
-    raise ValueError("router_api_key must start with sk-aria_ or bfvk-")
+    raise ValueError("router_api_key must start with sk-aria_ or sk-bf-")
 
 
 def apply_setup(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -626,7 +626,7 @@ class Engine:
     ) -> "Engine":
         """Set Config / Run fields on this instance only. Does not write engine.yml.
 
-        ``router_api_key`` accepts ``sk-aria_…`` or ``bfvk-…`` (router associates by prefix).
+        ``router_api_key`` accepts ``sk-aria_…`` or serve ``sk-bf-…`` (router associates by prefix).
         """
         self._cfg = apply_setup(
             self._cfg,

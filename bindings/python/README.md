@@ -27,7 +27,7 @@ with Engine("/path/to/bundle") as eng:
 `.cn` → ModelScope；`site` 默认 `https://ariacompute.com`）到 `~/.ariacompute/models/{model}` 再加载。
 **不再请求 Dashboard**（避免 HTTP 403）。需授权的 hub 文件请传入 `hf_token`（`.com`）或
 `modelscope_api_token`（`.cn`），字段名与 `aria-engine setup` 相同；未传则读
-`~/.ariacompute/engine.yml`。Dashboard `sk-` / `bfvk-` token 不会当作 hub 凭证。
+`~/.ariacompute/engine.yml`。Dashboard `sk-` / `sk-bf-`token 不会当作 hub 凭证。
 不读环境变量 `HF_TOKEN` / `MODELSCOPE_API_TOKEN`。
 缓存中已有有效 bundle 时直接复用，不重复下载。
 

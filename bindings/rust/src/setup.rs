@@ -92,11 +92,11 @@ fn validate_router_api_key(key: &str) -> Result<(), SetupError> {
     if t.is_empty() {
         return Ok(());
     }
-    if t.starts_with("sk-aria_") || t.starts_with("bfvk-") {
+    if t.starts_with("sk-aria_") || t.starts_with("sk-bf-") {
         return Ok(());
     }
     Err(SetupError::InvalidKey(
-        "router_api_key must start with sk-aria_ or bfvk-".into(),
+        "router_api_key must start with sk-aria_ or sk-bf-".into(),
     ))
 }
 

@@ -80,8 +80,8 @@ func TestHubBearerIgnoresDashboardToken(t *testing.T) {
 	if hubBearer("sk-bf-95076ed1-8c1a-4efa-b33c-f52c1d7f9f24") != "" {
 		t.Fatal("dashboard sk- token must not be sent to hub")
 	}
-	if hubBearer("bfvk-test") != "" {
-		t.Fatal("dashboard bfvk- token must not be sent to hub")
+	if hubBearer("sk-bf-test") != "" {
+		t.Fatal("dashboard sk- token must not be sent to hub")
 	}
 	if hubBearer("hf_abc") != "hf_abc" {
 		t.Fatal("hub token should pass through")

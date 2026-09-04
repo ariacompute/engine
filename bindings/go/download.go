@@ -107,7 +107,7 @@ func preferredPublicHub(site string) string {
 
 func isDashboardToken(token string) bool {
 	t := strings.ToLower(strings.TrimSpace(token))
-	return strings.HasPrefix(t, "sk-") || strings.HasPrefix(t, "bfvk-")
+	return strings.HasPrefix(t, "sk-")
 }
 
 func hubBearer(token string) string {
@@ -251,7 +251,7 @@ func (e *hubSetupError) Error() string {
 	if e.source == "modelscope" {
 		field = "modelscope_api_token"
 	}
-	return fmt.Sprintf("auth failed HTTP %d; set %s via aria-engine setup (do not pass a Dashboard sk-/bfvk- key as the hub token)", e.code, field)
+	return fmt.Sprintf("auth failed HTTP %d; set %s via aria-engine setup (do not pass a Dashboard sk-/sk-bf- key as the hub token)", e.code, field)
 }
 
 func fetchURLToFile(url, dest, token string) error {

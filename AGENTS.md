@@ -47,5 +47,5 @@ Spec 见 `requirements.md`（含 §8.7 profile、**§3.4 `compute=auto`**、§3.
 - 黄金路径：tiny Aria q4 → load → dequant → decode → OpenAI chat/SSE/embeddings/ASR/tools。
 - 全家族 §1.1：`ArchClass` + `graph_hook`；VL/VLA 见 `multimodal`。
 - 评测对齐 `model` `audit_cli`：缺后端 skip、`ci_fail: false`；不启动第三方引擎进程。
-- NEON/AVX2 CPU；`compute=auto` 可选 CUDA（仅本地 GEMM）。`~/.ariacompute/engine.yml`：`router`/`router_api_key`（`sk-aria_` 或 `bfvk-`）。`download` 仅本区 hub。`list` 只扫本地缓存。
+- NEON/AVX2 CPU；`compute=auto` 可选 CUDA（仅本地 GEMM）。`~/.ariacompute/engine.yml`：`router`/`router_api_key`（`sk-aria_` 或 `sk-bf-`）。`download` 仅本区 hub。`list` 只扫本地缓存。
 - 与 **model** 协同 blocked Hadamard（`format_version=2`）。C ABI 变更须更新 `bindings/testdata/cases.json` 与宿主测。
