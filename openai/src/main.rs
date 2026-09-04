@@ -5,7 +5,7 @@ use aria_openai::download;
 use aria_openai::gateway_detect;
 use aria_openai::upgrade;
 use aria_openai::{app, build_state_with_opts, register_with_router};
-use std::env;
+use clap::{ArgAction, Parser, Subcommand};
 use std::io::{self, BufRead, Write};
 use std::net::SocketAddr;
 use std::process;
@@ -13,47 +13,87 @@ use std::process;
 /// Embedded at compile time; release builds set `ARIA_ENGINE_VERSION` from the git tag.
 const ENGINE_VERSION: &str = env!("ARIA_ENGINE_VERSION");
 
-fn print_usage() {
-    eprintln!(
-        "\
-aria-engine — Aria Compute inference engine
-
-Usage:
-  aria-engine setup [--status|--clear]
-  aria-engine download <model>
-  aria-engine list
-  aria-engine check [model]
-  aria-engine clean [model]
-  aria-engine upgrade [version]
-  aria-engine serve <model> [--bind host:port] [--router URL] [--router-api-key sk-aria_…] [--compute auto|cpu|cuda] [--profile]
-  aria-engine -h | --help | help
-  aria-engine -v | --version | version
-
-Cache:
-  ~/.ariacompute/engine.yml
-  ~/.ariacompute/models/<model>/
-  ~/.ariacompute/lib/   (libaria-engine_ffi from upgrade)
-
-setup                Prompt for hub, compute, optional router API key; write engine.yml
-  --status           Show config status (keys redacted)
-  --clear            Remove engine.yml (and leftover config.yml)
-download <model>     Fetch from the regional public hub
-list                 Scan local ~/.ariacompute/models
-check [model]        Compare local bundle files (count, names, SHA-256) to regional hub
-clean [model]        Remove one cached model or all
-upgrade [version]    Replace this CLI + libaria-engine_ffi from GitHub/Gitee (via upgrade_url)
-serve <model>        Start OpenAI-compatible HTTP server
-  --bind             Listen address (default: 127.0.0.1:8080)
-  --router           aria-router management URL (process override; does not write engine.yml)
-  --router-api-key   aria-router api key (process override)
-  --compute          auto | cpu | cuda (local GEMM)
-  --profile          record load/generate timings; GET /v1/engine/profile
-"
-    );
+#[derive(Parser)]
+#[command(
+    name = "aria-engine",
+    about = "Aria Compute inference engine CLI",
+    version = ENGINE_VERSION,
+    arg_required_else_help = true,
+    disable_version_flag = true
+)]
+struct Cli {
+    /// Print version
+    #[arg(short = 'v', long = "version", action = ArgAction::Version)]
+    _version: (),
+    #[command(subcommand)]
+    command: Command,
 }
 
-fn print_version() {
-    println!("aria-engine {ENGINE_VERSION}");
+#[derive(Subcommand)]
+enum Command {
+    /// Write engine.yml (hub, compute, optional router)
+    Setup {
+        /// Show config status (keys redacted)
+        #[arg(long)]
+        status: bool,
+        /// Remove engine.yml (and leftover config.yml)
+        #[arg(long)]
+        clear: bool,
+        /// Site URL (.com or .cn)
+        #[arg(long)]
+        site_url: Option<String>,
+        /// Releases org root (GitHub/Gitee)
+        #[arg(long)]
+        upgrade_url: Option<String>,
+        /// aria-router management URL
+        #[arg(long)]
+        router: Option<String>,
+        /// aria-router API key (sk-aria_… or bfvk-…)
+        #[arg(long)]
+        router_api_key: Option<String>,
+        /// Local GEMM preference: auto | cpu | cuda
+        #[arg(long)]
+        compute: Option<String>,
+    },
+    /// Fetch a model from the regional public hub
+    Download {
+        model: String,
+    },
+    /// Scan local ~/.ariacompute/models
+    List,
+    /// Compare local bundle files to the regional hub
+    Check {
+        model: Option<String>,
+    },
+    /// Remove one cached model or all
+    Clean {
+        model: Option<String>,
+    },
+    /// Replace this CLI + libaria-engine_ffi from Releases
+    Upgrade {
+        version: Option<String>,
+    },
+    /// Start OpenAI-compatible HTTP server
+    Serve {
+        model: String,
+        /// Listen address
+        #[arg(long, default_value = "127.0.0.1:8080")]
+        bind: String,
+        /// aria-router management URL (process override)
+        #[arg(long)]
+        router: Option<String>,
+        /// aria-router API key (process override)
+        #[arg(long)]
+        router_api_key: Option<String>,
+        /// auto | cpu | cuda (local GEMM)
+        #[arg(long)]
+        compute: Option<String>,
+        /// Record load/generate timings; GET /v1/engine/profile
+        #[arg(long)]
+        profile: bool,
+    },
+    /// Print version
+    Version,
 }
 
 fn prompt(label: &str) -> io::Result<String> {
@@ -103,19 +143,16 @@ fn redact_secret(value: &str) -> String {
     }
 }
 
-fn take_flag(args: &mut Vec<String>, name: &str) -> Option<String> {
-    if let Some(i) = args.iter().position(|a| a == name) {
-        args.remove(i);
-        if i < args.len() {
-            return Some(args.remove(i));
-        }
-    }
-    None
-}
-
-async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let mut args: Vec<String> = args.to_vec();
-    if args.iter().any(|a| a == "--status") {
+async fn cmd_setup(
+    status: bool,
+    clear: bool,
+    site_url_flag: Option<String>,
+    upgrade_url_flag: Option<String>,
+    router_flag: Option<String>,
+    router_api_key_flag: Option<String>,
+    compute_flag: Option<String>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if status {
         let cfg = config::load_config()?;
         println!(
             "router: {}",
@@ -125,10 +162,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
                 &cfg.router
             }
         );
-        println!(
-            "router_api_key: {}",
-            redact_secret(&cfg.router_api_key)
-        );
+        println!("router_api_key: {}", redact_secret(&cfg.router_api_key));
         println!(
             "site_url: {}",
             if cfg.site_url.is_empty() {
@@ -155,7 +189,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         println!("lib: {}", config::lib_dir()?.display());
         return Ok(());
     }
-    if args.iter().any(|a| a == "--clear") {
+    if clear {
         config::clear_config()?;
         println!("cleared {}", config::config_path()?.display());
         return Ok(());
@@ -163,7 +197,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
     let existing = config::load_config().unwrap_or_default();
 
-    let site_url = take_flag(&mut args, "--site-url").unwrap_or_else(|| {
+    let site_url = site_url_flag.unwrap_or_else(|| {
         prompt(&format!(
             "site_url (default: {}): ",
             if existing.site_url.is_empty() {
@@ -185,7 +219,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     let pair = gateway_detect::GatewayPair::from_url(&site_url)
         .unwrap_or(gateway_detect::GatewayPair::INTL);
-    let upgrade_url = take_flag(&mut args, "--upgrade-url").unwrap_or_else(|| {
+    let upgrade_url = upgrade_url_flag.unwrap_or_else(|| {
         prompt(&format!(
             "upgrade_url (default: {}): ",
             if existing.upgrade_url.is_empty() {
@@ -206,7 +240,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         upgrade_url
     };
 
-    let router = take_flag(&mut args, "--router").unwrap_or_else(|| {
+    let router = router_flag.unwrap_or_else(|| {
         prompt(&format!(
             "router URL (optional, default: {}): ",
             if existing.router.is_empty() {
@@ -223,7 +257,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
         router
     };
 
-    let key_entered = take_flag(&mut args, "--router-api-key").unwrap_or_else(|| {
+    let key_entered = router_api_key_flag.unwrap_or_else(|| {
         prompt(&format!(
             "router API key (optional, default: {}): ",
             if existing.router_api_key.is_empty() {
@@ -241,7 +275,7 @@ async fn cmd_setup(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     };
     config::validate_router_api_key(&router_api_key)?;
 
-    let compute = take_flag(&mut args, "--compute").unwrap_or_else(|| {
+    let compute = compute_flag.unwrap_or_else(|| {
         prompt_choice("compute", &["auto", "cpu", "cuda"], "auto").unwrap_or_else(|_| "auto".into())
     });
     let (hf_token, modelscope_api_token) = prompt_regional_hub_token(pair, &existing)?;
@@ -308,60 +342,20 @@ fn cmd_clean(model: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
-    let mut model = None;
-    let mut bind = "127.0.0.1:8080".to_string();
-    let mut router_override = None;
-    let mut router_api_key_override = None;
-    let mut compute_override = None;
-    let mut profile = false;
-    let mut i = 0;
-    while i < args.len() {
-        match args[i].as_str() {
-            "--bind" => {
-                i += 1;
-                bind = args.get(i).cloned().ok_or("--bind requires host:port")?;
-            }
-            "--router" => {
-                i += 1;
-                router_override = Some(args.get(i).cloned().ok_or("--router requires a URL")?);
-            }
-            "--router-api-key" => {
-                i += 1;
-                let secret = args
-                    .get(i)
-                    .cloned()
-                    .ok_or("--router-api-key requires a secret")?;
-                config::validate_router_api_key(&secret)?;
-                router_api_key_override = Some(secret);
-            }
-            "--compute" => {
-                i += 1;
-                compute_override = Some(
-                    args.get(i)
-                        .cloned()
-                        .ok_or("--compute requires auto|cpu|cuda")?,
-                );
-            }
-            "--profile" => {
-                profile = true;
-            }
-            other if other.starts_with('-') => {
-                return Err(format!("unknown flag: {other}").into());
-            }
-            other => {
-                if model.is_some() {
-                    return Err(format!("unexpected argument: {other}").into());
-                }
-                model = Some(other.to_string());
-            }
-        }
-        i += 1;
-    }
-    let model = model.ok_or("serve requires <model>")?;
+async fn cmd_serve(
+    model: String,
+    bind: String,
+    router_override: Option<String>,
+    router_api_key_override: Option<String>,
+    compute_override: Option<String>,
+    profile: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let model_path = config::resolve_model_path(&model)?;
 
     let cfg = load_config_reconciled().await.unwrap_or_default();
+    if let Some(ref secret) = router_api_key_override {
+        config::validate_router_api_key(secret)?;
+    }
     let compute = ComputePref::parse(compute_override.as_deref().unwrap_or(cfg.compute.as_str()))?;
     let state = build_state_with_opts(
         model_path.to_str().ok_or("invalid model path")?,
@@ -406,40 +400,47 @@ async fn cmd_serve(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
 
 #[tokio::main]
 async fn main() {
-    let args: Vec<String> = env::args().skip(1).collect();
-    if args.is_empty() {
-        print_usage();
-        process::exit(2);
-    }
-    let result = match args[0].as_str() {
-        "-h" | "--help" | "help" => {
-            print_usage();
+    let cli = Cli::parse();
+    let result = match cli.command {
+        Command::Setup {
+            status,
+            clear,
+            site_url,
+            upgrade_url,
+            router,
+            router_api_key,
+            compute,
+        } => {
+            cmd_setup(
+                status,
+                clear,
+                site_url,
+                upgrade_url,
+                router,
+                router_api_key,
+                compute,
+            )
+            .await
+        }
+        Command::Download { model } => cmd_download(&model).await,
+        Command::List => cmd_list().await,
+        Command::Check { model } => cmd_check(model.as_deref()).await,
+        Command::Clean { model } => cmd_clean(model.as_deref()),
+        Command::Upgrade { version } => upgrade::run(version.as_deref(), ENGINE_VERSION)
+            .await
+            .map_err(|e| e.into()),
+        Command::Serve {
+            model,
+            bind,
+            router,
+            router_api_key,
+            compute,
+            profile,
+        } => cmd_serve(model, bind, router, router_api_key, compute, profile).await,
+        Command::Version => {
+            println!("aria-engine {ENGINE_VERSION}");
             Ok(())
         }
-        "-v" | "--version" | "version" => {
-            print_version();
-            Ok(())
-        }
-        "setup" => cmd_setup(&args[1..]).await,
-        "download" => {
-            let model = args.get(1).map(|s| s.as_str()).unwrap_or("");
-            if model.is_empty() {
-                Err("download requires <model>".into())
-            } else {
-                cmd_download(model).await
-            }
-        }
-        "list" => cmd_list().await,
-        "check" => cmd_check(args.get(1).map(|s| s.as_str())).await,
-        "clean" => cmd_clean(args.get(1).map(|s| s.as_str())),
-        "upgrade" => {
-            let version = args.get(1).map(|s| s.as_str());
-            upgrade::run(version, ENGINE_VERSION)
-                .await
-                .map_err(|e| e.into())
-        }
-        "serve" => cmd_serve(&args[1..]).await,
-        other => Err(format!("unknown command: {other}").into()),
     };
     if let Err(e) = result {
         eprintln!("error: {e}");

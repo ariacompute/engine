@@ -36,6 +36,7 @@ dirs = "5"
 urlencoding = "2"
 sha2 = "0.10"
 indicatif = { workspace = true }
+clap = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

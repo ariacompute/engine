@@ -38,3 +38,4 @@ ariacompute-kernel = { path = "kernel", version = "0.1.0" }
 ariacompute-graph = { path = "graph", version = "0.1.0" }
 ariacompute-inference = { path = "inference", version = "0.1.0" }
 ariacompute-ffi = { path = "ffi", version = "0.1.0" }
+clap = { version = "4.5", features = ["derive"] }

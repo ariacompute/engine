@@ -302,4 +302,11 @@
 - [x] 删除 `serve_site`/`serve_api_key`；`router_api_key` 接受 sk-aria_ 或 bfvk-
 - [x] `--status`；SDK Setup；单测
 
+## CLI help 对齐 memo（clap）
+
+### T95 — clap help usage
+- [x] `aria-engine` 迁 clap derive；删除手写 `print_usage`
+- [x] `-v` / `--version` / `version`；无参 exit 2；子命令 `--help`
+- [x] `cargo test` + `--help` 冒烟
+
 
