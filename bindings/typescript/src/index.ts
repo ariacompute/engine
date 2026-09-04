@@ -55,13 +55,9 @@ export const CN_SITE = "https://ariacompute.cn";
 export const CN_UPGRADE = "https://gitee.com/ariacompute";
 
 export interface SetupConfig {
-  /** Local (router registration) */
   router: string;
+  /** sk-aria_ or bfvk-; router associates by prefix */
   router_api_key: string;
-  /** OAuth (Aria Compute) */
-  serve_site: string;
-  serve_api_key: string;
-  /** Hub / compute */
   site_url: string;
   upgrade_url: string;
   compute: string;
@@ -73,8 +69,6 @@ export function defaultSetupConfig(): SetupConfig {
   return {
     router: "",
     router_api_key: "",
-    serve_site: "",
-    serve_api_key: "",
     site_url: "",
     upgrade_url: "",
     compute: "auto",
@@ -107,22 +101,8 @@ export function fillSetupUrls(cfg: SetupConfig): SetupConfig {
 function validateRouterApiKey(key: string): void {
   const t = (key || "").trim();
   if (!t) return;
-  if (t.startsWith("bfvk-")) {
-    throw new Error(
-      "OAuth key detected (bfvk-); use serve_api_key / [2/2] OAuth (Aria Compute)",
-    );
-  }
-}
-
-function validateServeApiKey(key: string): void {
-  const t = (key || "").trim();
-  if (!t) return;
-  if (t.startsWith("sk-aria_")) {
-    throw new Error("Local router key detected (sk-aria_); use router_api_key / [1/2] Local");
-  }
-  if (!t.startsWith("bfvk-")) {
-    throw new Error("serve_api_key must start with bfvk-");
-  }
+  if (t.startsWith("sk-aria_") || t.startsWith("bfvk-")) return;
+  throw new Error("router_api_key must start with sk-aria_ or bfvk-");
 }
 
 export function applySetup(existing: SetupConfig, updates: Partial<SetupConfig>): SetupConfig {
@@ -135,7 +115,6 @@ export function applySetup(existing: SetupConfig, updates: Partial<SetupConfig>)
     throw new Error(`invalid compute: ${out.compute}`);
   }
   validateRouterApiKey(out.router_api_key);
-  validateServeApiKey(out.serve_api_key);
   return fillSetupUrls(out);
 }
 

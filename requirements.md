@@ -68,7 +68,7 @@
 | 2 | **graph** | Layer → Op → Tensor IR；`BufferPool`；mmap / `external` 零拷贝输入；融合节点 **HDM**（Hadamard + Dequant + MatMul）；阶段 A：LLM decode 所需 ops 可调度；图序列化可选（阶段 B+） |
 | 3 | **inference** | `load_bundle`（mmap `weight.bin`）；KV cache；greedy / 基础 sampling；tokenizer；§1.1 家族注册与图构建钩子；阶段 A：`gemma-4-e2b-it` **tiny q4** 黄金路径；阶段 B/C：见上表 |
 | 4 | **openai** | `POST /v1/chat/completions`（含 SSE streaming）、`GET /v1/models`；阶段 C：`/v1/audio/transcriptions`、`/v1/embeddings`、tool_calls / RAG 编排；CLI：`setup` / `download` / `list` / `check` / `clean` / `upgrade` / `serve`。chat **仅本地 decode**。可选 `router` URL：listen 后向 `aria-router` 管理面 upsert 本进程为 provider；失败则退出。 |
-| 5 | **router 接入** | `engine.yml`：`router` + `router_api_key`（`sk-aria_`）注册；可选 `serve_site`/`serve_api_key`（`bfvk`，仅存储）。CLI 分段 Local vs OAuth。`--router` / `--router-api-key` 覆盖本进程。**禁止** `cloud_handoff` / `route_hybrid`。 |
+| 5 | **router 接入** | `engine.yml`：仅 `router` + `router_api_key`（`sk-aria_` **或** `bfvk-`，用户无区分）；aria-router 按前缀关联本地 keys 或 oauth。`--router` / `--router-api-key` 覆盖本进程。**禁止** `cloud_handoff` / `route_hybrid`。 |
 | 6 | **反量化语义** | 与 Python `dequantize` 一致的 **rotated-space** 码本重建。embedding **必须**原域行 gather（加载期整表 unrotate 或等价）；线性层可用融合 HDM **或** 原域 `linear`。禁止对旋转域 `W[token]` 做 lookup |
 | 7 | **HTTP** | **axum** 实现本地 serve |
 
@@ -174,7 +174,7 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
   - `list`：只扫描 `~/.ariacompute/models/` 本地缓存，标记 `downloaded` / `incomplete`。**不**请求 Dashboard catalog。
   - `check [model]`：对照**本区**公开 hub（与 `download` 相同：`.com`→Hugging Face，`.cn`→ModelScope）校验本地 bundle **文件数目、文件名、SHA-256**。指定 model（缓存名或现存路径）则查一项；省略则扫描 `~/.ariacompute/models/` 下全部目录。Hub 清单取 `{sdk}/{bundle}/` 下普通文件（默认 `sdk=v1.0`），跳过 `.gitattributes` / `.gitignore` / 点文件。大文件 SHA-256 来自 hub 元数据（HF `lfs.oid` / ModelScope `Sha256`），**禁止**为校验再拉取 `weight.bin`。逐文件打印 `OK` / `MISSING` / `EXTRA` / `MISMATCH`；任一失败进程 exit 1。不访问 Dashboard、不对区 hub。
   - `upgrade [version]`：按 `upgrade_url`（组织根）拼 `{upgrade_url}/engine`，调 GitHub/Gitee Releases API；默认最新**正式** Release（忽略 prerelease/draft），可选 `0.7.2` / `v0.7.2`；下载本机平台 `aria-engine_*` + `libaria-engine_ffi_*`，原地原子替换当前 CLI，并将 FFI 装入 `~/.ariacompute/lib/`（提示 `ARIA_FFI_LIB`）。未配置 `upgrade_url` 时报错并提示先 `setup`；下载/解压失败不得损坏现有 CLI。
-  - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。`--compute auto|cpu|cuda` 覆盖本机算力（默认 config / `auto`）。`--profile` 启用加载/生成分段计时，经 `GET /v1/engine/profile` 读出。`--router <url>` 覆盖本进程 router 管理面地址（默认 config / 空）。`--router-api-key` 覆盖 `router_api_key`（Dashboard 签发；注册时 `Authorization: Bearer`）。listen 成功且 URL 非空时 `PUT {router}/v1/router/providers` 注册本地模型；失败 **退出**（禁止假装已接入）。
+  - `serve <model>`：若为现存路径则用之，否则 `~/.ariacompute/models/<model>`；CLI 旗标仅覆盖本进程，不回写 config。`--compute auto|cpu|cuda` 覆盖本机算力（默认 config / `auto`）。`--profile` 启用加载/生成分段计时，经 `GET /v1/engine/profile` 读出。`--router <url>` 覆盖本进程 router 管理面地址（默认 config / 空）。`--router-api-key` 覆盖 `router_api_key`（`sk-aria_` 或 `bfvk-`；注册时 `Authorization: Bearer`）。listen 成功且 URL 非空时 `PUT {router}/v1/router/providers` 注册本地模型；失败 **退出**（禁止假装已接入）。
   - **禁止** `ARIA_HYBRID_*` 环境变量；仅保留编译期 `ARIA_ENGINE_VERSION`。
   - **下载源**：`aria-engine download` **仅**本区公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。禁止探测/回退对区 hub。**禁止**引擎直连公开 S3/COS registry URL。模型 `download` 与 CLI `upgrade` 宿主（GitHub/Gitee）分离。
   - 每次 `download` 对本区 hub 做连通性探针（用于日志速率），失败则报错退出。不持久化强制源。
@@ -186,18 +186,16 @@ Hub `gemma-3n-e2b-it_q4` / `gemma-3n-e4b-it_q4` 为消费契约。Gemma-3n **不
 | 字段 | 含义 |
 |------|------|
 | `router` | 可选 `aria-router` 管理面 URL（空 = 不接入） |
-| `router_api_key` | 可选；**Local** Dashboard Keys 签发的 `sk-aria_…`；注册时 Bearer（空则不带） |
-| `serve_site` | 可选；`intl` / `cn` 或站点 URL（OAuth / Aria Compute） |
-| `serve_api_key` | 可选；OAuth `bfvk-…`（**不得**写入 `router_api_key`）；本增量仅持久化 |
+| `router_api_key` | 可选；`sk-aria_…` 或 `bfvk-…`（router 按前缀关联）；注册时 Bearer |
 | `site_url` | 站点（`.com` 或 `.cn`），用于 hub 分区 |
 | `upgrade_url` | 组织根（`.com`→`https://github.com/ariacompute`；`.cn`→`https://gitee.com/ariacompute`）；`upgrade` 拼 `/engine` |
 | `compute` | `auto` \| `cpu` \| `cuda`（默认 `auto`） |
 | `hf_token` | Hugging Face hub token（可选，默认空；`.com` 需授权文件） |
 | `modelscope_api_token` | ModelScope hub token（可选，默认空；`.cn` 需授权文件） |
 
-**删除**：`cloud_api_key`、`cloud_url`、`hybrid_mode`、`hybrid_execution`、`hybrid_semantic`、`hybrid_semantic_timeout_ms`、`hybrid_semantic_cache_size`。
+**删除**：`serve_site`、`serve_api_key`、`cloud_api_key`、`cloud_url`、`hybrid_*`。
 
-- `setup`：**分段** `[1/2] Local (router registration)`（router URL + `sk-aria_`）与 `[2/2] OAuth (Aria Compute)`（`serve_site` + `bfvk`）；前缀互斥校验；hub/compute 另段。`--status` 分组脱敏。`--clear` 删除 `engine.yml`。无 `auth` 子命令。
+- `setup`：交互询问 hub / compute / 可选 router URL 与 **router API key**（`sk-aria_` 或 `bfvk-`）；`--status` 脱敏；`--clear` 删除 `engine.yml`。无 `auth` 子命令。
 - `download` 公开 hub 与 site 同区（`.com`→HF，`.cn`→ModelScope）。
 
 ### 3.4.2 compute（仅本地 GEMM）

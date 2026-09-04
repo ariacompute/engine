@@ -505,13 +505,8 @@ CN_SITE = "https://ariacompute.cn"
 CN_UPGRADE = "https://gitee.com/ariacompute"
 _COMPUTES = ("auto", "cpu", "cuda")
 _AUTH_KEYS = (
-    # Local (router registration)
     "router",
     "router_api_key",
-    # OAuth (Aria Compute)
-    "serve_site",
-    "serve_api_key",
-    # Hub / compute
     "site_url",
     "upgrade_url",
     "compute",
@@ -524,8 +519,6 @@ def default_setup_config() -> dict[str, Any]:
     return {
         "router": "",
         "router_api_key": "",
-        "serve_site": "",
-        "serve_api_key": "",
         "site_url": "",
         "upgrade_url": "",
         "compute": "auto",
@@ -569,22 +562,9 @@ def _validate_router_api_key(key: str) -> None:
     t = (key or "").strip()
     if not t:
         return
-    if t.startswith("bfvk-"):
-        raise ValueError(
-            "OAuth key detected (bfvk-); use serve_api_key / [2/2] OAuth (Aria Compute)"
-        )
-
-
-def _validate_serve_api_key(key: str) -> None:
-    t = (key or "").strip()
-    if not t:
+    if t.startswith("sk-aria_") or t.startswith("bfvk-"):
         return
-    if t.startswith("sk-aria_"):
-        raise ValueError(
-            "Local router key detected (sk-aria_); use router_api_key / [1/2] Local"
-        )
-    if not t.startswith("bfvk-"):
-        raise ValueError("serve_api_key must start with bfvk-")
+    raise ValueError("router_api_key must start with sk-aria_ or bfvk-")
 
 
 def apply_setup(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
@@ -602,7 +582,6 @@ def apply_setup(existing: dict[str, Any], updates: dict[str, Any]) -> dict[str, 
             continue
         out[key] = "" if out.get(key) is None else str(out[key])
     _validate_router_api_key(str(out.get("router_api_key") or ""))
-    _validate_serve_api_key(str(out.get("serve_api_key") or ""))
     return fill_setup_urls(out)
 
 
@@ -639,8 +618,6 @@ class Engine:
         self,
         router: Optional[str] = None,
         router_api_key: Optional[str] = None,
-        serve_site: Optional[str] = None,
-        serve_api_key: Optional[str] = None,
         site_url: Optional[str] = None,
         upgrade_url: Optional[str] = None,
         compute: Optional[str] = None,
@@ -649,16 +626,13 @@ class Engine:
     ) -> "Engine":
         """Set Config / Run fields on this instance only. Does not write engine.yml.
 
-        Local: ``router`` / ``router_api_key`` (``sk-aria_…``).
-        OAuth: ``serve_site`` / ``serve_api_key`` (``bfvk-…``).
+        ``router_api_key`` accepts ``sk-aria_…`` or ``bfvk-…`` (router associates by prefix).
         """
         self._cfg = apply_setup(
             self._cfg,
             {
                 "router": router,
                 "router_api_key": router_api_key,
-                "serve_site": serve_site,
-                "serve_api_key": serve_api_key,
                 "site_url": site_url,
                 "upgrade_url": upgrade_url,
                 "compute": compute,

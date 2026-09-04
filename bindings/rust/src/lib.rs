@@ -233,8 +233,6 @@ mod tests {
         eng.setup(&SetupUpdates {
             router: Some("http://127.0.0.1:8080".into()),
             router_api_key: Some("sk-aria_test".into()),
-            serve_site: Some(crate::setup::CN_SITE.into()),
-            serve_api_key: Some("bfvk-cloud".into()),
             site_url: Some(crate::setup::CN_SITE.into()),
             upgrade_url: Some(crate::setup::CN_UPGRADE.into()),
             compute: Some("cpu".into()),
@@ -245,8 +243,6 @@ mod tests {
         let st = eng.setup_status();
         assert_eq!(st.router, "http://127.0.0.1:8080");
         assert_eq!(st.router_api_key, "sk-aria_test");
-        assert_eq!(st.serve_site, crate::setup::CN_SITE);
-        assert_eq!(st.serve_api_key, "bfvk-cloud");
         assert_eq!(st.compute, "cpu");
         assert_eq!(st.hf_token, "hf_abc");
         assert_eq!(st.modelscope_api_token, "ms_xyz");
@@ -254,17 +250,17 @@ mod tests {
     }
 
     #[test]
-    fn setup_rejects_bfvk_in_router_api_key() {
+    fn setup_accepts_bfvk_router_api_key() {
         let mut eng = Engine::new();
+        eng.setup(&SetupUpdates {
+            router_api_key: Some("bfvk-cloud".into()),
+            ..Default::default()
+        })
+        .unwrap();
+        assert_eq!(eng.setup_status().router_api_key, "bfvk-cloud");
         assert!(eng
             .setup(&SetupUpdates {
-                router_api_key: Some("bfvk-oops".into()),
-                ..Default::default()
-            })
-            .is_err());
-        assert!(eng
-            .setup(&SetupUpdates {
-                serve_api_key: Some("sk-aria_oops".into()),
+                router_api_key: Some("bad-key".into()),
                 ..Default::default()
             })
             .is_err());

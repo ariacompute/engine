@@ -299,7 +299,7 @@
 - [x] 单测：Bearer 头断言
 
 ### T94 — OAuth serve_api_key（与 router H 协同）
-- [x] `AriaConfig.serve_site` / `serve_api_key`；setup 分段 Local vs OAuth；前缀互斥
-- [x] `--status` 分组；SDK Setup 字段；单测
+- [x] 删除 `serve_site`/`serve_api_key`；`router_api_key` 接受 sk-aria_ 或 bfvk-
+- [x] `--status`；SDK Setup；单测
 
 

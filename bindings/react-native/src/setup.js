@@ -7,13 +7,8 @@ const CN_UPGRADE = 'https://gitee.com/ariacompute';
 
 function defaultSetupConfig() {
   return {
-    // Local (router registration)
     router: '',
     router_api_key: '',
-    // OAuth (Aria Compute)
-    serve_site: '',
-    serve_api_key: '',
-    // Hub / compute
     site_url: '',
     upgrade_url: '',
     compute: 'auto',
@@ -46,22 +41,8 @@ function fillSetupUrls(cfg) {
 function validateRouterApiKey(key) {
   const t = (key || '').trim();
   if (!t) return;
-  if (t.startsWith('bfvk-')) {
-    throw new Error(
-      'OAuth key detected (bfvk-); use serve_api_key / [2/2] OAuth (Aria Compute)',
-    );
-  }
-}
-
-function validateServeApiKey(key) {
-  const t = (key || '').trim();
-  if (!t) return;
-  if (t.startsWith('sk-aria_')) {
-    throw new Error('Local router key detected (sk-aria_); use router_api_key / [1/2] Local');
-  }
-  if (!t.startsWith('bfvk-')) {
-    throw new Error('serve_api_key must start with bfvk-');
-  }
+  if (t.startsWith('sk-aria_') || t.startsWith('bfvk-')) return;
+  throw new Error('router_api_key must start with sk-aria_ or bfvk-');
 }
 
 function applySetup(existing, updates) {
@@ -74,7 +55,6 @@ function applySetup(existing, updates) {
     throw new Error(`invalid compute: ${out.compute}`);
   }
   validateRouterApiKey(out.router_api_key);
-  validateServeApiKey(out.serve_api_key);
   return fillSetupUrls(out);
 }
 

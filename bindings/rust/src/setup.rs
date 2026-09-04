@@ -17,13 +17,8 @@ pub enum SetupError {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SetupConfig {
-    // --- Local (router registration) ---
     pub router: String,
     pub router_api_key: String,
-    // --- OAuth (Aria Compute) ---
-    pub serve_site: String,
-    pub serve_api_key: String,
-    // --- Hub / compute ---
     pub site_url: String,
     pub upgrade_url: String,
     pub compute: String,
@@ -36,8 +31,6 @@ impl Default for SetupConfig {
         Self {
             router: String::new(),
             router_api_key: String::new(),
-            serve_site: String::new(),
-            serve_api_key: String::new(),
             site_url: String::new(),
             upgrade_url: String::new(),
             compute: "auto".into(),
@@ -50,13 +43,8 @@ impl Default for SetupConfig {
 /// Partial merge. `None` fields are omitted.
 #[derive(Debug, Clone, Default)]
 pub struct SetupUpdates {
-    // Local
     pub router: Option<String>,
     pub router_api_key: Option<String>,
-    // OAuth
-    pub serve_site: Option<String>,
-    pub serve_api_key: Option<String>,
-    // Hub / compute
     pub site_url: Option<String>,
     pub upgrade_url: Option<String>,
     pub compute: Option<String>,
@@ -104,30 +92,12 @@ fn validate_router_api_key(key: &str) -> Result<(), SetupError> {
     if t.is_empty() {
         return Ok(());
     }
-    if t.starts_with("bfvk-") {
-        return Err(SetupError::InvalidKey(
-            "OAuth key detected (bfvk-); use serve_api_key / [2/2] OAuth (Aria Compute)".into(),
-        ));
-    }
-    Ok(())
-}
-
-fn validate_serve_api_key(key: &str) -> Result<(), SetupError> {
-    let t = key.trim();
-    if t.is_empty() {
+    if t.starts_with("sk-aria_") || t.starts_with("bfvk-") {
         return Ok(());
     }
-    if t.starts_with("sk-aria_") {
-        return Err(SetupError::InvalidKey(
-            "Local router key detected (sk-aria_); use router_api_key / [1/2] Local".into(),
-        ));
-    }
-    if !t.starts_with("bfvk-") {
-        return Err(SetupError::InvalidKey(
-            "serve_api_key must start with bfvk-".into(),
-        ));
-    }
-    Ok(())
+    Err(SetupError::InvalidKey(
+        "router_api_key must start with sk-aria_ or bfvk-".into(),
+    ))
 }
 
 /// Merge `updates` into `existing`. Validates; does not mutate `existing`.
@@ -139,13 +109,6 @@ pub fn apply_setup(existing: &SetupConfig, updates: &SetupUpdates) -> Result<Set
     if let Some(v) = &updates.router_api_key {
         validate_router_api_key(v)?;
         out.router_api_key = v.clone();
-    }
-    if let Some(v) = &updates.serve_site {
-        out.serve_site = v.clone();
-    }
-    if let Some(v) = &updates.serve_api_key {
-        validate_serve_api_key(v)?;
-        out.serve_api_key = v.clone();
     }
     if let Some(v) = &updates.site_url {
         out.site_url = v.clone();
@@ -167,6 +130,5 @@ pub fn apply_setup(existing: &SetupConfig, updates: &SetupUpdates) -> Result<Set
         other => return Err(SetupError::InvalidCompute(other.into())),
     }
     validate_router_api_key(&out.router_api_key)?;
-    validate_serve_api_key(&out.serve_api_key)?;
     Ok(fill_setup_urls(out))
 }
