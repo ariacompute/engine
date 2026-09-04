@@ -349,7 +349,7 @@ engine/
 
 - HTTP：**axum**。
 - 可选 `router` URL：`~/.ariacompute/engine.yml`；阶段 A 测试用 mock upsert。
-- CLI 下载：仅本区 hub（`.com`→HF，`.cn`→ModelScope）；无 Dashboard/对区回退；无公开 S3 客户端。
+- CLI 下载：仅本区 hub（`.com`→HF，`.cn`→ModelScope）；无 Dashboard/对区回退；无公开 S3 客户端；`DownloadSource` 仅 HuggingFace | ModelScope。
 - 权重与多 GB 产物 **不入 Git**。
 - 评测：`bench/` 为 **Python ≥3.10、标准库为主**（对齐 `model` 的 `audit_cli` 风格）；不解析 GGUF。本增量与 **model** 协同 blocked Hadamard（`format_version=2`）。
 
@@ -437,7 +437,7 @@ Report-only JSON（`GET /v1/engine/profile` 或 `scripts/profile_qwen3_serve.py`
 - [x] 全家族在 Spec 内、E2E 分 A/B/C 可接受
 - [x] OpenAI：阶段 A 仅 chat(+SSE)/models；ASR/RAG/Tool 属阶段 C 可接受
 - [x] Hybrid：阶段 A mock + config/`CloudClient::new` 可接受
-- [x] CLI：`~/.ariacompute` + auth/download/list/check/clean/upgrade/serve；无 `ARIA_HYBRID_*`；三源探针下载可接受
+- [x] CLI：`~/.ariacompute` + auth/download/list/check/clean/upgrade/serve；无 `ARIA_HYBRID_*`；本区 hub（HF/MS）探针下载
 - [x] Kernel：NEON/AVX2 CPU + 可选 CUDA；`compute=auto` 与 hybrid 正交可接受
 - [x] 反量化 = rotated-space；embedding 原域 gather；线性层 HDM 或原域 linear 可接受
 - [x] 五 crate 命名与目录映射可接受

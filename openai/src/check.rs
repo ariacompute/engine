@@ -457,10 +457,6 @@ async fn list_hub_files(
                 io::Error::new(io::ErrorKind::NotFound, "ModelScope listing failed")
             }))
         }
-        DownloadSource::Dashboard => Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "check does not use dashboard",
-        )),
     }
 }
 
@@ -485,7 +481,6 @@ async fn get_json(
                 match source {
                     DownloadSource::HuggingFace => "hf_token",
                     DownloadSource::ModelScope => "modelscope_api_token",
-                    DownloadSource::Dashboard => "hf_token",
                 }
             ),
         ));

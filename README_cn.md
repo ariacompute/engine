@@ -62,7 +62,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 ```
 
-`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope）。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `aria-engine setup` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/engine.yml`。
+`download` 每次运行只探测**本区**公开 hub（`.com`→Hugging Face，`.cn`→ModelScope），**不**走 Dashboard，也**不**直连公开 S3/COS registry。私有/需授权的 hub 文件在未配置 token 时会报 `auth failed HTTP 401`：用 `aria-engine setup` 按区写入对应 token（`.com` → `hf_token`，`.cn` → `modelscope_api_token`）到 `~/.ariacompute/engine.yml`。
 
 `list` 只扫描本地 `~/.ariacompute/models`。
 

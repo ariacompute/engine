@@ -63,7 +63,7 @@ aria-engine serve gemma-4-e2b-it_q4 \
   --compute auto
 ```
 
-`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). Gated/private hub files return `auth failed HTTP 401` unless `aria-engine setup` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/engine.yml`.
+`download` probes the regional public hub each run (`.com` → Hugging Face, `.cn` → ModelScope). It does **not** use Dashboard or public S3/COS registry URLs. Gated/private hub files return `auth failed HTTP 401` unless `aria-engine setup` has stored the matching token (`hf_token` on `.com`, `modelscope_api_token` on `.cn`) in `~/.ariacompute/engine.yml`.
 
 `list` scans local `~/.ariacompute/models` only.
 

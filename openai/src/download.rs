@@ -4,8 +4,6 @@ use crate::config::{self, AriaConfig};
 use crate::gateway_detect::GatewayPair;
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
-#[cfg(test)]
-use serde::Deserialize;
 use std::fs;
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
@@ -15,9 +13,9 @@ const DEFAULT_SDK: &str = "v1.0";
 const PROBE_TIMEOUT: Duration = Duration::from_secs(3);
 const PROBE_BYTES: usize = 64 * 1024;
 
+/// Regional public hub only (Hugging Face or ModelScope). No Dashboard / S3.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DownloadSource {
-    Dashboard,
     HuggingFace,
     ModelScope,
 }
@@ -25,7 +23,6 @@ pub enum DownloadSource {
 impl DownloadSource {
     pub fn as_str(self) -> &'static str {
         match self {
-            Self::Dashboard => "dashboard",
             Self::HuggingFace => "huggingface",
             Self::ModelScope => "modelscope",
         }
@@ -299,7 +296,6 @@ pub(crate) fn hub_repo_candidates(
                 out.push((format!("AriaCompute/{name}"), name.clone()));
                 out.push(("AriaCompute/model".into(), name));
             }
-            DownloadSource::Dashboard => {}
         }
     }
     out
@@ -325,7 +321,6 @@ pub(crate) fn hub_file_urls(source: DownloadSource, bundle: &BundleRef, file: &s
                     bundle.sdk, name, file
                 ));
             }
-            DownloadSource::Dashboard => {}
         }
     }
     urls
@@ -335,7 +330,6 @@ fn hub_token_field(source: DownloadSource) -> &'static str {
     match source {
         DownloadSource::HuggingFace => "hf_token",
         DownloadSource::ModelScope => "modelscope_api_token",
-        DownloadSource::Dashboard => "hf_token",
     }
 }
 
@@ -343,7 +337,6 @@ pub(crate) fn hub_token(source: DownloadSource, cfg: &AriaConfig) -> Option<Stri
     let raw = match source {
         DownloadSource::HuggingFace => cfg.hf_token.as_str(),
         DownloadSource::ModelScope => cfg.modelscope_api_token.as_str(),
-        DownloadSource::Dashboard => "",
     };
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -443,21 +436,7 @@ pub struct ListedModel {
     pub status: String,
 }
 
-#[derive(Debug, Deserialize)]
-#[cfg(test)]
-struct CatalogModel {
-    slug: String,
-    #[serde(default)]
-    available: bool,
-    #[serde(default, rename = "int4DownloadUrl")]
-    int4_download_url: String,
-    #[serde(default, rename = "int8DownloadUrl")]
-    int8_download_url: String,
-    #[serde(default, rename = "int326DownloadUrl")]
-    int326_download_url: String,
-}
-
-/// Local-only listing (catalog / Dashboard removed).
+/// Local-only listing (no remote catalog / Dashboard / S3).
 pub async fn list_models_with_catalog(_cfg: &AriaConfig) -> io::Result<Vec<ListedModel>> {
     let local = local_model_status()?;
     let mut rows: Vec<ListedModel> = local
@@ -472,97 +451,6 @@ pub async fn list_models_with_catalog(_cfg: &AriaConfig) -> io::Result<Vec<Liste
         .collect();
     rows.sort_by(|a, b| a.name.cmp(&b.name));
     Ok(rows)
-}
-
-#[cfg(test)]
-fn merge_catalog_and_local(
-    catalog_bundles: Vec<String>,
-    local: std::collections::HashMap<String, LocalStatus>,
-) -> Vec<ListedModel> {
-    let mut seen = std::collections::HashSet::new();
-    let mut rows = Vec::new();
-
-    for bundle in catalog_bundles {
-        seen.insert(bundle.clone());
-        let status = match lookup_local_status(&local, &bundle) {
-            Some(LocalStatus::Valid) => "downloaded",
-            Some(LocalStatus::Incomplete) => "incomplete",
-            None => "not downloaded",
-        };
-        rows.push(ListedModel {
-            name: bundle,
-            status: status.into(),
-        });
-    }
-
-    let mut orphans: Vec<_> = local
-        .into_iter()
-        .filter(|(name, _)| !covered_by_catalog(name, &seen))
-        .collect();
-    orphans.sort_by(|a, b| a.0.cmp(&b.0));
-    for (name, st) in orphans {
-        rows.push(ListedModel {
-            name,
-            status: match st {
-                LocalStatus::Valid => "downloaded".into(),
-                LocalStatus::Incomplete => "incomplete".into(),
-            },
-        });
-    }
-    rows
-}
-
-#[cfg(test)]
-fn lookup_local_status(
-    local: &std::collections::HashMap<String, LocalStatus>,
-    catalog_name: &str,
-) -> Option<LocalStatus> {
-    if let Some(&st) = local.get(catalog_name) {
-        return Some(st);
-    }
-    let mut incomplete = None;
-    for alias in config::bundle_cache_aliases(catalog_name) {
-        match local.get(&alias) {
-            Some(LocalStatus::Valid) => return Some(LocalStatus::Valid),
-            Some(LocalStatus::Incomplete) => incomplete = Some(LocalStatus::Incomplete),
-            None => {}
-        }
-    }
-    incomplete
-}
-
-#[cfg(test)]
-fn covered_by_catalog(name: &str, seen: &std::collections::HashSet<String>) -> bool {
-    seen.contains(name)
-        || config::bundle_cache_aliases(name)
-            .iter()
-            .any(|alias| seen.contains(alias))
-}
-
-#[cfg(test)]
-fn expand_catalog_bundles(catalog: &[CatalogModel]) -> Vec<String> {
-    let mut names = Vec::new();
-    for item in catalog {
-        if !item.available {
-            continue;
-        }
-        let slug = item.slug.trim();
-        if slug.is_empty() {
-            continue;
-        }
-        if !item.int4_download_url.trim().is_empty() {
-            names.push(format!("{slug}_q4"));
-        }
-        if !item.int8_download_url.trim().is_empty() {
-            names.push(format!("{slug}_q8"));
-        }
-        if !item.int326_download_url.trim().is_empty() {
-            names.push(format!("{slug}_q326"));
-        }
-    }
-    names.sort();
-    names.dedup();
-    names
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -702,41 +590,6 @@ mod tests {
     }
 
     #[test]
-    fn expand_available_quants_to_bundles() {
-        let catalog = vec![
-            CatalogModel {
-                slug: "gemma-4-e2b-it".into(),
-                available: true,
-                int4_download_url: "https://x/int4".into(),
-                int8_download_url: "https://x/int8".into(),
-                int326_download_url: String::new(),
-            },
-            CatalogModel {
-                slug: "hidden".into(),
-                available: false,
-                int4_download_url: "https://x/int4".into(),
-                int8_download_url: String::new(),
-                int326_download_url: String::new(),
-            },
-            CatalogModel {
-                slug: "only326".into(),
-                available: true,
-                int4_download_url: String::new(),
-                int8_download_url: String::new(),
-                int326_download_url: "https://x/int326".into(),
-            },
-        ];
-        assert_eq!(
-            expand_catalog_bundles(&catalog),
-            vec![
-                "gemma-4-e2b-it_q4".to_string(),
-                "gemma-4-e2b-it_q8".to_string(),
-                "only326_q326".to_string(),
-            ]
-        );
-    }
-
-    #[test]
     fn preferred_hub_follows_site_tld() {
         assert_eq!(
             preferred_public_hub("https://ariacompute.com"),
@@ -750,54 +603,22 @@ mod tests {
     }
 
     #[test]
-    fn download_never_selects_dashboard() {
-        assert_ne!(
-            preferred_public_hub("https://ariacompute.com"),
-            DownloadSource::Dashboard
-        );
-        assert_ne!(
-            preferred_public_hub("https://ariacompute.cn"),
-            DownloadSource::Dashboard
-        );
-    }
-
-    #[test]
-    fn list_maps_q326_channel_to_catalog_q326() {
-        let local = std::collections::HashMap::from([(
-            "gemma-3-1b-it_q326_channel".to_string(),
-            LocalStatus::Valid,
-        )]);
-        let rows = merge_catalog_and_local(
-            vec!["gemma-3-1b-it_q4".into(), "gemma-3-1b-it_q326".into()],
-            local,
-        );
-        assert_eq!(
-            rows,
-            vec![
-                ListedModel {
-                    name: "gemma-3-1b-it_q4".into(),
-                    status: "not downloaded".into(),
-                },
-                ListedModel {
-                    name: "gemma-3-1b-it_q326".into(),
-                    status: "downloaded".into(),
-                },
-            ]
-        );
-    }
-
-    #[test]
-    fn list_does_not_orphan_q326_channel_when_catalog_has_q326() {
-        let local = std::collections::HashMap::from([
-            ("gemma-3-1b-it_q326_channel".to_string(), LocalStatus::Valid),
-            ("local-only_q4".to_string(), LocalStatus::Valid),
-        ]);
-        let rows = merge_catalog_and_local(vec!["gemma-3-1b-it_q326".into()], local);
-        assert_eq!(rows.len(), 2);
-        assert_eq!(rows[0].name, "gemma-3-1b-it_q326");
-        assert_eq!(rows[0].status, "downloaded");
-        assert_eq!(rows[1].name, "local-only_q4");
-        assert_eq!(rows[1].status, "downloaded");
+    fn preferred_hub_is_only_hf_or_ms() {
+        for site in [
+            "https://ariacompute.com",
+            "https://ariacompute.cn",
+            "https://www.ariacompute.com",
+            "",
+        ] {
+            let src = preferred_public_hub(site);
+            assert!(
+                matches!(
+                    src,
+                    DownloadSource::HuggingFace | DownloadSource::ModelScope
+                ),
+                "site={site:?} source={src:?}"
+            );
+        }
     }
 
     #[tokio::test]
