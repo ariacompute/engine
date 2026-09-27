@@ -1,0 +1,15 @@
+{
+  "id": "dd-choice-1",
+  "task": "choice",
+  "instructions": "pick",
+  "options": [
+    {"name": "a", "description": "alpha"},
+    {"name": "b", "description": "beta"}
+  ],
+  "state": "s",
+  "semif_out": {
+    "option_ids": ["a", "b"],
+    "probabilities": [0.1, 0.9]
+  },
+  "expect_choice": "b"
+}

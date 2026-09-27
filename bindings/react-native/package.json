@@ -1,0 +1,8 @@
+{
+  "name": "@ariacompute/engine-rn",
+  "version": "0.1.0",
+  "description": "React Native binding for AFM-D System One",
+  "main": "src/index.js",
+  "license": "MIT",
+  "files": ["src", "README.md"]
+}

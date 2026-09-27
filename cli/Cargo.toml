@@ -1,0 +1,44 @@
+[package]
+name = "aria-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "AFM-D aria-engine CLI (setup/download/upgrade/serve/decide)"
+publish = false
+
+[features]
+default = []
+cuda = ["ariacompute-de/cuda", "ariacompute-dd/cuda"]
+
+[[bin]]
+name = "aria-engine"
+path = "src/main.rs"
+
+[build-dependencies]
+
+[dependencies]
+ariacompute-core = { workspace = true }
+ariacompute-de = { workspace = true }
+ariacompute-dd = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+anyhow = { workspace = true }
+axum = { workspace = true }
+tokio = { workspace = true }
+tower = { workspace = true }
+reqwest = { workspace = true }
+indicatif = { workspace = true }
+clap = { workspace = true }
+dirs = { workspace = true }
+sha2 = { workspace = true }
+flate2 = { workspace = true }
+tar = { workspace = true }
+zip = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }
+tokio = { workspace = true }

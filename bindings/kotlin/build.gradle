@@ -1,0 +1,58 @@
+import com.vanniktech.maven.publish.SonatypeHost
+
+plugins {
+    id 'java-library'
+    id 'org.jetbrains.kotlin.jvm' version '2.0.21'
+    id 'com.vanniktech.maven.publish' version '0.30.0'
+}
+
+group = 'com.ariacompute'
+version = System.getenv('ARIA_VERSION') ?: '0.1.0'
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+kotlin {
+    jvmToolchain(17)
+}
+
+dependencies {
+    implementation 'org.json:json:20240303'
+    testImplementation 'org.jetbrains.kotlin:kotlin-test-junit'
+}
+
+mavenPublishing {
+    publishToMavenCentral(SonatypeHost.CENTRAL_PORTAL, true)
+    signAllPublications()
+    coordinates('com.ariacompute', 'engine', project.version.toString())
+    pom {
+        name = 'Aria Engine'
+        description = 'AFM-D System One Kotlin binding'
+        url = 'https://github.com/ariacompute/engine'
+        licenses {
+            license {
+                name = 'MIT'
+                url = 'https://opensource.org/licenses/MIT'
+            }
+        }
+        developers {
+            developer {
+                id = 'ariacompute'
+                name = 'Aria Compute'
+            }
+        }
+        scm {
+            url = 'https://github.com/ariacompute/engine'
+        }
+    }
+}
+
+def gpgKey = System.getenv('GPG_PRIVATE_KEY')
+def gpgPass = System.getenv('GPG_PASSPHRASE')
+if (gpgKey != null && !gpgKey.isEmpty()) {
+    signing {
+        useInMemoryPgpKeys(gpgKey, gpgPass ?: '')
+    }
+}

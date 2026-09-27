@@ -1,0 +1,12 @@
+{
+  "id": "noul-1",
+  "task": "noul",
+  "instructions": "Does the statement hold?",
+  "options": [
+    {"name": "yes", "description": "holds"},
+    {"name": "no", "description": "does not"}
+  ],
+  "state": "The sky is blue.",
+  "logits": [0.2, 1.8],
+  "expect_noul_gt": 0.5
+}

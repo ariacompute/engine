@@ -1,0 +1,204 @@
+name: Release
+
+on:
+  release:
+    types:
+      - created
+
+env:
+  CARGO_TERM_COLOR: always
+  BIN_NAME: aria-engine
+
+jobs:
+  build:
+    name: Build & Test (${{ matrix.name }})
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux-x86_64
+            os: ubuntu-latest
+            asset_os: linux_x86_64
+            archive: tar.gz
+          - name: windows-x86_64
+            os: windows-latest
+            asset_os: windows_x86_64
+            archive: zip
+          - name: linux-arm64
+            os: ubuntu-24.04-arm
+            asset_os: linux_arm64
+            archive: tar.gz
+          - name: macos
+            os: macos-latest
+            asset_os: macos
+            archive: tar.gz
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Build
+        run: cargo build --workspace
+
+      - name: Test
+        run: cargo test --workspace
+
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build release binary
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+        run: |
+          set -euo pipefail
+          # Embed release tag (sans leading v) into aria-engine -v/--version.
+          export ARIA_ENGINE_VERSION="${TAG_NAME#v}"
+          echo "ARIA_ENGINE_VERSION=$ARIA_ENGINE_VERSION"
+          cargo build --release -p aria-cli
+          cargo build --release -p ariacompute-ffi
+
+      - name: Package release archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          ASSET_OS: ${{ matrix.asset_os }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          ARCHIVE_NAME="aria-engine_${VERSION}_${ASSET_OS}.tar.gz"
+          tar -czf "$ARCHIVE_NAME" -C target/release "$BIN_NAME"
+          echo "ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
+      - name: Package release archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          ASSET_OS: ${{ matrix.asset_os }}
+        run: |
+          $version = $env:TAG_NAME.TrimStart('v')
+          $archiveName = "aria-engine_${version}_$($env:ASSET_OS).zip"
+          Compress-Archive -Path "target/release/$($env:BIN_NAME).exe" -DestinationPath $archiveName -Force
+          Add-Content -Path $env:GITHUB_ENV -Value "ASSET_PATH=$archiveName"
+
+      - name: Package libaria-engine_ffi (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          ASSET_OS: ${{ matrix.asset_os }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          ARCHIVE_NAME="libaria-engine_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          cd target/release
+          if [[ -f libaria_ffi.dylib ]]; then
+            cp libaria_ffi.dylib libaria-engine_ffi.dylib
+            tar -czf "../../$ARCHIVE_NAME" libaria-engine_ffi.dylib
+          elif [[ -f libaria_ffi.so ]]; then
+            cp libaria_ffi.so libaria-engine_ffi.so
+            tar -czf "../../$ARCHIVE_NAME" libaria-engine_ffi.so
+          elif [[ -f libaria_ffi.a ]]; then
+            cp libaria_ffi.a libaria-engine_ffi.a
+            tar -czf "../../$ARCHIVE_NAME" libaria-engine_ffi.a
+          else
+            echo "No libaria-engine_ffi shared/static library found in target/release" >&2
+            ls -la
+            exit 1
+          fi
+          cd ../..
+          echo "FFI_ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
+      - name: Package libaria-engine_ffi (Windows)
+        if: matrix.archive == 'zip'
+        shell: bash
+        env:
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          ASSET_OS: ${{ matrix.asset_os }}
+        run: |
+          set -euo pipefail
+          VERSION="${TAG_NAME#v}"
+          ARCHIVE_NAME="libaria-engine_ffi_${VERSION}_${ASSET_OS}.tar.gz"
+          cd target/release
+          if [[ -f aria_ffi.dll ]]; then
+            cp aria_ffi.dll aria-engine_ffi.dll
+            FILES=(aria-engine_ffi.dll)
+            if [[ -f aria_ffi.dll.lib ]]; then
+              cp aria_ffi.dll.lib aria-engine_ffi.dll.lib
+              FILES+=(aria-engine_ffi.dll.lib)
+            fi
+            if [[ -f aria_ffi.lib ]]; then
+              cp aria_ffi.lib aria-engine_ffi.lib
+              FILES+=(aria-engine_ffi.lib)
+            fi
+            tar -czf "../../$ARCHIVE_NAME" "${FILES[@]}"
+          else
+            echo "No aria-engine_ffi.dll found in target/release" >&2
+            ls -la
+            exit 1
+          fi
+          cd ../..
+          echo "FFI_ASSET_PATH=$ARCHIVE_NAME" >> "$GITHUB_ENV"
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.release.tag_name }}
+          files: |
+            ${{ env.ASSET_PATH }}
+            ${{ env.FFI_ASSET_PATH }}
+          token: ${{ secrets.ARIACOMPUTE_TOKEN }}
+
+  # Language package publishes are fail-pass: must not block CLI/assets.
+  publish-packages:
+    name: Publish language packages (fail-pass)
+    needs: build
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Set package version from tag
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          echo "VERSION=$VERSION"
+      - name: npm @ariacompute/engine-ts + engine-rn
+        continue-on-error: true
+        run: |
+          echo "npm publish handled by publish-npm.yml (engine-ts built via tsc, engine-rn plain JS)"
+          echo "npm publish stub (fail-pass)"
+      - name: pub.dev package:aria_engine
+        continue-on-error: true
+        run: |
+          echo "pub.dev publish handled by publish-pub.yml (publisher ariacompute.com, package:aria_engine)"
+          echo "pub.dev publish stub (fail-pass)"
+      - name: Maven Central com.ariacompute:engine
+        continue-on-error: true
+        run: |
+          echo "Maven publish handled by publish-maven.yml (vanniktech plugin -> Central Portal)"
+          echo "Maven publish stub (fail-pass)"
+      - name: CocoaPods Swift
+        continue-on-error: true
+        run: |
+          echo "CocoaPods publish handled by publish-cocoapods.yml"
+          echo "CocoaPods publish stub (fail-pass)"
+      - name: crates.io ariacompute-engine
+        continue-on-error: true
+        run: |
+          echo "crates.io publish handled by publish-cargo.yml (ariacompute-engine + deps)"
+          echo "crates.io publish stub (fail-pass)"
+      - name: PyPI aria-engine
+        continue-on-error: true
+        run: |
+          echo "PyPI publish handled by publish-pypi.yml (cibuildwheel platform wheels)"
+          echo "PyPI publish stub (fail-pass)"

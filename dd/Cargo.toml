@@ -1,0 +1,23 @@
+[package]
+name = "ariacompute-dd"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "AFM-D Decoder (afm_dd): SemIf direct + MiniCPM±LoRA mapping"
+
+[features]
+default = []
+cuda = []
+
+[dependencies]
+ariacompute-core = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+candle-core = { workspace = true }
+candle-nn = { workspace = true }
+safetensors = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

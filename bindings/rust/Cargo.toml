@@ -1,0 +1,24 @@
+[package]
+name = "ariacompute-engine"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Rust SDK for AFM-D engine (thin wrapper over ariacompute-ffi / core)"
+readme = "README.md"
+keywords = ["aria", "afm-d", "systemone"]
+categories = ["api-bindings"]
+
+[lib]
+name = "aria_engine"
+
+[dependencies]
+ariacompute-core = { workspace = true }
+ariacompute-ffi = { workspace = true }
+ariacompute-de = { workspace = true }
+ariacompute-dd = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+tempfile = { workspace = true }

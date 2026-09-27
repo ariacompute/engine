@@ -1,0 +1,20 @@
+{
+  "name": "@ariacompute/engine-ts",
+  "version": "0.1.0",
+  "description": "TypeScript/Node SDK for AFM-D System One (koffi over libaria-engine_ffi)",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p .",
+    "test": "node --test test/binding.test.mjs"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "koffi": "^2.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "typescript": "^5.4.0"
+  },
+  "files": ["dist", "README.md"]
+}

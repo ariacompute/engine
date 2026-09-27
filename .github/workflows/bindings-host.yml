@@ -1,0 +1,41 @@
+name: Bindings Host
+
+on:
+  pull_request:
+    paths:
+      - "ffi/**"
+      - "bindings/**"
+      - "scripts/run-binding-tests.sh"
+      - "scripts/prepare-binding-fixture.sh"
+      - ".github/workflows/bindings-host.yml"
+  push:
+    branches: [main]
+    paths:
+      - "ffi/**"
+      - "bindings/**"
+      - "scripts/run-binding-tests.sh"
+      - "scripts/prepare-binding-fixture.sh"
+      - ".github/workflows/bindings-host.yml"
+  workflow_dispatch:
+
+jobs:
+  host-matrix:
+    name: Host binding suites
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Run binding host tests
+        run: |
+          chmod +x scripts/run-binding-tests.sh scripts/prepare-binding-fixture.sh
+          ./scripts/run-binding-tests.sh

@@ -1,0 +1,12 @@
+{
+  "id": "choice-1",
+  "task": "choice",
+  "instructions": "Select the fruit",
+  "options": [
+    {"name": "apple", "description": "a red fruit"},
+    {"name": "carrot", "description": "an orange vegetable"}
+  ],
+  "state": "The user wants something sweet and red.",
+  "logits": [2.5, 0.1],
+  "expect_choice": "apple"
+}

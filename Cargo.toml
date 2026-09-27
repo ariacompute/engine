@@ -1,0 +1,47 @@
+[workspace]
+resolver = "2"
+members = [
+    "core",
+    "de",
+    "dd",
+    "cli",
+    "ffi",
+    "bindings/rust",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+authors = ["Aria Compute"]
+repository = "https://github.com/ariacompute/engine"
+
+[workspace.dependencies]
+ariacompute-core = { path = "core", version = "0.1.0" }
+ariacompute-de = { path = "de", version = "0.1.0" }
+ariacompute-dd = { path = "dd", version = "0.1.0" }
+ariacompute-ffi = { path = "ffi", version = "0.1.0" }
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+anyhow = "1"
+axum = { version = "0.8", features = ["json"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "fs"] }
+tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "stream"] }
+indicatif = "0.17"
+clap = { version = "4.5", features = ["derive"] }
+dirs = "5"
+sha2 = "0.10"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+tempfile = "3"
+tokenizers = { version = "0.21", default-features = false, features = ["onig"] }
+safetensors = "0.4"
+candle-core = "0.8"
+candle-nn = "0.8"
+hf-hub = { version = "0.4", default-features = false, features = ["tokio", "rustls-tls"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
