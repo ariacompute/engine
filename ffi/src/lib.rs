@@ -174,7 +174,9 @@ pub extern "C" fn aria_systemone(
                 return -2;
             }
             unsafe {
-                let slice = slice::from_raw_parts_mut(out as *mut u8, out_len);
+                // c_char is u8 on some targets (e.g. aarch64 linux) and i8 on others;
+                // Pointer::cast stays portable without an unnecessary `as` cast.
+                let slice = slice::from_raw_parts_mut(out.cast::<u8>(), out_len);
                 slice[..bytes.len()].copy_from_slice(bytes);
                 slice[bytes.len()] = 0;
             }
