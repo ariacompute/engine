@@ -2,8 +2,7 @@
 
 use ariacompute_core::contract::Track;
 use ariacompute_core::error::{AfmError, Result};
-use ariacompute_core::packing::Record;
-use ariacompute_core::systemone::{record_from_systemone_question, SystemOneRequest};
+use ariacompute_core::systemone::record_from_systemone_question;
 use ariacompute_dd::DecoderScorer;
 use ariacompute_de::EncoderScorer;
 use serde_json::{json, Map, Value};
@@ -11,6 +10,8 @@ use std::path::{Path, PathBuf};
 
 pub use ariacompute_core::config::{aria_home, load_config, save_config, AriaConfig};
 pub use ariacompute_core::contract::Track as EngineTrack;
+pub use ariacompute_core::packing::Record;
+pub use ariacompute_core::systemone::SystemOneRequest;
 
 enum Inner {
     Encoder(Box<EncoderScorer>),

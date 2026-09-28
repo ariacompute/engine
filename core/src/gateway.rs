@@ -42,6 +42,34 @@ impl GatewayPair {
         }
         Self::Intl
     }
+
+    pub fn is_cn(self) -> bool {
+        self == Self::Cn
+    }
+}
+
+/// Public model hub selected from `site_url`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PublicHub {
+    HuggingFace,
+    ModelScope,
+}
+
+impl PublicHub {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::HuggingFace => "huggingface",
+            Self::ModelScope => "modelscope",
+        }
+    }
+}
+
+/// `.cn` (or gitee) sites → ModelScope; otherwise Hugging Face.
+pub fn preferred_hub(site_url: &str) -> PublicHub {
+    match GatewayPair::from_url(site_url) {
+        GatewayPair::Cn => PublicHub::ModelScope,
+        GatewayPair::Intl => PublicHub::HuggingFace,
+    }
 }
 
 #[cfg(test)]
@@ -50,7 +78,26 @@ mod tests {
 
     #[test]
     fn upgrade_urls() {
-        assert_eq!(GatewayPair::INTL.upgrade_url(), "https://github.com/ariacompute");
-        assert_eq!(GatewayPair::CN.upgrade_url(), "https://gitee.com/ariacompute");
+        assert_eq!(
+            GatewayPair::INTL.upgrade_url(),
+            "https://github.com/ariacompute"
+        );
+        assert_eq!(
+            GatewayPair::CN.upgrade_url(),
+            "https://gitee.com/ariacompute"
+        );
+    }
+
+    #[test]
+    fn preferred_hub_by_site() {
+        assert_eq!(
+            preferred_hub("https://ariacompute.com"),
+            PublicHub::HuggingFace
+        );
+        assert_eq!(
+            preferred_hub("https://ariacompute.cn"),
+            PublicHub::ModelScope
+        );
+        assert_eq!(preferred_hub(""), PublicHub::HuggingFace);
     }
 }

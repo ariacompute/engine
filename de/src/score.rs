@@ -1,6 +1,7 @@
-//! Encoder scoring: pack → (optional) forward → typed answer.
+//! Encoder scoring: pack → candle DecisionModel forward → typed answer.
 
 use std::path::Path;
+use std::sync::Arc;
 
 use ariacompute_core::contract::DECISION_TEMPERATURE;
 use ariacompute_core::error::{AfmError, Result};
@@ -10,6 +11,7 @@ use ariacompute_core::typed::softmax;
 use serde_json::Value;
 
 use crate::checkpoint::EncoderCheckpoint;
+use crate::model::DecisionModel;
 use crate::shortlist::maybe_shortlist;
 use crate::tokenizer::{encode_no_special, load_tokenizer, special_ids};
 
@@ -26,21 +28,31 @@ pub fn score_record_logits(record: &Record, logits: &[f32], temperature: f32) ->
     answer_from_probs(record, &probs)
 }
 
-/// Encoder scorer. Full candle ModernBERT+head forward runs when weights are present;
-/// without weights, [`EncoderScorer::score_record`] returns an error unless
-/// `score_record_with_logits` is used (parity / golden tests).
+/// Encoder scorer with optional loaded candle DecisionModel.
 pub struct EncoderScorer {
     pub checkpoint: EncoderCheckpoint,
     tokenizer: Option<tokenizers::Tokenizer>,
+    model: Option<Arc<DecisionModel>>,
 }
 
 impl EncoderScorer {
     pub fn open(root: impl AsRef<Path>) -> Result<Self> {
         let checkpoint = EncoderCheckpoint::open(root)?;
         let tokenizer = load_tokenizer(&checkpoint.tokenizer_dir).ok();
+        let model = if checkpoint.has_weights() {
+            let head_layers = checkpoint.config.head_layers;
+            Some(Arc::new(DecisionModel::load(
+                &checkpoint.encoder_dir,
+                &checkpoint.weights_path,
+                head_layers,
+            )?))
+        } else {
+            None
+        };
         Ok(Self {
             checkpoint,
             tokenizer,
+            model,
         })
     }
 
@@ -70,26 +82,28 @@ impl EncoderScorer {
         score_record_logits(&rec, logits, DECISION_TEMPERATURE)
     }
 
-    /// Run inference. Requires `model.safetensors`; until candle ModernBERT parity lands,
-    /// this returns a structured error. Use `score_record_with_logits` for golden tests.
+    /// Pack + DecisionModel forward + softmax → System One answer.
     pub fn score_record(&self, record: &Record) -> Result<Value> {
-        if !self.checkpoint.has_weights() {
-            return Err(AfmError::msg(format!(
+        let model = self.model.as_ref().ok_or_else(|| {
+            AfmError::msg(format!(
                 "encoder weights missing at {}; provide model.safetensors or use score_record_with_logits",
                 self.checkpoint.weights_path.display()
+            ))
+        })?;
+        if self.tokenizer.is_none() {
+            return Err(AfmError::msg("tokenizer not loaded for packing"));
+        }
+        let rec = maybe_shortlist(record, None);
+        let (input_ids, mask_positions) = self.pack_ids(&rec)?;
+        if mask_positions.len() != rec.options.len() {
+            return Err(AfmError::msg(format!(
+                "mask positions {} != options {}",
+                mask_positions.len(),
+                rec.options.len()
             )));
         }
-        // Weights present: pack for validation; full candle DecisionModel forward is
-        // gated behind loading ModernBERT — surface clear path for CLI/serve.
-        let _packed = if self.tokenizer.is_some() {
-            Some(self.pack_ids(record)?)
-        } else {
-            None
-        };
-        Err(AfmError::msg(
-            "encoder candle DecisionModel forward not yet loaded for this checkpoint; \
-             packing/config OK — run golden tests via score_record_with_logits until Hub weights are wired",
-        ))
+        let logits = model.forward_logits(&input_ids, &mask_positions, rec.task.type_id())?;
+        score_record_logits(&rec, &logits, DECISION_TEMPERATURE)
     }
 }
 

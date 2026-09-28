@@ -20,6 +20,7 @@ tokenizers = { workspace = true }
 safetensors = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }

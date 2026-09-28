@@ -3,6 +3,8 @@ use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
+use crate::gateway::{preferred_hub, PublicHub};
+
 /// Resolve `$HOME/.ariacompute` (overridable via `ARIA_COMPUTE_HOME`).
 pub fn aria_home() -> io::Result<PathBuf> {
     if let Ok(override_home) = std::env::var("ARIA_COMPUTE_HOME") {
@@ -36,6 +38,11 @@ pub fn engine_yml_path() -> io::Result<PathBuf> {
     Ok(aria_home()?.join("engine.yml"))
 }
 
+pub fn legacy_config_path() -> io::Result<PathBuf> {
+    Ok(aria_home()?.join("config.yml"))
+}
+
+/// Five-field engine.yml (no router).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AriaConfig {
     #[serde(default)]
@@ -66,15 +73,68 @@ impl Default for AriaConfig {
     }
 }
 
+fn keep_or_replace(existing: &str, entered: &str) -> String {
+    if entered.is_empty() {
+        existing.to_string()
+    } else {
+        entered.to_string()
+    }
+}
+
+/// `.com` → update HF token; `.cn` → update ModelScope token. The other field is left as-is.
+pub fn apply_hub_token_input(existing: &AriaConfig, cn: bool, entered: &str) -> (String, String) {
+    if cn {
+        (
+            existing.hf_token.clone(),
+            keep_or_replace(&existing.modelscope_api_token, entered),
+        )
+    } else {
+        (
+            keep_or_replace(&existing.hf_token, entered),
+            existing.modelscope_api_token.clone(),
+        )
+    }
+}
+
+/// Hub token for the preferred public hub of `site_url` (empty → None).
+pub fn hub_token_for_site(cfg: &AriaConfig) -> Option<String> {
+    let raw = match preferred_hub(&cfg.site_url) {
+        PublicHub::HuggingFace => cfg.hf_token.as_str(),
+        PublicHub::ModelScope => cfg.modelscope_api_token.as_str(),
+    };
+    let t = raw.trim();
+    if t.is_empty() {
+        None
+    } else {
+        Some(t.to_string())
+    }
+}
+
+pub fn parse_compute(s: &str) -> Result<String, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "auto" | "cpu" | "cuda" => Ok(s.trim().to_ascii_lowercase()),
+        other => Err(format!(
+            "invalid compute {other:?}; expected auto|cpu|cuda"
+        )),
+    }
+}
+
 pub fn load_config() -> io::Result<AriaConfig> {
     let path = engine_yml_path()?;
-    if !path.is_file() {
-        return Ok(AriaConfig::default());
+    if path.is_file() {
+        let text = fs::read_to_string(&path)?;
+        let cfg: AriaConfig = serde_yaml::from_str(&text)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        return Ok(cfg);
     }
-    let text = fs::read_to_string(&path)?;
-    let cfg: AriaConfig = serde_yaml::from_str(&text)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    Ok(cfg)
+    let legacy = legacy_config_path()?;
+    if legacy.is_file() {
+        let text = fs::read_to_string(&legacy)?;
+        let cfg: AriaConfig = serde_yaml::from_str(&text)
+            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        return Ok(cfg);
+    }
+    Ok(AriaConfig::default())
 }
 
 pub fn save_config(cfg: &AriaConfig) -> io::Result<()> {
@@ -91,7 +151,11 @@ pub fn save_config(cfg: &AriaConfig) -> io::Result<()> {
 pub fn clear_config() -> io::Result<()> {
     let path = engine_yml_path()?;
     if path.is_file() {
-        fs::remove_file(path)?;
+        fs::remove_file(&path)?;
+    }
+    let legacy = legacy_config_path()?;
+    if legacy.is_file() {
+        fs::remove_file(&legacy)?;
     }
     Ok(())
 }
@@ -108,4 +172,42 @@ pub fn resolve_checkpoint(ref_: &str) -> PathBuf {
     models_dir()
         .map(|d| d.join(ref_))
         .unwrap_or_else(|_| p.to_path_buf())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn apply_hub_token_input_intl_only_updates_hf() {
+        let existing = AriaConfig {
+            hf_token: "old_hf".into(),
+            modelscope_api_token: "old_ms".into(),
+            ..Default::default()
+        };
+        let (hf, ms) = apply_hub_token_input(&existing, false, "new_hf");
+        assert_eq!(hf, "new_hf");
+        assert_eq!(ms, "old_ms");
+        let (hf, ms) = apply_hub_token_input(&existing, false, "");
+        assert_eq!(hf, "old_hf");
+        assert_eq!(ms, "old_ms");
+    }
+
+    #[test]
+    fn apply_hub_token_input_cn_only_updates_modelscope() {
+        let existing = AriaConfig {
+            hf_token: "old_hf".into(),
+            modelscope_api_token: "old_ms".into(),
+            ..Default::default()
+        };
+        let (hf, ms) = apply_hub_token_input(&existing, true, "new_ms");
+        assert_eq!(hf, "old_hf");
+        assert_eq!(ms, "new_ms");
+    }
+
+    #[test]
+    fn parse_compute_ok() {
+        assert_eq!(parse_compute("CUDA").unwrap(), "cuda");
+        assert!(parse_compute("gpu").is_err());
+    }
 }

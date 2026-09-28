@@ -46,6 +46,13 @@
 ### T7 — 文档
 - [x] `requirements.md` / `task.md` 与 AFM-D 产品面对齐（本文件）
 
+### T8 — setup 五字段（无 router）
+- [x] `apply_hub_token_input` / `preferred_hub`；`clear` 含 legacy `config.yml`
+- [x] `cli/src/setup.rs`：交互 + `--status`/`--clear`/`--site-url`/`--upgrade-url`/`--compute`
+- [x] download：按 `site_url` 选 HF/ModelScope，**HTTP API**（tree + resolve）+ setup Bearer token（无 hub CLI）
+- [x] serve：读 `compute`（`--compute` 覆盖）；无 router 注册
+- [x] README / README_cn / requirements 同步五字段表
+
 ## 阶段 B — 权重前向 parity（进行中）
 
 ### T10 — Encoder candle 前向

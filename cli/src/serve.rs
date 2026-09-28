@@ -20,6 +20,8 @@ pub struct ServeOpts {
     pub checkpoint: PathBuf,
     pub model_name: String,
     pub bind: String,
+    /// Local compute preference from setup: auto | cpu | cuda (logged; device selection for candle).
+    pub compute: String,
 }
 
 enum Scorer {
@@ -104,13 +106,16 @@ fn score_one(scorer: &Scorer, record: &Record) -> Result<Value, String> {
 }
 
 pub async fn run_serve(opts: ServeOpts) -> anyhow::Result<()> {
+    let compute = ariacompute_core::config::parse_compute(&opts.compute)
+        .map_err(anyhow::Error::msg)?;
     let app = build_router(&opts)?;
     let listener = tokio::net::TcpListener::bind(&opts.bind).await?;
     tracing::info!(
-        "listening on http://{} track={} model={}",
+        "listening on http://{} track={} model={} compute={}",
         opts.bind,
         opts.track.as_str(),
-        opts.model_name
+        opts.model_name,
+        compute
     );
     axum::serve(listener, app).await?;
     Ok(())
