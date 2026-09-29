@@ -643,24 +643,35 @@ a `docker-compose.cuda.yml` GPU override.
 ### Build & run (CPU)
 
 ```bash
-cp .env.example .env          # set SITE_URL / HF_TOKEN or MODELSCOPE_API_TOKEN / COMPUTE
+cp .env.example .env          # set ARIA_DATA_DIR to your host ~/.ariacompute (absolute path)
 docker compose build
 docker compose up -d
 ```
 
-Both services share the `aria-data` named volume at `/data/aria`, which holds
-`engine.yml` (config) and `models/` (checkpoints). The entrypoint writes
-`engine.yml` from env vars **only when absent**, so a pre-mounted config is
-respected.
+Both services bind-mount your host `ARIA_DATA_DIR` (default `~/.ariacompute`)
+into `/data/aria`, so the `engine.yml` (config) and `models/` (checkpoints) you
+already downloaded on the host are used directly — **offline, no download**.
+The entrypoint writes `engine.yml` from env vars **only when absent**, so a
+pre-mounted config (e.g. the host's `~/.ariacompute/engine.yml`) is respected.
 
 ### Models
 
-- **Offline (default):** pre-populate the volume with downloaded weights
-  (`aria-engine download afm-de && aria-engine download afm-dd` on the host, or
-  mount a host dir that contains `~/.ariacompute/models/*`).
+- **Offline (default, `AUTO_DOWNLOAD=0`):** weights come from the host
+  `ARIA_DATA_DIR/models/{afm-de,afm-dd}`. Make sure both checkpoints are present
+  on the host (run `aria-engine download afm-de && aria-engine download afm-dd`
+  once on the host, or copy them into `~/.ariacompute/models/`).
 - **Auto-download:** set `AUTO_DOWNLOAD=1` in `.env`; the entrypoint runs
   `aria-engine download <model>` on first run (needs network + the matching hub
-  token). This is off by default.
+  token). A failed/blocked download is **non-fatal** — the container logs a
+  warning and only refuses to start if the checkpoint is still missing.
+
+> **Note — hub selection & network:** the container regenerates `engine.yml`
+> from `SITE_URL` when it is set, so `SITE_URL=https://ariacompute.cn` makes
+> downloads use **ModelScope** (where `afm-de` is published) instead of the
+> HuggingFace-baked host config. If the host only reaches the internet through a
+> local proxy, set `HTTPS_PROXY=http://host.docker.internal:<port>` in `.env`
+> (the compose file maps `host.docker.internal` to the host gateway); `127.0.0.1`
+> inside the container is the container itself, not the host.
 
 ### GPU (CUDA)
 
@@ -682,12 +693,14 @@ Set `COMPUTE=cuda` (done by the override) so candle selects the CUDA backend.
 | `ENGINE_IMAGE` | `aria-engine:latest` | Tag for the built image |
 | `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / *(defaults to `BUILD_IMAGE`)* | CPU build base; the runtime reuses it so glibc always matches. Only the CUDA override sets `RUNTIME_IMAGE` |
 | `FEATURES` | _(empty)_ | Build features; the CUDA override sets `cuda` |
-| `SITE_URL` / `UPGRADE_URL` | _(empty)_ | Region hub (`.com`→HF, `.cn`→ModelScope) |
+| `SITE_URL` / `UPGRADE_URL` | _(empty)_ | Region hub (`.com`→HF, `.cn`→ModelScope); when set, overrides the mounted config |
 | `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(empty)_ | Hub token for the active region |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | _(empty)_ | Optional egress proxy for downloads (use `host.docker.internal` for a host-local proxy) |
 | `COMPUTE` | `auto` | `auto` \| `cpu` \| `cuda` |
 | `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder service model + port |
 | `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder service model + port |
-| `AUTO_DOWNLOAD` | `0` | `1` to fetch weights on first run |
+| `ARIA_DATA_DIR` | `${HOME}/.ariacompute` | Host dir bind-mounted to `/data/aria` (config + models) |
+| `AUTO_DOWNLOAD` | `0` | `1` to fetch weights on first run (non-fatal if it fails) |
 | `RUST_LOG` | `info` | Rust tracing filter |
 
 ### Verify

@@ -643,22 +643,33 @@ GitHub Release 触发：`release.yml`（CLI + FFI 资产），以及 `publish-ca
 ### 构建与运行（CPU）
 
 ```bash
-cp .env.example .env          # 设置 SITE_URL / HF_TOKEN 或 MODELSCOPE_API_TOKEN / COMPUTE
+cp .env.example .env          # 将 ARIA_DATA_DIR 设为宿主的 ~/.ariacompute（绝对路径）
 docker compose build
 docker compose up -d
 ```
 
-两个服务共享挂载在 `/data/aria` 的 `aria-data` 命名卷，其中存放 `engine.yml`
-（配置）与 `models/`（checkpoint）。entrypoint 仅在 `engine.yml` 缺失时依据环境变量
-生成它，**已挂载的配置会被尊重**（不会被覆盖）。
+两个服务将宿主的 `ARIA_DATA_DIR`（默认 `~/.ariacompute`）绑定挂载到 `/data/aria`，
+因此**宿主已下载的** `engine.yml`（配置）与 `models/`（checkpoint）会被直接使用——
+**离线、无需下载**。entrypoint 仅在 `engine.yml` 缺失时依据环境变量生成它，
+**已挂载的配置会被尊重**（例如宿主的 `~/.ariacompute/engine.yml`）。
 
 ### 模型
 
-- **离线（默认）**：预先用宿主的已下载权重填充该卷
-  （在宿主执行 `aria-engine download afm-de && aria-engine download afm-dd`，
-  或挂载一个包含 `~/.ariacompute/models/*` 的宿主目录）。
+- **离线（默认，`AUTO_DOWNLOAD=0`）**：权重取自宿主
+  `ARIA_DATA_DIR/models/{afm-de,afm-dd}`。请确保两个 checkpoint 都已存在于宿主
+  （在宿主执行一次 `aria-engine download afm-de && aria-engine download afm-dd`，
+  或把它们拷入 `~/.ariacompute/models/`）。
 - **自动下载**：在 `.env` 中设置 `AUTO_DOWNLOAD=1`，entrypoint 会在首次运行时
-  执行 `aria-engine download <model>`（需联网与对应 hub token）。默认关闭。
+  执行 `aria-engine download <model>`（需联网与对应 hub token）。**下载失败不会
+  导致容器崩溃**——只会打印告警；仅当 checkpoint 仍然缺失时才拒绝启动。默认关闭。
+
+> **注意 — hub 选择与网络**：当 `SITE_URL` 被设置时，容器会据此重新生成
+> `engine.yml`，从而**覆盖**挂载进来的宿主配置。设置
+> `SITE_URL=https://ariacompute.cn` 可让下载走 **ModelScope**（`afm-de` 发布于此），
+> 而不是宿主里写死的 HuggingFace。若宿主只能通过本机代理访问外网，请在 `.env` 中设置
+> `HTTPS_PROXY=http://host.docker.internal:<端口>`（compose 已将
+> `host.docker.internal` 映射到宿主网关）；容器内的 `127.0.0.1` 指的是容器自身，
+> 而非宿主。
 
 ### GPU（CUDA）
 
@@ -679,12 +690,14 @@ docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
 | `ENGINE_IMAGE` | `aria-engine:latest` | 构建镜像的标签 |
 | `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / *(默认等于 `BUILD_IMAGE`)* | CPU 构建基础镜像；运行时复用它以保证 glibc 始终一致。仅 CUDA 覆盖文件会设置 `RUNTIME_IMAGE` |
 | `FEATURES` | _(空)_ | 构建特性；CUDA 覆盖文件设为 `cuda` |
-| `SITE_URL` / `UPGRADE_URL` | _(空)_ | 区域 hub（`.com`→HF，`.cn`→ModelScope） |
+| `SITE_URL` / `UPGRADE_URL` | _(空)_ | 区域 hub（`.com`→HF，`.cn`→ModelScope）；设置后会覆盖挂载进来的配置 |
 | `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(空)_ | 当前区域的 hub token |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | _(空)_ | 下载用的出口代理（本机代理用 `host.docker.internal`） |
 | `COMPUTE` | `auto` | `auto` \| `cpu` \| `cuda` |
 | `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder 服务模型与端口 |
 | `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder 服务模型与端口 |
-| `AUTO_DOWNLOAD` | `0` | 设为 `1` 可在首次运行时拉取权重 |
+| `ARIA_DATA_DIR` | `${HOME}/.ariacompute` | 宿主目录，绑定挂载到 `/data/aria`（配置 + 模型） |
+| `AUTO_DOWNLOAD` | `0` | 设为 `1` 可在首次运行时拉取权重（失败不致命） |
 | `RUST_LOG` | `info` | Rust tracing 过滤级别 |
 
 ### 验证

@@ -7,10 +7,11 @@
 # For GPU, layer the CUDA override instead:
 #   docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
 #
-# Both services share the `aria-data` named volume: engine.yml (config) and
-# models/ (checkpoints) persist there. Pre-populate it by mounting a host dir
-# that already contains ~/.ariacompute/models/*, or set AUTO_DOWNLOAD=1 to
-# fetch weights on first run.
+# Both services bind-mount the host ARIA_DATA_DIR (default ~/.ariacompute) to
+# /data/aria, so the engine.yml (config) and models/ (checkpoints) you already
+# downloaded on the host are used directly — offline, no download needed. Set
+# AUTO_DOWNLOAD=1 only when the Hub (HuggingFace / ModelScope) is reachable and
+# you want weights fetched on first run.
 
 services:
   engine-encoder:
@@ -35,8 +36,20 @@ services:
       MODELSCOPE_API_TOKEN: ${MODELSCOPE_API_TOKEN:-}
       AUTO_DOWNLOAD: ${AUTO_DOWNLOAD:-0}
       RUST_LOG: ${RUST_LOG:-info}
+      # Proxy passthrough (optional). For a host-local proxy, point these at
+      # http://host.docker.internal:<port> (mapped to the host gateway above).
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+      http_proxy: ${http_proxy:-}
+      https_proxy: ${https_proxy:-}
+      no_proxy: ${no_proxy:-}
     volumes:
-      - aria-data:/data/aria
+      - "${ARIA_DATA_DIR:-/home/lemonjia/.ariacompute}:/data/aria"
+    # Lets a host-local proxy (e.g. 127.0.0.1:7897) be reached from the
+    # container via http://host.docker.internal:<port> (set in .env).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${ENCODER_PORT:-8010}:8010"
     healthcheck:
@@ -68,8 +81,20 @@ services:
       MODELSCOPE_API_TOKEN: ${MODELSCOPE_API_TOKEN:-}
       AUTO_DOWNLOAD: ${AUTO_DOWNLOAD:-0}
       RUST_LOG: ${RUST_LOG:-info}
+      # Proxy passthrough (optional). For a host-local proxy, point these at
+      # http://host.docker.internal:<port> (mapped to the host gateway above).
+      HTTP_PROXY: ${HTTP_PROXY:-}
+      HTTPS_PROXY: ${HTTPS_PROXY:-}
+      NO_PROXY: ${NO_PROXY:-}
+      http_proxy: ${http_proxy:-}
+      https_proxy: ${https_proxy:-}
+      no_proxy: ${no_proxy:-}
     volumes:
-      - aria-data:/data/aria
+      - "${ARIA_DATA_DIR:-/home/lemonjia/.ariacompute}:/data/aria"
+    # Lets a host-local proxy (e.g. 127.0.0.1:7897) be reached from the
+    # container via http://host.docker.internal:<port> (set in .env).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${DECODER_PORT:-8011}:8011"
     healthcheck:
@@ -78,6 +103,3 @@ services:
       timeout: 5s
       retries: 5
       start_period: 30s
-
-volumes:
-  aria-data:
