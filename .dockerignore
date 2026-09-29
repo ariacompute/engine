@@ -1,0 +1,10 @@
+.git
+target
+**/target
+**/node_modules
+**/dist
+**/build
+**/*.so
+**/*.dylib
+**/*.dll
+**/.DS_Store

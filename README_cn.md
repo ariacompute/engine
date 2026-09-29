@@ -633,6 +633,71 @@ eng.destroy()
 
 GitHub Release 触发：`release.yml`（CLI + FFI 资产），以及 `publish-cargo.yml`、`publish-npm.yml`、`publish-pub.yml`、`publish-pypi.yml`、`publish-maven.yml`、`publish-cocoapods.yml`。
 
+## Docker / Docker Compose 部署
+
+将 System One HTTP 服务以容器方式运行。仓库附带一个参数化 `Dockerfile`、编排脚本
+`docker/entrypoint.sh`、CPU 版 `docker-compose.yml`（两个服务：`engine-encoder`
+在 **8010**、`engine-decoder` 在 **8011**），以及 GPU 覆盖文件
+`docker-compose.cuda.yml`。
+
+### 构建与运行（CPU）
+
+```bash
+cp .env.example .env          # 设置 SITE_URL / HF_TOKEN 或 MODELSCOPE_API_TOKEN / COMPUTE
+docker compose build
+docker compose up -d
+```
+
+两个服务共享挂载在 `/data/aria` 的 `aria-data` 命名卷，其中存放 `engine.yml`
+（配置）与 `models/`（checkpoint）。entrypoint 仅在 `engine.yml` 缺失时依据环境变量
+生成它，**已挂载的配置会被尊重**（不会被覆盖）。
+
+### 模型
+
+- **离线（默认）**：预先用宿主的已下载权重填充该卷
+  （在宿主执行 `aria-engine download afm-de && aria-engine download afm-dd`，
+  或挂载一个包含 `~/.ariacompute/models/*` 的宿主目录）。
+- **自动下载**：在 `.env` 中设置 `AUTO_DOWNLOAD=1`，entrypoint 会在首次运行时
+  执行 `aria-engine download <model>`（需联网与对应 hub token）。默认关闭。
+
+### GPU（CUDA）
+
+需要宿主机已装 NVIDIA 驱动 + `nvidia-container-toolkit`。覆盖文件会将构建基础切换为
+CUDA 镜像、以 `--features cuda` 编译，并为每个服务申请一块 GPU：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+```
+
+设置 `COMPUTE=cuda`（覆盖文件已设置），让 candle 选择 CUDA 后端。
+
+### 配置（`.env`）
+
+| 变量 | 默认 | 含义 |
+| --- | --- | --- |
+| `ENGINE_IMAGE` | `aria-engine:latest` | 构建镜像的标签 |
+| `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / `debian:bookworm-slim` | CPU 构建/运行基础镜像 |
+| `FEATURES` | _(空)_ | 构建特性；CUDA 覆盖文件设为 `cuda` |
+| `SITE_URL` / `UPGRADE_URL` | _(空)_ | 区域 hub（`.com`→HF，`.cn`→ModelScope） |
+| `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(空)_ | 当前区域的 hub token |
+| `COMPUTE` | `auto` | `auto` \| `cpu` \| `cuda` |
+| `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder 服务模型与端口 |
+| `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder 服务模型与端口 |
+| `AUTO_DOWNLOAD` | `0` | 设为 `1` 可在首次运行时拉取权重 |
+| `RUST_LOG` | `info` | Rust tracing 过滤级别 |
+
+### 验证
+
+```bash
+curl -s http://localhost:8010/health     # {"ok":true,"service":"afm-engine","model":"afm-de"}
+curl -s http://localhost:8011/health     # decoder
+docker compose ps                        # 两个服务均 healthy
+```
+
+容器内部绑定 `0.0.0.0`；在容器之外 `serve` 仍保留其 `127.0.0.1` 默认绑定。
+**请勿提交 `.env`** —— 它可能包含 hub token。
+
 ## 许可证
 
 MIT。

@@ -1,0 +1,85 @@
+# CPU deployment for Aria Engine (System One inference).
+#
+#   cp .env.example .env   # adjust SITE_URL / tokens / COMPUTE
+#   docker compose build
+#   docker compose up -d
+#
+# For GPU, layer the CUDA override instead:
+#   docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+#
+# Both services share the `aria-data` named volume: engine.yml (config) and
+# models/ (checkpoints) persist there. Pre-populate it by mounting a host dir
+# that already contains ~/.ariacompute/models/*, or set AUTO_DOWNLOAD=1 to
+# fetch weights on first run.
+
+services:
+  engine-encoder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_IMAGE: ${BUILD_IMAGE:-rust:1-slim}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:bookworm-slim}
+        FEATURES: ${FEATURES:-}
+        ARIA_ENGINE_VERSION: ${ARIA_ENGINE_VERSION:-}
+    image: ${ENGINE_IMAGE:-aria-engine:latest}
+    restart: unless-stopped
+    environment:
+      TRACK: encoder
+      MODEL: ${ENCODER_MODEL:-afm-de}
+      PORT: ${ENCODER_PORT:-8010}
+      COMPUTE: ${COMPUTE:-auto}
+      ARIA_COMPUTE_HOME: /data/aria
+      SITE_URL: ${SITE_URL:-}
+      UPGRADE_URL: ${UPGRADE_URL:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODELSCOPE_API_TOKEN: ${MODELSCOPE_API_TOKEN:-}
+      AUTO_DOWNLOAD: ${AUTO_DOWNLOAD:-0}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - aria-data:/data/aria
+    ports:
+      - "${ENCODER_PORT:-8010}:8010"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8010/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  engine-decoder:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BUILD_IMAGE: ${BUILD_IMAGE:-rust:1-slim}
+        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:bookworm-slim}
+        FEATURES: ${FEATURES:-}
+        ARIA_ENGINE_VERSION: ${ARIA_ENGINE_VERSION:-}
+    image: ${ENGINE_IMAGE:-aria-engine:latest}
+    restart: unless-stopped
+    environment:
+      TRACK: decoder
+      MODEL: ${DECODER_MODEL:-afm-dd}
+      PORT: ${DECODER_PORT:-8011}
+      COMPUTE: ${COMPUTE:-auto}
+      ARIA_COMPUTE_HOME: /data/aria
+      SITE_URL: ${SITE_URL:-}
+      UPGRADE_URL: ${UPGRADE_URL:-}
+      HF_TOKEN: ${HF_TOKEN:-}
+      MODELSCOPE_API_TOKEN: ${MODELSCOPE_API_TOKEN:-}
+      AUTO_DOWNLOAD: ${AUTO_DOWNLOAD:-0}
+      RUST_LOG: ${RUST_LOG:-info}
+    volumes:
+      - aria-data:/data/aria
+    ports:
+      - "${DECODER_PORT:-8011}:8011"
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://127.0.0.1:8011/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  aria-data:

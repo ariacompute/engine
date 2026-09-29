@@ -1,0 +1,37 @@
+# GPU override for Aria Engine.
+#
+# Usage (layered on top of docker-compose.yml):
+#   docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
+#   docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+#
+# Requirements on the host:
+#   - NVIDIA driver + the nvidia-container-toolkit (so `runtime: nvidia` works)
+#   - Docker Compose v2
+#
+# This override swaps the build base to a CUDA devel/runtime image, compiles
+# with `--features cuda`, and requests one GPU per service.
+
+services:
+  engine-encoder:
+    build:
+      args:
+        BUILD_IMAGE: ${CUDA_BUILD_IMAGE:-nvidia/cuda:12.8.0-devel-ubuntu22.04}
+        RUNTIME_IMAGE: ${CUDA_RUNTIME_IMAGE:-nvidia/cuda:12.8.0-runtime-ubuntu22.04}
+        FEATURES: cuda
+    image: ${ENGINE_IMAGE:-aria-engine:latest}
+    environment:
+      COMPUTE: cuda
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+    runtime: nvidia
+
+  engine-decoder:
+    build:
+      args:
+        BUILD_IMAGE: ${CUDA_BUILD_IMAGE:-nvidia/cuda:12.8.0-devel-ubuntu22.04}
+        RUNTIME_IMAGE: ${CUDA_RUNTIME_IMAGE:-nvidia/cuda:12.8.0-runtime-ubuntu22.04}
+        FEATURES: cuda
+    image: ${ENGINE_IMAGE:-aria-engine:latest}
+    environment:
+      COMPUTE: cuda
+      NVIDIA_VISIBLE_DEVICES: ${NVIDIA_VISIBLE_DEVICES:-all}
+    runtime: nvidia

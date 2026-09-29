@@ -633,6 +633,74 @@ More detail per language: `bindings/*/README.md`.
 
 On GitHub Release: `release.yml` (CLI+FFI assets) plus `publish-cargo.yml`, `publish-npm.yml`, `publish-pub.yml`, `publish-pypi.yml`, `publish-maven.yml`, `publish-cocoapods.yml`.
 
+## Docker / Docker Compose deployment
+
+Run the System One HTTP server as containers. The repo ships a parameterized
+`Dockerfile`, a `docker/entrypoint.sh` orchestrator, a CPU `docker-compose.yml`
+(two services: `engine-encoder` on **8010** and `engine-decoder` on **8011**), and
+a `docker-compose.cuda.yml` GPU override.
+
+### Build & run (CPU)
+
+```bash
+cp .env.example .env          # set SITE_URL / HF_TOKEN or MODELSCOPE_API_TOKEN / COMPUTE
+docker compose build
+docker compose up -d
+```
+
+Both services share the `aria-data` named volume at `/data/aria`, which holds
+`engine.yml` (config) and `models/` (checkpoints). The entrypoint writes
+`engine.yml` from env vars **only when absent**, so a pre-mounted config is
+respected.
+
+### Models
+
+- **Offline (default):** pre-populate the volume with downloaded weights
+  (`aria-engine download afm-de && aria-engine download afm-dd` on the host, or
+  mount a host dir that contains `~/.ariacompute/models/*`).
+- **Auto-download:** set `AUTO_DOWNLOAD=1` in `.env`; the entrypoint runs
+  `aria-engine download <model>` on first run (needs network + the matching hub
+  token). This is off by default.
+
+### GPU (CUDA)
+
+Requires the NVIDIA driver + `nvidia-container-toolkit`. The override swaps the
+build base to a CUDA image, compiles with `--features cuda`, and requests a GPU
+per service:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+```
+
+Set `COMPUTE=cuda` (done by the override) so candle selects the CUDA backend.
+
+### Configuration (`.env`)
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENGINE_IMAGE` | `aria-engine:latest` | Tag for the built image |
+| `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / `debian:bookworm-slim` | CPU build/runtime bases |
+| `FEATURES` | _(empty)_ | Build features; the CUDA override sets `cuda` |
+| `SITE_URL` / `UPGRADE_URL` | _(empty)_ | Region hub (`.com`→HF, `.cn`→ModelScope) |
+| `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(empty)_ | Hub token for the active region |
+| `COMPUTE` | `auto` | `auto` \| `cpu` \| `cuda` |
+| `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder service model + port |
+| `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder service model + port |
+| `AUTO_DOWNLOAD` | `0` | `1` to fetch weights on first run |
+| `RUST_LOG` | `info` | Rust tracing filter |
+
+### Verify
+
+```bash
+curl -s http://localhost:8010/health     # {"ok":true,"service":"afm-engine","model":"afm-de"}
+curl -s http://localhost:8011/health     # decoder
+docker compose ps                        # both services healthy
+```
+
+The container binds `0.0.0.0` internally; `serve` keeps its `127.0.0.1` default
+outside containers. **Do not commit `.env`** — it may contain hub tokens.
+
 ## License
 
 MIT.
