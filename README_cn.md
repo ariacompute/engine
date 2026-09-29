@@ -677,7 +677,7 @@ docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
 | 变量 | 默认 | 含义 |
 | --- | --- | --- |
 | `ENGINE_IMAGE` | `aria-engine:latest` | 构建镜像的标签 |
-| `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / `debian:bookworm-slim` | CPU 构建/运行基础镜像 |
+| `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / *(默认等于 `BUILD_IMAGE`)* | CPU 构建基础镜像；运行时复用它以保证 glibc 始终一致。仅 CUDA 覆盖文件会设置 `RUNTIME_IMAGE` |
 | `FEATURES` | _(空)_ | 构建特性；CUDA 覆盖文件设为 `cuda` |
 | `SITE_URL` / `UPGRADE_URL` | _(空)_ | 区域 hub（`.com`→HF，`.cn`→ModelScope） |
 | `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(空)_ | 当前区域的 hub token |

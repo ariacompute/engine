@@ -19,7 +19,6 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_IMAGE: ${BUILD_IMAGE:-rust:1-slim}
-        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:bookworm-slim}
         FEATURES: ${FEATURES:-}
         ARIA_ENGINE_VERSION: ${ARIA_ENGINE_VERSION:-}
     image: ${ENGINE_IMAGE:-aria-engine:latest}
@@ -53,7 +52,6 @@ services:
       dockerfile: Dockerfile
       args:
         BUILD_IMAGE: ${BUILD_IMAGE:-rust:1-slim}
-        RUNTIME_IMAGE: ${RUNTIME_IMAGE:-debian:bookworm-slim}
         FEATURES: ${FEATURES:-}
         ARIA_ENGINE_VERSION: ${ARIA_ENGINE_VERSION:-}
     image: ${ENGINE_IMAGE:-aria-engine:latest}

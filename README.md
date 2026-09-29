@@ -680,7 +680,7 @@ Set `COMPUTE=cuda` (done by the override) so candle selects the CUDA backend.
 | Variable | Default | Meaning |
 | --- | --- | --- |
 | `ENGINE_IMAGE` | `aria-engine:latest` | Tag for the built image |
-| `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / `debian:bookworm-slim` | CPU build/runtime bases |
+| `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / *(defaults to `BUILD_IMAGE`)* | CPU build base; the runtime reuses it so glibc always matches. Only the CUDA override sets `RUNTIME_IMAGE` |
 | `FEATURES` | _(empty)_ | Build features; the CUDA override sets `cuda` |
 | `SITE_URL` / `UPGRADE_URL` | _(empty)_ | Region hub (`.com`→HF, `.cn`→ModelScope) |
 | `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(empty)_ | Hub token for the active region |

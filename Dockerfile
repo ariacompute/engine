@@ -6,8 +6,8 @@
 # CUDA/GPU variants. Switch the build base + features via build args (see
 # docker-compose.yml and docker-compose.cuda.yml):
 #
-#   CPU : BUILD_IMAGE=rust:1-slim        FEATURES=""
-#   GPU : BUILD_IMAGE=nvidia/cuda:...    FEATURES=cuda
+#   CPU : BUILD_IMAGE=rust:1-slim           FEATURES=""  (runtime reuses this image)
+#   GPU : BUILD_IMAGE=nvidia/cuda:...    FEATURES=cuda  (override RUNTIME_IMAGE too)
 #
 # Only the `aria-cli` crate is compiled (the `cuda` feature chains into
 # ariacompute-de/dd); the FFI/shared library and language bindings are not
@@ -15,7 +15,10 @@
 
 ############################ Build stage ############################
 ARG BUILD_IMAGE=rust:1-slim
-ARG RUNTIME_IMAGE=debian:bookworm-slim
+# The runtime stage reuses the build image by default, so the glibc of the
+# compiled binary always matches the one it runs on (no Debian-release drift).
+# The CUDA override swaps in the matching slim CUDA runtime image.
+ARG RUNTIME_IMAGE=${BUILD_IMAGE}
 FROM ${BUILD_IMAGE} AS build
 
 ARG FEATURES=""
