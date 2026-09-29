@@ -42,10 +42,15 @@ ENV PATH="/usr/local/cargo/bin:/root/.cargo/bin:${PATH}"
 WORKDIR /src
 COPY . .
 
-# Cache the registry + target dirs across builds (BuildKit) to speed iterations.
+# Cache the registry dir across builds (BuildKit) to speed dependency downloads.
+# NOTE: the `target` dir is also cached, but cache mounts are NOT part of the
+# committed image layer — so we copy the binary out to /out here (a plain layer
+# path) for the later `COPY --from=build` to pick up.
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/src/target \
-    cargo build --release -p aria-cli --features "${FEATURES}"
+    cargo build --release -p aria-cli --features "${FEATURES}" \
+    && mkdir -p /out \
+    && cp /src/target/release/aria-engine /out/aria-engine
 
 ############################ Runtime stage ############################
 FROM ${RUNTIME_IMAGE} AS runtime
@@ -56,7 +61,7 @@ RUN apt-get update \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
-COPY --from=build /src/target/release/aria-engine /usr/local/bin/aria-engine
+COPY --from=build /out/aria-engine /usr/local/bin/aria-engine
 COPY docker/entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 RUN chmod +x /usr/local/bin/docker-entrypoint.sh \
   && mkdir -p /data/aria/models
