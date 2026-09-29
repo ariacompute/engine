@@ -52,8 +52,14 @@ else
   echo "[entrypoint] using existing $ENGINE_YML"
 fi
 
-# --- 3. Optional model download (matches download.rs::looks_like_checkpoint) ---
-CKPT_NAME="${MODEL:-afm-de}"
+# --- 3. Model selection ---
+# If no MODEL is configured (ENCODER_MODEL/DECODER_MODEL left empty), this service
+# is intentionally disabled: keep the container alive instead of crash-looping.
+CKPT_NAME="${MODEL:-}"
+if [ -z "$CKPT_NAME" ]; then
+  echo "[entrypoint] no MODEL configured for track=${TRACK:-encoder}; idling (set ENCODER_MODEL/DECODER_MODEL to enable)"
+  exec sleep infinity
+fi
 CKPT_DIR="$ARIA_HOME/models/$CKPT_NAME"
 
 checkpoint_ready() {
@@ -93,7 +99,12 @@ ensure_checkpoint() {
 ensure_checkpoint
 
 # --- 4. Serve (bound to 0.0.0.0 so the container port is reachable) ---
-BIND_ADDR="0.0.0.0:${PORT:-8010}"
+# Default port follows the service track when PORT is left empty.
+case "${TRACK:-encoder}" in
+  decoder) DEFAULT_PORT=8011 ;;
+  *)       DEFAULT_PORT=8010 ;;
+esac
+BIND_ADDR="0.0.0.0:${PORT:-$DEFAULT_PORT}"
 echo "[entrypoint] starting aria-engine track=${TRACK:-encoder} model=${CKPT_NAME} bind=${BIND_ADDR} compute=${COMPUTE:-auto}"
 exec aria-engine serve \
   --track "${TRACK:-encoder}" \

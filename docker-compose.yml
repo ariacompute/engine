@@ -26,7 +26,7 @@ services:
     restart: unless-stopped
     environment:
       TRACK: encoder
-      MODEL: ${ENCODER_MODEL:-afm-de}
+      MODEL: ${ENCODER_MODEL:-}
       PORT: ${ENCODER_PORT:-8010}
       COMPUTE: ${COMPUTE:-auto}
       ARIA_COMPUTE_HOME: /data/aria
@@ -71,7 +71,7 @@ services:
     restart: unless-stopped
     environment:
       TRACK: decoder
-      MODEL: ${DECODER_MODEL:-afm-dd}
+      MODEL: ${DECODER_MODEL:-}
       PORT: ${DECODER_PORT:-8011}
       COMPUTE: ${COMPUTE:-auto}
       ARIA_COMPUTE_HOME: /data/aria

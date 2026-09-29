@@ -694,8 +694,8 @@ docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
 | `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(空)_ | 当前区域的 hub token |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | _(空)_ | 下载用的出口代理（本机代理用 `host.docker.internal`） |
 | `COMPUTE` | `auto` | `auto` \| `cpu` \| `cuda` |
-| `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder 服务模型与端口 |
-| `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder 服务模型与端口 |
+| `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder 模型（为空则禁用该服务）+ 端口 |
+| `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder 模型（为空则禁用该服务）+ 端口 |
 | `ARIA_DATA_DIR` | `${HOME}/.ariacompute` | 宿主目录，绑定挂载到 `/data/aria`（配置 + 模型） |
 | `AUTO_DOWNLOAD` | `0` | 设为 `1` 可在首次运行时拉取权重（失败不致命） |
 | `RUST_LOG` | `info` | Rust tracing 过滤级别 |

@@ -697,8 +697,8 @@ Set `COMPUTE=cuda` (done by the override) so candle selects the CUDA backend.
 | `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(empty)_ | Hub token for the active region |
 | `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | _(empty)_ | Optional egress proxy for downloads (use `host.docker.internal` for a host-local proxy) |
 | `COMPUTE` | `auto` | `auto` \| `cpu` \| `cuda` |
-| `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder service model + port |
-| `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder service model + port |
+| `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder model (empty disables the service) + port |
+| `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder model (empty disables the service) + port |
 | `ARIA_DATA_DIR` | `${HOME}/.ariacompute` | Host dir bind-mounted to `/data/aria` (config + models) |
 | `AUTO_DOWNLOAD` | `0` | `1` to fetch weights on first run (non-fatal if it fails) |
 | `RUST_LOG` | `info` | Rust tracing filter |
