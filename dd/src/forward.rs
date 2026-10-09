@@ -314,7 +314,10 @@ fn load_weight_map(files: &[PathBuf], device: &Device) -> Result<HashMap<String,
     for f in files {
         let part = candle_core::safetensors::load(f, device)
             .map_err(|e| AfmError::msg(format!("safetensors {}: {e}", f.display())))?;
-        out.extend(part);
+        for (k, t) in part {
+            // Hub MiniCPM ships BF16; candle CPU matmul only supports F32/F16.
+            out.insert(k, to_f32(t)?);
+        }
     }
     if !out.keys().any(|k| k.contains("layers.0.self_attn")) {
         return Err(AfmError::msg(
@@ -322,6 +325,14 @@ fn load_weight_map(files: &[PathBuf], device: &Device) -> Result<HashMap<String,
         ));
     }
     Ok(out)
+}
+
+fn to_f32(t: Tensor) -> Result<Tensor> {
+    if t.dtype() == DType::F32 {
+        Ok(t)
+    } else {
+        t.to_dtype(DType::F32).map_err(candle_err)
+    }
 }
 
 fn maybe_tie_lm_head(tensors: &mut HashMap<String, Tensor>) -> Result<()> {
@@ -386,6 +397,7 @@ fn merge_lora_into(
         {
             continue;
         }
+        let t = to_f32(t)?;
         let entry = pairs.entry(base_key).or_insert((None, None));
         if k.contains("lora_A") {
             entry.0 = Some(t);
@@ -402,8 +414,9 @@ fn merge_lora_into(
                 "LoRA target {base_key} missing from MiniCPM base"
             )));
         };
-        let a = a.to_dtype(w.dtype()).map_err(candle_err)?;
-        let b = b.to_dtype(w.dtype()).map_err(candle_err)?;
+        let w = to_f32(w.clone())?;
+        let a = to_f32(a)?;
+        let b = to_f32(b)?;
         let delta = b.matmul(&a).map_err(candle_err)?;
         let delta = (delta * scale).map_err(candle_err)?;
         let merged = w.add(&delta).map_err(candle_err)?;
@@ -483,6 +496,13 @@ mod tests {
         let v = merged.to_vec2::<f32>().unwrap();
         assert!((v[0][0] - 5.0).abs() < 1e-5);
         assert!((v[1][1] - 1.0).abs() < 1e-5);
+    }
+
+    #[test]
+    fn to_f32_is_idempotent_on_f32() {
+        let t = Tensor::from_vec(vec![1.0f32, 2.0], (2,), &Device::Cpu).unwrap();
+        let out = to_f32(t).unwrap();
+        assert_eq!(out.dtype(), DType::F32);
     }
 
     #[test]
