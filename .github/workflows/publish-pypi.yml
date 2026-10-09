@@ -58,7 +58,10 @@ jobs:
           sed -i.bak "s/^version = .*/version = \"$VERSION\"/" bindings/python/pyproject.toml
           rm -f bindings/python/pyproject.toml.bak
           echo "Publishing version=$VERSION"
-      - uses: pypa/cibuildwheel@v2.23.2
+      # >=2.23.4: fetch virtualenv via bootstrap.pypa.io (not GitHub blob URLs).
+      # Older cibuildwheel hits HTTP 503/429 on macos/windows when downloading
+      # virtualenv-*.pyz from get-virtualenv blob?raw=true (GitHub rate limits).
+      - uses: pypa/cibuildwheel@v2.23.4
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BEFORE_ALL: bash scripts/build-python-ffi.sh
