@@ -15,9 +15,8 @@ use ariacompute_core::error::{AfmError, Result};
 /// Load encoder/config.json into candle ModernBERT config (maps HF rope_parameters).
 pub fn load_modernbert_config(encoder_dir: &Path) -> Result<ModernBertConfig> {
     let path = encoder_dir.join("config.json");
-    let text = fs::read_to_string(&path).map_err(|e| {
-        AfmError::msg(format!("read {}: {e}", path.display()))
-    })?;
+    let text = fs::read_to_string(&path)
+        .map_err(|e| AfmError::msg(format!("read {}: {e}", path.display())))?;
     let hf: HfModernBertConfig = serde_json::from_str(&text)?;
     Ok(hf.into_candle())
 }
@@ -183,16 +182,14 @@ impl EncoderLayer {
         let attn = (q.matmul(&k.transpose(D::Minus2, D::Minus1)?)? * scale)?;
         // mask: (B, 1, 1, L) u8 — nonzero = pad → add -inf
         let mask = key_padding_mask.unsqueeze(1)?.unsqueeze(2)?; // U8
-        let neg_inf = Tensor::full(f32::NEG_INFINITY, mask.shape(), xs.device())?
-            .to_dtype(attn.dtype())?;
+        let neg_inf =
+            Tensor::full(f32::NEG_INFINITY, mask.shape(), xs.device())?.to_dtype(attn.dtype())?;
         let zeros = Tensor::zeros(mask.shape(), attn.dtype(), xs.device())?;
         let add = mask.where_cond(&neg_inf, &zeros)?;
         let attn = attn.broadcast_add(&add)?;
         let attn = ops::softmax(&attn, D::Minus1)?;
         let out = attn.matmul(&v)?; // (B, heads, L, dim)
-        let out = out
-            .transpose(1, 2)?
-            .reshape((b, l, h))?;
+        let out = out.transpose(1, 2)?.reshape((b, l, h))?;
         out.apply(&self.out_proj)
     }
 }
@@ -302,7 +299,11 @@ impl DecisionModel {
             mask_h.push(h.i((0, pos, ..))?.unsqueeze(0)?); // (1, H)
         }
         let mask_h = Tensor::cat(&mask_h, 0)?.unsqueeze(0)?; // (1, K, H)
-        let logits = self.scorer.forward(&mask_h)?.squeeze(D::Minus1)?.squeeze(0)?; // (K,)
+        let logits = self
+            .scorer
+            .forward(&mask_h)?
+            .squeeze(D::Minus1)?
+            .squeeze(0)?; // (K,)
         logits.to_vec1::<f32>()
     }
 }

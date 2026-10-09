@@ -1,6 +1,9 @@
 //! AFM-D Decoder (`afm_dd`): SemIf row build + first-token scoring map.
 
 pub mod checkpoint;
+pub mod forward;
+pub mod prompt;
+pub mod pyjson;
 pub mod score;
 pub mod semif;
 

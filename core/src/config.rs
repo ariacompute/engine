@@ -113,9 +113,7 @@ pub fn hub_token_for_site(cfg: &AriaConfig) -> Option<String> {
 pub fn parse_compute(s: &str) -> Result<String, String> {
     match s.trim().to_ascii_lowercase().as_str() {
         "auto" | "cpu" | "cuda" => Ok(s.trim().to_ascii_lowercase()),
-        other => Err(format!(
-            "invalid compute {other:?}; expected auto|cpu|cuda"
-        )),
+        other => Err(format!("invalid compute {other:?}; expected auto|cpu|cuda")),
     }
 }
 
@@ -141,8 +139,8 @@ pub fn save_config(cfg: &AriaConfig) -> io::Result<()> {
     ensure_aria_home()?;
     let path = engine_yml_path()?;
     let tmp = path.with_extension("yml.tmp");
-    let text = serde_yaml::to_string(cfg)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let text =
+        serde_yaml::to_string(cfg).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     fs::write(&tmp, text)?;
     fs::rename(&tmp, &path)?;
     Ok(())

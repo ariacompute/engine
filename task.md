@@ -61,8 +61,8 @@
 - [ ] 与 Python `afm_d.de.score` 对比：argmax + max|Δp| 阈值
 
 ### T11 — Decoder candle 前向
-- [ ] MiniCPM5-2B（pin rev）+ 可选 PEFT merge-at-load
-- [ ] SemIf direct 首位置字母 logits
+- [x] MiniCPM5-2B（pin rev）+ 可选 PEFT merge-at-load
+- [x] SemIf direct 首位置字母 logits
 - [ ] 与 Python `DecoderScorer` / `afm_d.dd.score` 对比
 
 ### T12 — Serve / FFI E2E（有权重）

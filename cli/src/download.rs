@@ -4,10 +4,12 @@
 //! Uses hub **HTTP APIs** (tree/list + resolve URLs) — not huggingface-cli / modelscope CLI.
 //! Tokens from setup (`hf_token` / `modelscope_api_token`) as Bearer auth.
 //! Failed downloads do not leave list/check-visible cache entries.
+//!
+//! `afm-dd` pulls the PEFT package **and** MiniCPM5-2B safetensors into `base/`
+//! (engine candle does not use GGUF).
 
-use ariacompute_core::config::{
-    self, ensure_aria_home, model_cache_dir, models_dir, AriaConfig,
-};
+use ariacompute_core::config::{self, ensure_aria_home, model_cache_dir, models_dir, AriaConfig};
+use ariacompute_core::contract::{DD_BASE_MODEL, DD_BASE_REVISION};
 use ariacompute_core::gateway::{preferred_hub, PublicHub};
 use futures_util::StreamExt;
 use indicatif::{ProgressBar, ProgressStyle};
@@ -21,6 +23,9 @@ const LIST_TIMEOUT: Duration = Duration::from_secs(30);
 /// Overall transfer budget per file (large safetensors over proxy can exceed 10+ minutes).
 const FETCH_TIMEOUT: Duration = Duration::from_secs(4 * 60 * 60);
 const FETCH_RETRIES: u32 = 3;
+/// ModelScope mirror of the pinned MiniCPM5-2B base (`openbmb/…` on HF).
+const DD_BASE_MS_REPO: &str = "OpenBMB/MiniCPM5-2B";
+const DD_BASE_SUBDIR: &str = "base";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct RemoteFile {
@@ -28,13 +33,24 @@ struct RemoteFile {
     path: String,
 }
 
-/// Resolve well-known AFM model ids to Hub repo ids for the given hub.
-pub fn resolve_hub_repo(model: &str, hub: PublicHub) -> String {
-    let name = match model {
+/// Normalize cache / CLI aliases to a short product name when known.
+fn short_product_name(model: &str) -> &str {
+    match model {
         "afm-de" | "afm_de" | "encoder" => "afm-de",
         "afm-dd" | "afm_dd" | "decoder" => "afm-dd",
         other => other,
-    };
+    }
+}
+
+fn is_afm_dd(model: &str) -> bool {
+    short_product_name(model) == "afm-dd"
+        || model.ends_with("/afm-dd")
+        || model.ends_with("/afm_dd")
+}
+
+/// Resolve well-known AFM model ids to Hub repo ids for the given hub.
+pub fn resolve_hub_repo(model: &str, hub: PublicHub) -> String {
+    let name = short_product_name(model);
     if name.contains('/') {
         return name.to_string();
     }
@@ -44,17 +60,60 @@ pub fn resolve_hub_repo(model: &str, hub: PublicHub) -> String {
     }
 }
 
-/// True when the directory has encoder or decoder checkpoint markers.
-pub fn looks_like_checkpoint(path: &Path) -> bool {
+fn looks_like_encoder_checkpoint(path: &Path) -> bool {
     path.is_dir()
-        && (path.join("model.safetensors").is_file()
-            || path.join("rl_agent_config.json").is_file()
-            || path.join("adapter_config.json").is_file()
-            || path.join("dd_config.json").is_file())
+        && (path.join("model.safetensors").is_file() || path.join("rl_agent_config.json").is_file())
+}
+
+fn has_decoder_adapter(path: &Path) -> bool {
+    path.is_dir()
+        && (path.join("adapter_config.json").is_file()
+            || path.join("dd_config.json").is_file()
+            || path.join("adapter").join("adapter_config.json").is_file())
+}
+
+fn has_llama_safetensors(dir: &Path) -> bool {
+    if !dir.is_dir() || !dir.join("config.json").is_file() {
+        return false;
+    }
+    if dir.join("model.safetensors").is_file() {
+        return true;
+    }
+    if dir.join("model.safetensors.index.json").is_file() {
+        return true;
+    }
+    if let Ok(rd) = fs::read_dir(dir) {
+        for ent in rd.flatten() {
+            let name = ent.file_name();
+            let name = name.to_string_lossy();
+            if name.ends_with(".safetensors")
+                && !name.starts_with("adapter")
+                && !name.contains("lora")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// MiniCPM safetensors under the decoder cache (`base/`, `merged/`, or root).
+pub fn has_decoder_base_weights(path: &Path) -> bool {
+    has_llama_safetensors(path)
+        || has_llama_safetensors(&path.join(DD_BASE_SUBDIR))
+        || has_llama_safetensors(&path.join("merged"))
+}
+
+/// True when the directory is a **complete** encoder or decoder checkpoint.
+/// Decoder requires PEFT markers **and** MiniCPM5-2B safetensors (not GGUF alone).
+pub fn looks_like_checkpoint(path: &Path) -> bool {
+    looks_like_encoder_checkpoint(path)
+        || (has_decoder_adapter(path) && has_decoder_base_weights(path))
 }
 
 fn remove_incomplete_cache(path: &Path) {
-    if path.is_dir() && !looks_like_checkpoint(path) {
+    // Keep adapter-only trees so a follow-up download can fill `base/` without re-pulling PEFT.
+    if path.is_dir() && !looks_like_encoder_checkpoint(path) && !has_decoder_adapter(path) {
         let _ = fs::remove_dir_all(path);
     }
 }
@@ -82,6 +141,36 @@ fn hub_token_field(hub: PublicHub) -> &'static str {
 fn skip_hub_path(path: &str) -> bool {
     let base = path.rsplit('/').next().unwrap_or(path);
     base.starts_with('.') || base == ".gitattributes" || base == ".gitignore"
+}
+
+/// Skip GGUF and other non-candle assets from the afm-dd product repo.
+fn keep_afm_dd_product_file(path: &str) -> bool {
+    if skip_hub_path(path) {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".gguf") || lower.starts_with("gguf/") || lower.contains("/gguf/") {
+        return false;
+    }
+    true
+}
+
+/// MiniCPM base: safetensors + configs/tokenizer only (skip README / images / GGUF).
+fn keep_decoder_base_file(path: &str) -> bool {
+    if skip_hub_path(path) {
+        return false;
+    }
+    let lower = path.to_ascii_lowercase();
+    if lower.ends_with(".gguf") || lower.starts_with("gguf/") {
+        return false;
+    }
+    lower.ends_with(".safetensors")
+        || lower.ends_with(".safetensors.index.json")
+        || lower.ends_with("config.json")
+        || lower.contains("tokenizer")
+        || lower.ends_with("special_tokens_map.json")
+        || lower.ends_with("generation_config.json")
+        || lower.contains("chat_template")
 }
 
 fn io_err<E: std::fmt::Display>(e: E) -> io::Error {
@@ -119,27 +208,40 @@ fn apply_auth(
     req
 }
 
-fn resolve_file_urls(hub: PublicHub, repo: &str, path: &str) -> Vec<String> {
+fn default_revision(hub: PublicHub) -> &'static str {
+    match hub {
+        PublicHub::HuggingFace => "main",
+        PublicHub::ModelScope => "master",
+    }
+}
+
+fn resolve_file_urls(hub: PublicHub, repo: &str, path: &str, revision: &str) -> Vec<String> {
     let path = path.trim_start_matches('/');
+    let rev = if revision.is_empty() {
+        default_revision(hub)
+    } else {
+        revision
+    };
     match hub {
         PublicHub::HuggingFace => {
             vec![format!(
-                "https://huggingface.co/{repo}/resolve/main/{path}"
+                "https://huggingface.co/{repo}/resolve/{rev}/{path}"
             )]
         }
         PublicHub::ModelScope => {
             // Prefer official API download (stable for nested paths + large OSS objects),
             // then legacy /resolve/ URLs as fallback.
             let fp = urlencoding::encode(path);
+            let rev_enc = urlencoding::encode(rev);
             vec![
                 format!(
-                    "https://www.modelscope.cn/api/v1/models/{repo}/repo?Revision=master&FilePath={fp}"
+                    "https://www.modelscope.cn/api/v1/models/{repo}/repo?Revision={rev_enc}&FilePath={fp}"
                 ),
                 format!(
-                    "https://modelscope.cn/api/v1/models/{repo}/repo?Revision=master&FilePath={fp}"
+                    "https://modelscope.cn/api/v1/models/{repo}/repo?Revision={rev_enc}&FilePath={fp}"
                 ),
-                format!("https://www.modelscope.cn/models/{repo}/resolve/master/{path}"),
-                format!("https://modelscope.cn/models/{repo}/resolve/master/{path}"),
+                format!("https://www.modelscope.cn/models/{repo}/resolve/{rev}/{path}"),
+                format!("https://modelscope.cn/models/{repo}/resolve/{rev}/{path}"),
             ]
         }
     }
@@ -158,14 +260,51 @@ pub async fn download_model_with_config(model: &str, cfg: &AriaConfig) -> io::Re
         eprintln!("download: already present at {}", dest.display());
         return Ok(dest);
     }
-    remove_incomplete_cache(&dest);
 
     let hub = preferred_hub(&cfg.site_url);
+
+    // Adapter-only afm-dd from an older download: fill MiniCPM safetensors into `base/`.
+    if is_afm_dd(model) && has_decoder_adapter(&dest) && !has_decoder_base_weights(&dest) {
+        eprintln!(
+            "download: afm-dd adapter present; fetching MiniCPM5-2B safetensors → {}/{DD_BASE_SUBDIR}",
+            dest.display()
+        );
+        fetch_decoder_base(hub, &dest.join(DD_BASE_SUBDIR), cfg).await?;
+        if looks_like_checkpoint(&dest) {
+            println!(
+                "downloaded MiniCPM5-2B base via {} → {}/{DD_BASE_SUBDIR}",
+                hub.as_str(),
+                dest.display()
+            );
+            return Ok(dest);
+        }
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "MiniCPM base download finished but no safetensors under {}/{DD_BASE_SUBDIR}",
+                dest.display()
+            ),
+        ));
+    }
+
+    remove_incomplete_cache(&dest);
+
     let repo = resolve_hub_repo(model, hub);
     let staging = dest.with_extension("partial");
     let _ = fs::remove_dir_all(&staging);
 
-    let result = fetch_repo(hub, &repo, &staging, cfg).await;
+    let result = async {
+        let rev = default_revision(hub);
+        if is_afm_dd(model) {
+            fetch_repo(hub, &repo, &staging, cfg, rev, keep_afm_dd_product_file).await?;
+            fetch_decoder_base(hub, &staging.join(DD_BASE_SUBDIR), cfg).await?;
+        } else {
+            fetch_repo(hub, &repo, &staging, cfg, rev, |p| !skip_hub_path(p)).await?;
+        }
+        Ok::<(), io::Error>(())
+    }
+    .await;
+
     match result {
         Ok(()) => {
             if !looks_like_checkpoint(&staging) {
@@ -173,7 +312,8 @@ pub async fn download_model_with_config(model: &str, cfg: &AriaConfig) -> io::Re
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidData,
                     format!(
-                        "download finished but no checkpoint markers under {}",
+                        "download finished but incomplete checkpoint under {} \
+(decoder needs PEFT + MiniCPM safetensors in {DD_BASE_SUBDIR}/)",
                         staging.display()
                     ),
                 ));
@@ -194,24 +334,60 @@ pub async fn download_model_with_config(model: &str, cfg: &AriaConfig) -> io::Re
     }
 }
 
+async fn fetch_decoder_base(hub: PublicHub, dest: &Path, cfg: &AriaConfig) -> io::Result<()> {
+    let (repo, revisions): (String, Vec<&str>) = match hub {
+        PublicHub::HuggingFace => (DD_BASE_MODEL.to_string(), vec![DD_BASE_REVISION, "main"]),
+        PublicHub::ModelScope => (
+            DD_BASE_MS_REPO.to_string(),
+            vec![DD_BASE_REVISION, "master"],
+        ),
+    };
+    let mut last = None;
+    for rev in revisions {
+        eprintln!(
+            "download: MiniCPM base {} @ {rev} → {}",
+            repo,
+            dest.display()
+        );
+        match fetch_repo(hub, &repo, dest, cfg, rev, keep_decoder_base_file).await {
+            Ok(()) if has_llama_safetensors(dest) => return Ok(()),
+            Ok(()) => {
+                last = Some(io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("{repo}@{rev}: listed files but no safetensors"),
+                ));
+            }
+            Err(e) => last = Some(e),
+        }
+    }
+    Err(last.unwrap_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("failed to fetch MiniCPM base {repo}"),
+        )
+    }))
+}
+
 async fn fetch_repo(
     hub: PublicHub,
     repo: &str,
     staging: &Path,
     cfg: &AriaConfig,
+    revision: &str,
+    keep: impl Fn(&str) -> bool,
 ) -> io::Result<()> {
     let list_client = http_client(LIST_TIMEOUT).map_err(io_err)?;
-    let files = list_hub_files(&list_client, hub, repo, cfg).await?;
+    let files = list_hub_files(&list_client, hub, repo, cfg, revision).await?;
+    let mut files: Vec<RemoteFile> = files.into_iter().filter(|f| keep(&f.path)).collect();
     if files.is_empty() {
         return Err(io::Error::new(
             io::ErrorKind::NotFound,
-            format!("{}: empty file list for {repo}", hub.as_str()),
+            format!("{}: empty file list for {repo}@{revision}", hub.as_str()),
         ));
     }
     fs::create_dir_all(staging)?;
     let fetch_client = http_client(FETCH_TIMEOUT).map_err(io_err)?;
     // Small metadata first; large weight files last (clearer progress / fewer partial stalls).
-    let mut files = files;
     files.sort_by_key(|f| {
         let lower = f.path.to_ascii_lowercase();
         let heavy = lower.ends_with(".safetensors")
@@ -221,12 +397,12 @@ async fn fetch_repo(
         (heavy, f.path.clone())
     });
     eprintln!(
-        "download: {} ({repo}) — {} files",
+        "download: {} ({repo}@{revision}) — {} files",
         hub.as_str(),
         files.len()
     );
     for file in &files {
-        fetch_one_file(&fetch_client, hub, repo, &file.path, staging, cfg).await?;
+        fetch_one_file(&fetch_client, hub, repo, &file.path, staging, cfg, revision).await?;
     }
     Ok(())
 }
@@ -238,6 +414,7 @@ async fn fetch_one_file(
     path: &str,
     staging: &Path,
     cfg: &AriaConfig,
+    revision: &str,
 ) -> io::Result<()> {
     let out = staging.join(path);
     if let Some(parent) = out.parent() {
@@ -246,7 +423,7 @@ async fn fetch_one_file(
     let label = format!("download {path}");
     let mut last_err = None;
     for attempt in 1..=FETCH_RETRIES {
-        for url in resolve_file_urls(hub, repo, path) {
+        for url in resolve_file_urls(hub, repo, path, revision) {
             let req = apply_auth(client.get(&url), hub, cfg);
             match req.send().await {
                 Ok(r) if r.status().is_success() => {
@@ -298,24 +475,33 @@ async fn list_hub_files(
     hub: PublicHub,
     repo: &str,
     cfg: &AriaConfig,
+    revision: &str,
 ) -> io::Result<Vec<RemoteFile>> {
+    let rev = if revision.is_empty() {
+        default_revision(hub)
+    } else {
+        revision
+    };
     match hub {
         PublicHub::HuggingFace => {
-            let url = format!("https://huggingface.co/api/models/{repo}/tree/main?recursive=true");
+            let rev_enc = urlencoding::encode(rev);
+            let url =
+                format!("https://huggingface.co/api/models/{repo}/tree/{rev_enc}?recursive=true");
             let json = get_json_paginated(client, hub, cfg, &url).await?;
             Ok(parse_hf_tree(&json))
         }
         PublicHub::ModelScope => {
+            let rev_enc = urlencoding::encode(rev);
             let urls = [
                 format!(
-                    "https://www.modelscope.cn/api/v1/models/{repo}/repo/files?Revision=master&Recursive=true"
+                    "https://www.modelscope.cn/api/v1/models/{repo}/repo/files?Revision={rev_enc}&Recursive=true"
                 ),
                 format!(
-                    "https://modelscope.cn/api/v1/models/{repo}/repo/files?Revision=master&Recursive=true"
+                    "https://modelscope.cn/api/v1/models/{repo}/repo/files?Revision={rev_enc}&Recursive=true"
                 ),
                 // Some gateways want an explicit Root=/
                 format!(
-                    "https://www.modelscope.cn/api/v1/models/{repo}/repo/files?Revision=master&Recursive=true&Root="
+                    "https://www.modelscope.cn/api/v1/models/{repo}/repo/files?Revision={rev_enc}&Recursive=true&Root="
                 ),
             ];
             let mut last = None;
@@ -442,7 +628,11 @@ async fn get_json(
     cfg: &AriaConfig,
     url: &str,
 ) -> io::Result<Value> {
-    let req = apply_auth(client.get(url).header("Accept", "application/json"), hub, cfg);
+    let req = apply_auth(
+        client.get(url).header("Accept", "application/json"),
+        hub,
+        cfg,
+    );
     let resp = req.send().await.map_err(io_err)?;
     let status = resp.status();
     if status.as_u16() == 401 || status.as_u16() == 403 {
@@ -636,11 +826,7 @@ fn short_model_name(hub_id: &str, org: &str) -> String {
             return rest.to_string();
         }
     }
-    hub_id
-        .rsplit('/')
-        .next()
-        .unwrap_or(hub_id)
-        .to_string()
+    hub_id.rsplit('/').next().unwrap_or(hub_id).to_string()
 }
 
 fn is_downloaded_locally(name: &str, hub_id: Option<&str>) -> bool {
@@ -867,13 +1053,13 @@ pub fn check_model(model: Option<&str>) -> io::Result<()> {
                 println!("{m}: not found (no complete checkpoint)");
                 return Ok(());
             }
-            let de = path.join("model.safetensors").is_file()
-                || path.join("rl_agent_config.json").is_file();
-            let dd = path.join("adapter_config.json").is_file()
-                || path.join("dd_config.json").is_file();
+            let de = looks_like_encoder_checkpoint(&path);
+            let dd_adapter = has_decoder_adapter(&path);
+            let dd_base = has_decoder_base_weights(&path);
             println!(
-                "{m}: path={} encoder_like={de} decoder_like={dd}",
-                path.display()
+                "{m}: path={} encoder_like={de} decoder_adapter={dd_adapter} decoder_base={dd_base} complete={}",
+                path.display(),
+                looks_like_checkpoint(&path)
             );
         }
         None => {
@@ -884,13 +1070,13 @@ pub fn check_model(model: Option<&str>) -> io::Result<()> {
             }
             for name in names {
                 let path = model_cache_dir(&name)?;
-                let de = path.join("model.safetensors").is_file()
-                    || path.join("rl_agent_config.json").is_file();
-                let dd = path.join("adapter_config.json").is_file()
-                    || path.join("dd_config.json").is_file();
+                let de = looks_like_encoder_checkpoint(&path);
+                let dd_adapter = has_decoder_adapter(&path);
+                let dd_base = has_decoder_base_weights(&path);
                 println!(
-                    "{name}: path={} encoder_like={de} decoder_like={dd}",
-                    path.display()
+                    "{name}: path={} encoder_like={de} decoder_adapter={dd_adapter} decoder_base={dd_base} complete={}",
+                    path.display(),
+                    looks_like_checkpoint(&path)
                 );
             }
         }
@@ -923,16 +1109,33 @@ mod tests {
     #[test]
     fn resolve_urls() {
         assert_eq!(
-            resolve_file_urls(PublicHub::HuggingFace, "ariacompute/afm-de", "model.safetensors"),
+            resolve_file_urls(
+                PublicHub::HuggingFace,
+                "ariacompute/afm-de",
+                "model.safetensors",
+                "main",
+            ),
             vec![
                 "https://huggingface.co/ariacompute/afm-de/resolve/main/model.safetensors"
                     .to_string()
             ]
         );
+        assert_eq!(
+            resolve_file_urls(
+                PublicHub::HuggingFace,
+                "openbmb/MiniCPM5-2B",
+                "config.json",
+                DD_BASE_REVISION,
+            ),
+            vec![format!(
+                "https://huggingface.co/openbmb/MiniCPM5-2B/resolve/{DD_BASE_REVISION}/config.json"
+            )]
+        );
         let ms = resolve_file_urls(
             PublicHub::ModelScope,
             "AriaCompute/afm-de",
             "tokenizer/vocab.json",
+            "master",
         );
         assert!(
             ms[0].starts_with(
@@ -942,7 +1145,28 @@ mod tests {
             ms[0]
         );
         assert!(ms[0].contains("tokenizer%2Fvocab.json"));
-        assert!(ms.iter().any(|u| u.contains("/resolve/master/tokenizer/vocab.json")));
+        assert!(ms
+            .iter()
+            .any(|u| u.contains("/resolve/master/tokenizer/vocab.json")));
+    }
+
+    #[test]
+    fn afm_dd_skips_gguf_keeps_adapter() {
+        assert!(keep_afm_dd_product_file("adapter_config.json"));
+        assert!(keep_afm_dd_product_file("adapter_model.safetensors"));
+        assert!(!keep_afm_dd_product_file("gguf/afm-dd-2b-Q8_0.gguf"));
+        assert!(!keep_afm_dd_product_file("model.gguf"));
+    }
+
+    #[test]
+    fn decoder_base_keeps_safetensors() {
+        assert!(keep_decoder_base_file("model.safetensors"));
+        assert!(keep_decoder_base_file("model-00001-of-00002.safetensors"));
+        assert!(keep_decoder_base_file("model.safetensors.index.json"));
+        assert!(keep_decoder_base_file("config.json"));
+        assert!(keep_decoder_base_file("tokenizer.json"));
+        assert!(!keep_decoder_base_file("README.md"));
+        assert!(!keep_decoder_base_file("gguf/x.gguf"));
     }
 
     #[test]
@@ -955,10 +1179,7 @@ mod tests {
         ]);
         let files = parse_hf_tree(&json);
         assert_eq!(
-            files
-                .iter()
-                .map(|f| f.path.as_str())
-                .collect::<Vec<_>>(),
+            files.iter().map(|f| f.path.as_str()).collect::<Vec<_>>(),
             vec!["model.safetensors", "tokenizer/vocab.json"]
         );
     }
@@ -1026,6 +1247,27 @@ mod tests {
     }
 
     #[test]
+    fn decoder_needs_base_safetensors() {
+        let tmp = tempdir().unwrap();
+        let p = tmp.path().join("afm-dd");
+        fs::create_dir_all(&p).unwrap();
+        fs::write(p.join("dd_config.json"), "{}").unwrap();
+        fs::write(p.join("adapter_config.json"), "{}").unwrap();
+        assert!(has_decoder_adapter(&p));
+        assert!(!looks_like_checkpoint(&p));
+        let base = p.join(DD_BASE_SUBDIR);
+        fs::create_dir_all(&base).unwrap();
+        fs::write(
+            base.join("config.json"),
+            "{\"architectures\":[\"LlamaForCausalLM\"]}",
+        )
+        .unwrap();
+        fs::write(base.join("model.safetensors"), b"fake").unwrap();
+        assert!(has_decoder_base_weights(&p));
+        assert!(looks_like_checkpoint(&p));
+    }
+
+    #[test]
     fn remove_incomplete_leaves_complete() {
         let tmp = tempdir().unwrap();
         let incomplete = tmp.path().join("bad");
@@ -1033,11 +1275,13 @@ mod tests {
         remove_incomplete_cache(&incomplete);
         assert!(!incomplete.exists());
 
-        let good = tmp.path().join("good");
-        fs::create_dir_all(&good).unwrap();
-        fs::write(good.join("dd_config.json"), "{}").unwrap();
-        remove_incomplete_cache(&good);
-        assert!(good.exists());
+        // Adapter-only is incomplete for serve, but kept so download can fill base/.
+        let adapter_only = tmp.path().join("adapter_only");
+        fs::create_dir_all(&adapter_only).unwrap();
+        fs::write(adapter_only.join("dd_config.json"), "{}").unwrap();
+        remove_incomplete_cache(&adapter_only);
+        assert!(adapter_only.exists());
+        assert!(!looks_like_checkpoint(&adapter_only));
     }
 
     #[test]

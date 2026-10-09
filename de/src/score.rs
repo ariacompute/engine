@@ -65,15 +65,7 @@ impl EncoderScorer {
         let max_len = self.checkpoint.config.max_len;
         let head_max_len = self.checkpoint.config.head_max_len;
         let encode = |text: &str| encode_no_special(tok, text).unwrap_or_default();
-        let packed = build_sequence_ids(
-            &encode,
-            cls,
-            sep,
-            mask,
-            record,
-            max_len,
-            head_max_len,
-        );
+        let packed = build_sequence_ids(&encode, cls, sep, mask, record, max_len, head_max_len);
         Ok((packed.input_ids, packed.mask_positions))
     }
 

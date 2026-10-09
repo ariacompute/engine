@@ -88,6 +88,7 @@ aria-engine serve --model-name afm-de
 # → http://127.0.0.1:8010
 
 # 显式 track + checkpoint 路径
+aria-engine download afm-dd
 aria-engine serve --track decoder --checkpoint ~/.ariacompute/models/afm-dd
 
 # 自定义 bind + compute 覆盖

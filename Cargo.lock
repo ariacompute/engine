@@ -147,10 +147,12 @@ dependencies = [
  "ariacompute-core",
  "candle-core",
  "candle-nn",
+ "candle-transformers",
  "safetensors",
  "serde",
  "serde_json",
  "tempfile",
+ "tokenizers",
 ]
 
 [[package]]

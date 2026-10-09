@@ -48,7 +48,10 @@ impl Record {
             task,
             instructions,
             options,
-            state: v.get("state").cloned().unwrap_or(Value::String(String::new())),
+            state: v
+                .get("state")
+                .cloned()
+                .unwrap_or(Value::String(String::new())),
             label: v.get("label").cloned(),
         })
     }
@@ -125,7 +128,9 @@ fn parse_options(v: &Value, task: Task) -> Result<Vec<OptionItem>> {
                     .collect();
                 return Ok(dedupe_option_texts(opts));
             }
-            Err(AfmError::msg("choice record needs options or criteria dict"))
+            Err(AfmError::msg(
+                "choice record needs options or criteria dict",
+            ))
         }
         Task::Score => {
             if let Some(arr) = criteria.and_then(|c| c.as_array()) {
@@ -254,10 +259,7 @@ pub fn render_option_texts(task: Task, options: &[OptionItem]) -> Vec<String> {
                 .map(|o| o.description.as_str())
                 .filter(|s| !s.is_empty())
                 .unwrap_or("yes, the statement holds");
-            vec![
-                format!("false: {false_desc}"),
-                format!("true: {true_desc}"),
-            ]
+            vec![format!("false: {false_desc}"), format!("true: {true_desc}")]
         }
     }
 }
@@ -275,10 +277,7 @@ pub fn pack_record_text(record: &Record) -> String {
     for o in &opts {
         parts.push(format!("[MASK] {o}"));
     }
-    parts.push(format!(
-        "[SEP] {} [SEP]",
-        serialize_state(&record.state)
-    ));
+    parts.push(format!("[SEP] {} [SEP]", serialize_state(&record.state)));
     parts.join(" ")
 }
 
@@ -378,9 +377,7 @@ mod tests {
 
     #[test]
     fn build_sequence_markers() {
-        let encode = |s: &str| -> Vec<u32> {
-            s.chars().map(|c| c as u32).collect()
-        };
+        let encode = |s: &str| -> Vec<u32> { s.chars().map(|c| c as u32).collect() };
         let rec = Record::from_value(&json!({
             "id": "c",
             "task": "choice",

@@ -97,10 +97,7 @@ pub fn typed_answer(task: Task, names: &[String], probabilities: &[f32]) -> Resu
                 mapped.insert(n.clone(), Value::from(*p));
             }
             if !mapped.contains_key("true") && mapped.contains_key("yes") {
-                p_true = mapped
-                    .get("yes")
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0) as f32;
+                p_true = mapped.get("yes").and_then(|v| v.as_f64()).unwrap_or(0.0) as f32;
                 mapped.insert("true".into(), Value::from(p_true));
                 let p_false = mapped
                     .get("no")

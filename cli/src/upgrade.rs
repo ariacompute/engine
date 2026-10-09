@@ -114,11 +114,7 @@ async fn fetch_releases(host: ReleaseHost, org: &str) -> io::Result<Vec<ReleaseI
         .timeout(Duration::from_secs(60))
         .build()
         .map_err(io::Error::other)?;
-    let resp = client
-        .get(&url)
-        .send()
-        .await
-        .map_err(io::Error::other)?;
+    let resp = client.get(&url).send().await.map_err(io::Error::other)?;
     if !resp.status().is_success() {
         return Err(io::Error::other(format!(
             "releases API {}: {}",
@@ -152,10 +148,7 @@ pub fn select_release<'a>(
     releases: &'a [ReleaseInfo],
     version: Option<&str>,
 ) -> io::Result<&'a ReleaseInfo> {
-    let candidates: Vec<_> = releases
-        .iter()
-        .filter(|r| !r.draft)
-        .collect();
+    let candidates: Vec<_> = releases.iter().filter(|r| !r.draft).collect();
     if candidates.is_empty() {
         return Err(io::Error::new(io::ErrorKind::NotFound, "no releases found"));
     }
@@ -217,8 +210,8 @@ fn extract_tar_gz(archive: &Path, dest_dir: &Path) -> io::Result<()> {
 
 fn extract_zip(archive: &Path, dest_dir: &Path) -> io::Result<()> {
     let file = fs::File::open(archive)?;
-    let mut zip = zip::ZipArchive::new(file)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut zip =
+        zip::ZipArchive::new(file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
     for i in 0..zip.len() {
         let mut entry = zip
             .by_index(i)

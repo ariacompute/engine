@@ -7,6 +7,8 @@ pub const HEAD_MAX_LEN: usize = 512;
 pub const OPTION_DESC_MAX: usize = 96;
 pub const MAX_CHOICES: usize = 255;
 pub const MAX_OPTIONS_DD: usize = 16;
+/// MiniCPM5 prompt budget (Python `afm_d.dd.contract.MAX_TOKENS`).
+pub const MAX_TOKENS_DD: usize = 4096;
 pub const DECISION_TEMPERATURE: f32 = 1.0;
 pub const SHORTLIST_OPTION_THRESHOLD: usize = 40;
 pub const DEFAULT_SHORTLIST_K: usize = 20;

@@ -26,7 +26,7 @@ pub struct ServeOpts {
 
 enum Scorer {
     Encoder(Box<EncoderScorer>),
-    Decoder(DecoderScorer),
+    Decoder(Box<DecoderScorer>),
 }
 
 struct AppState {
@@ -37,7 +37,7 @@ struct AppState {
 pub fn build_router(opts: &ServeOpts) -> anyhow::Result<Router> {
     let scorer = match opts.track {
         Track::Encoder => Scorer::Encoder(Box::new(EncoderScorer::open(&opts.checkpoint)?)),
-        Track::Decoder => Scorer::Decoder(DecoderScorer::open(Some(&opts.checkpoint))?),
+        Track::Decoder => Scorer::Decoder(Box::new(DecoderScorer::open(Some(&opts.checkpoint))?)),
     };
     let state = Arc::new(AppState {
         scorer,
@@ -97,17 +97,14 @@ fn score_one(scorer: &Scorer, record: &Record) -> Result<Value, String> {
         Scorer::Encoder(s) => s.score_record(record).map_err(|e| e.to_string()),
         Scorer::Decoder(s) => {
             let out = s.score_record(record).map_err(|e| e.to_string())?;
-            Ok(out
-                .get("systemone")
-                .cloned()
-                .unwrap_or(out))
+            Ok(out.get("systemone").cloned().unwrap_or(out))
         }
     }
 }
 
 pub async fn run_serve(opts: ServeOpts) -> anyhow::Result<()> {
-    let compute = ariacompute_core::config::parse_compute(&opts.compute)
-        .map_err(anyhow::Error::msg)?;
+    let compute =
+        ariacompute_core::config::parse_compute(&opts.compute).map_err(anyhow::Error::msg)?;
     let app = build_router(&opts)?;
     let listener = tokio::net::TcpListener::bind(&opts.bind).await?;
     tracing::info!(

@@ -27,7 +27,11 @@ pub struct SystemOneResponse {
 pub type SystemOneAnswer = Value;
 
 /// Invert System One question body → AFM-D record (matches `dd/serve.py`).
-pub fn record_from_systemone_question(qid: &str, state: &Value, question: &Value) -> Result<Record> {
+pub fn record_from_systemone_question(
+    qid: &str,
+    state: &Value,
+    question: &Value,
+) -> Result<Record> {
     let qtype = question
         .get("type")
         .and_then(|x| x.as_str())
@@ -66,9 +70,11 @@ pub fn record_from_systemone_question(qid: &str, state: &Value, question: &Value
             )
         }
         "choice" => {
-            let obj = criteria
-                .and_then(|c| c.as_object())
-                .ok_or_else(|| AfmError::msg(format!("systemone choice {qid} needs nonempty criteria dict")))?;
+            let obj = criteria.and_then(|c| c.as_object()).ok_or_else(|| {
+                AfmError::msg(format!(
+                    "systemone choice {qid} needs nonempty criteria dict"
+                ))
+            })?;
             if obj.is_empty() {
                 return Err(AfmError::msg(format!(
                     "systemone choice {qid} needs nonempty criteria dict"
@@ -88,9 +94,9 @@ pub fn record_from_systemone_question(qid: &str, state: &Value, question: &Value
             (Task::Choice, options)
         }
         "score" => {
-            let arr = criteria
-                .and_then(|c| c.as_array())
-                .ok_or_else(|| AfmError::msg(format!("systemone score {qid} needs 2..10 levels")))?;
+            let arr = criteria.and_then(|c| c.as_array()).ok_or_else(|| {
+                AfmError::msg(format!("systemone score {qid} needs 2..10 levels"))
+            })?;
             if !(2..=10).contains(&arr.len()) {
                 return Err(AfmError::msg(format!(
                     "systemone score {qid} needs 2..10 levels"
@@ -153,7 +159,9 @@ pub fn answer_systemone_dd(record: &Record, probs: &Map<String, Value>, label: &
             let expected: f64 = names
                 .iter()
                 .enumerate()
-                .map(|(i, name)| i as f64 * probs.get(*name).and_then(|v| v.as_f64()).unwrap_or(0.0))
+                .map(|(i, name)| {
+                    i as f64 * probs.get(*name).and_then(|v| v.as_f64()).unwrap_or(0.0)
+                })
                 .sum();
             json!({
                 "score": expected,

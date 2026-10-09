@@ -1,6 +1,7 @@
 //! Decoder scoring map + scorer shell (MiniCPM forward when weights available).
 
 use std::path::Path;
+use std::sync::Mutex;
 
 use ariacompute_core::error::{AfmError, Result};
 use ariacompute_core::packing::Record;
@@ -9,6 +10,7 @@ use ariacompute_core::typed::Task;
 use serde_json::{json, Map, Value};
 
 use crate::checkpoint::DecoderCheckpoint;
+use crate::forward::MiniCpmForward;
 use crate::semif::record_to_semif_row;
 
 /// Map SemIf option_ids/probabilities onto AFM-D option names + argmax label.
@@ -101,10 +103,7 @@ pub fn probs_from_semif_out(record: &Record, out: &Value) -> Result<(Map<String,
         Task::Choice => {
             let mut mapped = Map::new();
             for opt in &record.options {
-                let p = probs
-                    .get(&opt.name)
-                    .and_then(|v| v.as_f64())
-                    .unwrap_or(0.0);
+                let p = probs.get(&opt.name).and_then(|v| v.as_f64()).unwrap_or(0.0);
                 mapped.insert(opt.name.clone(), json!(p));
             }
             let total: f64 = mapped.values().filter_map(|v| v.as_f64()).sum();
@@ -133,12 +132,14 @@ pub fn probs_from_semif_out(record: &Record, out: &Value) -> Result<(Map<String,
 
 pub struct DecoderScorer {
     pub checkpoint: DecoderCheckpoint,
+    inner: Mutex<Option<MiniCpmForward>>,
 }
 
 impl DecoderScorer {
     pub fn open(checkpoint: Option<impl AsRef<Path>>) -> Result<Self> {
         Ok(Self {
             checkpoint: DecoderCheckpoint::open(checkpoint)?,
+            inner: Mutex::new(None),
         })
     }
 
@@ -156,11 +157,18 @@ impl DecoderScorer {
     }
 
     pub fn score_record(&self, record: &Record) -> Result<Value> {
-        let _row = record_to_semif_row(record)?;
-        Err(AfmError::msg(format!(
-            "decoder MiniCPM forward not loaded (base={}, rev={}); use score_from_semif_out for golden tests",
-            self.checkpoint.config.base_model, self.checkpoint.config.base_revision
-        )))
+        let row = record_to_semif_row(record)?;
+        let mut guard = self.inner.lock().unwrap_or_else(|e| e.into_inner());
+        if guard.is_none() {
+            *guard = Some(MiniCpmForward::load(&self.checkpoint)?);
+        }
+        let fwd = guard.as_mut().expect("MiniCPM forward just loaded");
+        let (option_ids, probabilities) = fwd.letter_logits(&row)?;
+        let out = json!({
+            "option_ids": option_ids,
+            "probabilities": probabilities,
+        });
+        self.score_from_semif_out(record, &out)
     }
 }
 

@@ -1,8 +1,6 @@
 //! `aria-engine setup` — five-field engine.yml (no router).
 
-use ariacompute_core::config::{
-    self, apply_hub_token_input, parse_compute, AriaConfig,
-};
+use ariacompute_core::config::{self, apply_hub_token_input, parse_compute, AriaConfig};
 use ariacompute_core::gateway::GatewayPair;
 use std::io::{self, BufRead, Write};
 

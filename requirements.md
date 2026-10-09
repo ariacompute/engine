@@ -33,9 +33,9 @@
 |---|------|------|
 | 1 | **core** | System One 类型、packing（1024/512/96）、typed answer、`~/.ariacompute` 五字段 config、gateway / preferred_hub |
 | 2 | **de** | 加载 `rl_agent_config.json` + `model.safetensors` + tokenizer；Laya 序列 packing；shortlist（K>40）；logits→softmax→typed answer；candle DecisionHead 骨架；无权重时允许 `score_record_with_logits` 黄金路径 |
-| 3 | **dd** | SemIf row（选项 2–16）；`probs_from_semif_out` / System One map；底座 pin `openbmb/MiniCPM5-2B` @ `12a3808a956f869c767195e9266b59c4d21d92e2`；无前向时允许 `score_from_semif_out` |
+| 3 | **dd** | SemIf row（选项 2–16）；candle MiniCPM5-2B（pin `12a3808a956f869c767195e9266b59c4d21d92e2`）± PEFT merge-at-load；首位置字母 logits → `probs_from_semif_out`；底座优先 `checkpoint/base/`（download 落盘），否则 `AFM_DD_BASE` / HF cache；黄金路径仍可用 `score_from_semif_out` |
 | 4 | **CLI setup** | 五字段 `engine.yml`：`site_url` / `upgrade_url` / `compute` / `hf_token` / `modelscope_api_token`；`--status`/`--clear`；区域 hub token 交互输入回显 `*`（不明码）；**禁止** `router` / `router_api_key` |
-| 5 | **CLI download** | 按 `site_url` 选 HF vs ModelScope；**HTTP API**（tree/list + resolve），Bearer 注入 setup token；**不用** huggingface-cli / modelscope CLI；失败不落盘可见缓存 |
+| 5 | **CLI download** | 按 `site_url` 选 HF vs ModelScope；**HTTP API**（tree/list + resolve），Bearer 注入 setup token；**不用** huggingface-cli / modelscope CLI；失败不落盘可见缓存；`afm-dd` 额外拉取 MiniCPM5-2B safetensors（pin rev）到 `base/`，**跳过** GGUF |
 | 5b | **CLI list** | 合并本地完整 checkpoint 与区域 Hub 组织目录（HF `ariacompute` / MS `AriaCompute`）；每行标记 `downloaded` / `not downloaded`；Hub 不可达时降级为仅本地 |
 | 6 | **CLI serve** | 读 `compute`（旗标可覆盖）；**不做** aria-router 注册 |
 | 7 | **upgrade** | 自 GitHub/Gitee Releases 拉 `aria-engine_${VER}_${OS}` + `libaria-engine_ffi_${VER}_${OS}.tar.gz`，替换二进制与 `~/.ariacompute/lib/` |

@@ -17,6 +17,8 @@ serde_json = { workspace = true }
 anyhow = { workspace = true }
 candle-core = { workspace = true }
 candle-nn = { workspace = true }
+candle-transformers = { workspace = true }
+tokenizers = { workspace = true }
 safetensors = { workspace = true }
 
 [dev-dependencies]

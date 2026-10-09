@@ -29,13 +29,16 @@ fn set_string(msg: impl Into<String>) -> *const c_char {
     let s = CString::new(msg.into().replace('\0', "")).unwrap_or_default();
     LAST_STRING.with(|slot| {
         *slot.borrow_mut() = Some(s);
-        slot.borrow().as_ref().map(|c| c.as_ptr()).unwrap_or(ptr::null())
+        slot.borrow()
+            .as_ref()
+            .map(|c| c.as_ptr())
+            .unwrap_or(ptr::null())
     })
 }
 
 enum Inner {
     Encoder(Box<EncoderScorer>),
-    Decoder(DecoderScorer),
+    Decoder(Box<DecoderScorer>),
 }
 
 pub struct AriaModel {
@@ -107,9 +110,9 @@ pub extern "C" fn aria_model_init(
             Track::Encoder => Inner::Encoder(Box::new(
                 EncoderScorer::open(&ckpt).map_err(|e| e.to_string())?,
             )),
-            Track::Decoder => {
-                Inner::Decoder(DecoderScorer::open(Some(&ckpt)).map_err(|e| e.to_string())?)
-            }
+            Track::Decoder => Inner::Decoder(Box::new(
+                DecoderScorer::open(Some(&ckpt)).map_err(|e| e.to_string())?,
+            )),
         };
         Ok(AriaModel { inner })
     })() {
@@ -170,7 +173,10 @@ pub extern "C" fn aria_systemone(
         Ok(s) => {
             let bytes = s.as_bytes();
             if bytes.len() + 1 > out_len {
-                set_error(format!("output buffer too small (need {})", bytes.len() + 1));
+                set_error(format!(
+                    "output buffer too small (need {})",
+                    bytes.len() + 1
+                ));
                 return -2;
             }
             unsafe {

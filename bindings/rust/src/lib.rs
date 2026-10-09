@@ -15,7 +15,7 @@ pub use ariacompute_core::systemone::SystemOneRequest;
 
 enum Inner {
     Encoder(Box<EncoderScorer>),
-    Decoder(DecoderScorer),
+    Decoder(Box<DecoderScorer>),
 }
 
 pub struct Engine {
@@ -28,7 +28,7 @@ impl Engine {
         let ckpt = checkpoint.as_ref();
         let inner = match track {
             Track::Encoder => Inner::Encoder(Box::new(EncoderScorer::open(ckpt)?)),
-            Track::Decoder => Inner::Decoder(DecoderScorer::open(Some(ckpt))?),
+            Track::Decoder => Inner::Decoder(Box::new(DecoderScorer::open(Some(ckpt))?)),
         };
         Ok(Self {
             inner,

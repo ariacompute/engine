@@ -17,8 +17,6 @@ fn decoder_choice_golden() {
     let fx = fixture("decoder_choice.json");
     let rec = Record::from_value(&fx).unwrap();
     let scorer = DecoderScorer::open(None::<&str>).unwrap();
-    let scored = scorer
-        .score_from_semif_out(&rec, &fx["semif_out"])
-        .unwrap();
+    let scored = scorer.score_from_semif_out(&rec, &fx["semif_out"]).unwrap();
     assert_eq!(scored["systemone"]["choice"], fx["expect_choice"]);
 }

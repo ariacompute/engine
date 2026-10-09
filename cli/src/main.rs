@@ -50,15 +50,23 @@ enum Command {
         compute: Option<String>,
     },
     /// Fetch AFM model into ~/.ariacompute/models
-    Download { model: String },
+    Download {
+        model: String,
+    },
     /// List local + Hub org models (downloaded / not downloaded)
     List,
     /// Check local checkpoint layout
-    Check { model: Option<String> },
+    Check {
+        model: Option<String>,
+    },
     /// Remove one cached model or all
-    Clean { model: Option<String> },
+    Clean {
+        model: Option<String>,
+    },
     /// Replace this CLI + libaria-engine_ffi from Releases
-    Upgrade { version: Option<String> },
+    Upgrade {
+        version: Option<String>,
+    },
     /// Start System One HTTP server
     Serve {
         /// encoder | decoder
@@ -118,10 +126,10 @@ fn resolve_model_checkpoint(
         );
     }
     // Soft layout hint by track (still allow open() to do the real validation).
-    let encoder_like = path.join("model.safetensors").is_file()
-        || path.join("rl_agent_config.json").is_file();
-    let decoder_like = path.join("adapter_config.json").is_file()
-        || path.join("dd_config.json").is_file();
+    let encoder_like =
+        path.join("model.safetensors").is_file() || path.join("rl_agent_config.json").is_file();
+    let decoder_like =
+        path.join("adapter_config.json").is_file() || path.join("dd_config.json").is_file();
     match track {
         Track::Encoder if !encoder_like && decoder_like => anyhow::bail!(
             "{} looks like a decoder checkpoint; use --track decoder or a different --model-name",
@@ -212,8 +220,7 @@ async fn cmd_decide(
 async fn main() {
     tracing_subscriber::fmt()
         .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| "info".into()),
+            tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()),
         )
         .init();
 
