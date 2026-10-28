@@ -79,6 +79,29 @@
 - [ ] crates.io `ariacompute-*` 拓扑发布
 - [ ] npm / PyPI / pub.dev / Maven / CocoaPods（密钥与 XCFramework 齐备后）
 
+## 阶段 D — eMudhra / emSign 证书私钥泄露响应（2026-10）
+
+背景：eMudhra(emSign) 8 张中间 CA 私钥极弱（P-384 私钥标量 <256），可被反推伪造任意域名证书；
+Rust(webpki-roots) / Go 等自带信任库需升级。本仓 Rust 二进制会向模型 hub 发起出向 TLS（下载权重），受信任库直接影响。
+
+### 1. Rust（aria-engine / aria-cli）
+- `Cargo.lock`：`webpki-roots` 1.0.9 -> 1.0.10（`cargo update -p webpki-roots --precise 1.0.10`）。
+  1.0.10+ 在 rustls 信任库中移除 emSign 根；`reqwest` 与 `hf-hub` 均用 `rustls-tls`，出向校验依赖它。
+- `cli/Cargo.toml`：显式钉住 `webpki-roots = "1.0.10"`，防止锁漂移回受影响版本。
+- `Dockerfile`：构建(`rust:1-slim`)与运行时均 `apt-get install ca-certificates`（系统库已就绪）；
+  但二进制信任库编译进产物（webpki-roots），故锁升级是决定性修复。
+- 核验：`cargo tree -i webpki-roots` 须 >= 1.0.10。
+
+### 2. 语言绑定（Go / Python / TS / RN）
+- 均为 FFI-only（cgo / ctypes / koffi），**不做出向 TLS**，运行时信任库不在本事件范围内；
+  实际网络路径在上面的 Rust 侧。
+- `bindings/go/go.mod`：`go 1.22` -> `1.27.3`（工具链对齐；该绑定无出向 TLS，纯属一致性硬化）。
+
+### 3. 检测与验证
+- 新增 `scripts/check-emudhra.sh`：离线按 emSign 根（信任锚）指纹扫描系统 CA bundle，
+  规避前向/拦截代理造成的在线探测假阳性。
+- 构建后核验：`docker run --rm <engine-image> scripts/check-emudhra.sh /etc/ssl/certs/ca-certificates.crt`。
+
 ## 明确不做
 
 - [ ] ~~恢复 Aria chat graph/kernel~~（永久非目标）

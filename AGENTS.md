@@ -13,6 +13,17 @@ Greenfield **AFM-D typed-decision** runtime (Encoder + Decoder). Do **not** revi
 - `ariacompute-ffi` — cdylib `aria_ffi` → release name `libaria-engine_ffi`
 - `bindings/rust` — crates.io `ariacompute-engine`
 
+## Trust stores (eMudhra/emSign CA key compromise, 2026-10)
+
+- The `aria-engine` / `aria-cli` binaries do outbound TLS for hub downloads via
+  `reqwest` and `hf-hub` (both `rustls-tls`), which use **`webpki-roots`** — pinned
+  `>=1.0.10` in `cli/Cargo.toml` (removes the compromised emSign roots). The Docker
+  build already installs `ca-certificates` (system store), but the binaries embed
+  webpki-roots, so the lock bump is the decisive fix.
+- The language bindings (Go / Python / TS / RN) are **FFI-only** (cgo / ctypes / koffi)
+  and perform no outbound TLS themselves, so their runtimes' trust stores are out of
+  scope; the actual network path is the Rust side above.
+
 ## Contracts (do not drift)
 
 - Encoder budgets: `max_len=1024`, `head_max_len=512`, `OPTION_DESC_MAX=96`

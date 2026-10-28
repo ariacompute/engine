@@ -29,6 +29,9 @@ axum = { workspace = true }
 tokio = { workspace = true }
 tower = { workspace = true }
 reqwest = { workspace = true }
+# eMudhra/emSign CA key compromise (2026-10): 1.0.10+ removes the compromised
+# emSign roots from the rustls trust store used by reqwest/hf-hub's rustls-tls.
+webpki-roots = "1.0.10"
 indicatif = { workspace = true }
 futures-util = { workspace = true }
 urlencoding = "2"
