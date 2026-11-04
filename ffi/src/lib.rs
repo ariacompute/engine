@@ -362,9 +362,15 @@ mod tests {
         let p = aria_model_cache_dir(name.as_ptr());
         assert!(!p.is_null());
         let resolved = unsafe { CStr::from_ptr(p) }.to_string_lossy().into_owned();
+        // compare against `Path::join` per component: a literal "models/afm-de"
+        // keeps the "/" verbatim on Windows, where the impl emits "\"
         assert_eq!(
             resolved,
-            dir.path().join("models/afm-de").display().to_string()
+            dir.path()
+                .join("models")
+                .join("afm-de")
+                .display()
+                .to_string()
         );
         std::env::remove_var("ARIA_COMPUTE_HOME");
     }
