@@ -514,6 +514,12 @@ fn http_status(port: u16, path: &str) -> Option<u16> {
     line.split_whitespace().nth(1)?.parse().ok()
 }
 
+// `kill -INT` is the only portable way to exercise the Ctrl-C path from a test;
+// Windows has no console-signal plumbing here, and `Child::kill` terminates hard.
+#[cfg_attr(
+    windows,
+    ignore = "no portable Ctrl-C delivery for a spawned console process"
+)]
 #[test]
 fn serve_binds_answers_health_and_exits_on_sigint() {
     let home = home();

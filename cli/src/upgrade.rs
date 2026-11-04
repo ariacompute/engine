@@ -487,13 +487,20 @@ mod tests {
         writer.finish().unwrap().into_inner()
     }
 
+    /// Archive bytes in the format the release asset name implies (Windows ships
+    /// `.zip`, every other platform `.tar.gz`) — a body in the wrong format fails
+    /// with `InvalidData` before the code under test ever looks inside.
+    fn archive_bytes(asset_name: &str, entries: &[(&str, &[u8])]) -> Vec<u8> {
+        if asset_name.ends_with(".zip") {
+            zip_archive(entries)
+        } else {
+            tar_gz(entries)
+        }
+    }
+
     /// Engine archive bytes for the asset name (format follows the asset suffix).
     fn engine_archive_bytes(asset_name: &str, bin_name: &str) -> Vec<u8> {
-        if asset_name.ends_with(".zip") {
-            zip_archive(&[(bin_name, b"new-binary")])
-        } else {
-            tar_gz(&[(bin_name, b"new-binary")])
-        }
+        archive_bytes(asset_name, &[(bin_name, b"new-binary")])
     }
 
     fn write_config(upgrade_url: &str) {
@@ -554,9 +561,22 @@ mod tests {
         extract_engine_archive("aria-engine_1_windows_x86_64.zip", &zip_path, &zip_out).unwrap();
         assert_eq!(fs::read(zip_out.join("aria-engine.exe")).unwrap(), b"zip");
 
-        // the archive builder helper honours the same suffix convention
-        assert!(!engine_archive_bytes("x.zip", "aria-engine.exe").is_empty());
-        assert!(!engine_archive_bytes("x.tar.gz", "aria-engine").is_empty());
+        // the archive builder helper honours the same suffix convention: a mock
+        // body in the other format fails as InvalidData before the code under
+        // test ever looks inside (Windows assets are `.zip`)
+        let zip_bytes = engine_archive_bytes("x.zip", "aria-engine.exe");
+        let zip_mock = dir.path().join("mock.zip");
+        fs::write(&zip_mock, &zip_bytes).unwrap();
+        let zip_target = dir.path().join("mock-zip");
+        extract_engine_archive("x.zip", &zip_mock, &zip_target).unwrap();
+        assert!(zip_target.join("aria-engine.exe").is_file());
+
+        let tgz_bytes = engine_archive_bytes("x.tar.gz", "aria-engine");
+        let tgz_mock = dir.path().join("mock.tar.gz");
+        fs::write(&tgz_mock, &tgz_bytes).unwrap();
+        let tgz_target = dir.path().join("mock-tgz");
+        extract_engine_archive("x.tar.gz", &tgz_mock, &tgz_target).unwrap();
+        assert!(tgz_target.join("aria-engine").is_file());
     }
 
     #[test]
@@ -929,9 +949,10 @@ mod tests {
                 let ffi_name = format!("libaria-engine_ffi_0.4.0_{os}.tar.gz");
                 Mock::given(method("GET"))
                     .and(mock_path("/dl/engine"))
-                    .respond_with(
-                        ResponseTemplate::new(200).set_body_bytes(tar_gz(&[("readme.txt", b"x")])),
-                    )
+                    .respond_with(ResponseTemplate::new(200).set_body_bytes(archive_bytes(
+                        &engine_name,
+                        &[("readme.txt", b"x")],
+                    )))
                     .mount(&server)
                     .await;
                 Mock::given(method("GET"))

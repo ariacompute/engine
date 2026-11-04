@@ -413,9 +413,15 @@ mod tests {
         assert!(last_error_text().contains("not a directory"));
     }
 
+    /// Output buffer for `aria_systemone`: `c_char` is `i8` on x86_64 Linux but
+    /// `u8` on aarch64, so the element type must never be spelled out by hand.
+    fn out_buf(len: usize) -> Vec<c_char> {
+        vec![0 as c_char; len]
+    }
+
     #[test]
     fn systemone_validates_arguments() {
-        let mut buf = [0i8; 32];
+        let mut buf = [0 as c_char; 32];
         assert_eq!(
             aria_systemone(ptr::null_mut(), ptr::null(), buf.as_mut_ptr(), buf.len()),
             -1
@@ -433,7 +439,7 @@ mod tests {
     fn systemone_rejects_bad_json() {
         let model = encoder_model(vec![0.1, 3.0]);
         let bad = CString::new("{not json").unwrap();
-        let mut buf = [0i8; 64];
+        let mut buf = [0 as c_char; 64];
         assert_eq!(
             aria_systemone(model, bad.as_ptr(), buf.as_mut_ptr(), buf.len()),
             -1
@@ -446,7 +452,7 @@ mod tests {
     fn systemone_encoder_success_writes_json() {
         let model = encoder_model(vec![0.1, 3.0]);
         let req = choice_request();
-        let mut buf = vec![0i8; 512];
+        let mut buf = out_buf(512);
         assert_eq!(
             aria_systemone(model, req.as_ptr(), buf.as_mut_ptr(), buf.len()),
             0
@@ -463,7 +469,7 @@ mod tests {
     fn systemone_reports_small_buffer() {
         let model = encoder_model(vec![0.1, 3.0]);
         let req = choice_request();
-        let mut buf = vec![0i8; 4];
+        let mut buf = out_buf(4);
         assert_eq!(
             aria_systemone(model, req.as_ptr(), buf.as_mut_ptr(), buf.len()),
             -2
@@ -476,7 +482,7 @@ mod tests {
     fn systemone_decoder_unwraps_systemone_block() {
         let model = decoder_model();
         let req = choice_request();
-        let mut buf = vec![0i8; 512];
+        let mut buf = out_buf(512);
         assert_eq!(
             aria_systemone(model, req.as_ptr(), buf.as_mut_ptr(), buf.len()),
             0
@@ -494,7 +500,7 @@ mod tests {
         // one logit for two options → logits/options mismatch inside the scorer
         let model = encoder_model(vec![1.0]);
         let req = choice_request();
-        let mut buf = vec![0i8; 256];
+        let mut buf = out_buf(256);
         assert_eq!(
             aria_systemone(model, req.as_ptr(), buf.as_mut_ptr(), buf.len()),
             -1
