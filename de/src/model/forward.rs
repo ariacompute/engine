@@ -1,107 +1,37 @@
 //! Candle DecisionModel: ModernBERT encoder + Laya typed MASK head.
+//!
+//! Excluded from the 100% line-coverage gate (`de/src/model/forward.rs`): every
+//! branch here needs the real ModernBERT checkpoint. The surrounding logic lives
+//! in `de/src/model/config.rs` (HF config mapping, key remapping) and
+//! `de/src/score.rs` (packing + softmax), both fully covered. See
+//! `requirements.md` §4.
 
 use std::collections::HashMap;
-use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
 use candle_core::{DType, Device, IndexOp, Result as CandleResult, Tensor, D};
 use candle_nn::{layer_norm, linear, linear_no_bias, ops, LayerNorm, Linear, Module, VarBuilder};
-use candle_transformers::models::modernbert::{Config as ModernBertConfig, ModernBert};
-use serde::Deserialize;
+use candle_transformers::models::modernbert::ModernBert;
 
 use ariacompute_core::error::{AfmError, Result};
 
-/// Load encoder/config.json into candle ModernBERT config (maps HF rope_parameters).
-pub fn load_modernbert_config(encoder_dir: &Path) -> Result<ModernBertConfig> {
-    let path = encoder_dir.join("config.json");
-    let text = fs::read_to_string(&path)
-        .map_err(|e| AfmError::msg(format!("read {}: {e}", path.display())))?;
-    let hf: HfModernBertConfig = serde_json::from_str(&text)?;
-    Ok(hf.into_candle())
-}
+use crate::checkpoint::EncoderCheckpoint;
+use crate::model::config::{load_modernbert_config, remap_encoder_key};
+use crate::score::EncoderForward;
 
-#[derive(Debug, Deserialize)]
-struct HfModernBertConfig {
-    vocab_size: usize,
-    hidden_size: usize,
-    num_hidden_layers: usize,
-    num_attention_heads: usize,
-    intermediate_size: usize,
-    max_position_embeddings: usize,
-    #[serde(default = "default_eps")]
-    layer_norm_eps: f64,
-    #[serde(default = "default_eps")]
-    norm_eps: f64,
-    pad_token_id: u32,
-    global_attn_every_n_layers: usize,
-    local_attention: usize,
-    #[serde(default)]
-    global_rope_theta: Option<f64>,
-    #[serde(default)]
-    local_rope_theta: Option<f64>,
-    #[serde(default)]
-    rope_parameters: Option<RopeParameters>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RopeParameters {
-    #[serde(default)]
-    full_attention: Option<RopeTheta>,
-    #[serde(default)]
-    sliding_attention: Option<RopeTheta>,
-}
-
-#[derive(Debug, Deserialize)]
-struct RopeTheta {
-    rope_theta: f64,
-}
-
-fn default_eps() -> f64 {
-    1e-5
-}
-
-impl HfModernBertConfig {
-    fn into_candle(self) -> ModernBertConfig {
-        let global = self
-            .global_rope_theta
-            .or_else(|| {
-                self.rope_parameters
-                    .as_ref()
-                    .and_then(|r| r.full_attention.as_ref())
-                    .map(|t| t.rope_theta)
-            })
-            .unwrap_or(160_000.0);
-        let local = self
-            .local_rope_theta
-            .or_else(|| {
-                self.rope_parameters
-                    .as_ref()
-                    .and_then(|r| r.sliding_attention.as_ref())
-                    .map(|t| t.rope_theta)
-            })
-            .unwrap_or(10_000.0);
-        let eps = if self.layer_norm_eps > 0.0 {
-            self.layer_norm_eps
-        } else {
-            self.norm_eps
-        };
-        ModernBertConfig {
-            vocab_size: self.vocab_size,
-            hidden_size: self.hidden_size,
-            num_hidden_layers: self.num_hidden_layers,
-            num_attention_heads: self.num_attention_heads,
-            intermediate_size: self.intermediate_size,
-            max_position_embeddings: self.max_position_embeddings,
-            layer_norm_eps: eps,
-            pad_token_id: self.pad_token_id,
-            global_attn_every_n_layers: self.global_attn_every_n_layers,
-            global_rope_theta: global,
-            local_attention: self.local_attention,
-            local_rope_theta: local,
-            classifier_config: None,
-        }
-    }
+/// Load the candle forward pass for a checkpoint that already has weights.
+///
+/// Lives here (and not in `score.rs`) because it needs the real ModernBERT
+/// tensors; `score.rs` only decides *whether* to load it.
+pub fn load_forward(checkpoint: &EncoderCheckpoint) -> Result<Arc<dyn EncoderForward>> {
+    let head_layers = checkpoint.config.head_layers;
+    let model = DecisionModel::load(
+        &checkpoint.encoder_dir,
+        &checkpoint.weights_path,
+        head_layers,
+    )?;
+    Ok(Arc::new(model) as Arc<dyn EncoderForward>)
 }
 
 /// Remap Laya `encoder.*` → candle `model.*`; keep head/scorer/type_emb keys.
@@ -110,12 +40,7 @@ fn load_weight_map(weights: &Path, device: &Device) -> Result<HashMap<String, Te
         .map_err(|e| AfmError::msg(format!("safetensors {}: {e}", weights.display())))?;
     let mut out = HashMap::with_capacity(raw.len());
     for (k, t) in raw {
-        let key = if let Some(rest) = k.strip_prefix("encoder.") {
-            format!("model.{rest}")
-        } else {
-            k
-        };
-        out.insert(key, t);
+        out.insert(remap_encoder_key(&k), t);
     }
     Ok(out)
 }
@@ -305,6 +230,17 @@ impl DecisionModel {
             .squeeze(D::Minus1)?
             .squeeze(0)?; // (K,)
         logits.to_vec1::<f32>()
+    }
+}
+
+impl EncoderForward for DecisionModel {
+    fn forward_logits(
+        &self,
+        input_ids: &[u32],
+        mask_positions: &[usize],
+        type_id: usize,
+    ) -> Result<Vec<f32>> {
+        DecisionModel::forward_logits(self, input_ids, mask_positions, type_id)
     }
 }
 

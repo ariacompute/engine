@@ -72,6 +72,33 @@
 | **B（权重前向）** | Hub `afm-de` / `afm-dd` checkpoint 上 candle 前向与 Python `afm_d.de.score` / `afm_d.dd.score` 标签一致（argmax + 概率差阈值，如 1e-3） |
 | **C（发布）** | `release.yml` 产出 CLI+FFI 资产；`upgrade` 可自更；至少一种宿主 binding `systemone` E2E |
 
+### 4.1 测试与覆盖率口径
+
+- 唯一入口：`./scripts/coverage.sh`（`lcov` 供 CI 门禁，`html` 供本地看报告），内部固定
+  `cargo llvm-cov --workspace --all-targets`，CI（`.github/workflows/ci.yml`）直接调用同一脚本，
+  避免两处口径漂移。
+- 门禁口径：脚本自己解析 lcov 的 `DA:<line>,0`，要求**零未覆盖行**（任意一个测试实例执行到即算覆盖）。
+  不用 `--fail-under-lines 100`：`--all-targets` 会把同一源文件编译多份（单测 lib、集成/CLI 测试依赖的
+  lib、`aria-engine` 二进制），llvm-cov 的 per-file summary 按「行 × 实例」成对计数、而文本/HTML 视图
+  按并集展示，于是会出现 summary 报 30 行未覆盖、逐行视图却一行不缺的自相矛盾（见脚本头注释）。
+  lcov 口径与逐行视图一致且跨 llvm-cov 版本稳定。
+- 覆盖对象含 `aria-engine` 二进制（`main.rs` / `app.rs` / `serve` / `setup` / `download` /
+  `upgrade`）与 C ABI `ffi`：子进程测试（`cli/tests/cli.rs`，assert_cmd）依赖
+  `LLVM_PROFILE_FILE` 继承，因此 `serve` 必须以优雅退出（SIGINT）结束，否则 profraw 丢失会让
+  整段 `serve` 计为 0。
+- 网络编排测试全部离线：Hub 与 Release 通过 `HubEndpoints` / `ReleaseApi` 的环境变量 seam
+  指向本地 `wiremock`，不访问真实 `huggingface.co` / `gitee.com` / GitHub。
+- 环境变量是进程全局状态：`ARIA_COMPUTE_HOME`、`LANG`、`HF_HUB_CACHE` 等用例一律
+  `#[serial]`（或共享互斥锁），否则并行测试会把临时 home 互相覆盖。
+- **文件级排除（仅 2 个，均为「纯张量前向」）**：
+  - `de/src/model/forward.rs`：ModernBERT + typed MASK head 的 tensor 图，运行必须要有真实
+    `model.safetensors`；其可测部分（HF config 映射、key 重映射）已拆到
+    `de/src/model/config.rs`，packing/softmax 在 `de/src/score.rs`。
+  - `dd/src/forward.rs`：MiniCPM5-2B 的 decode 前向，同理必须真实权重；权重定位/反量化/LoRA
+    合并在 `dd/src/weights.rs`，字母 id 与 prompt 编码在 `dd/src/letters.rs`，两者均 100% 覆盖。
+  - 上层（CLI / FFI / bindings / serve）通过 `EncoderForward` / `LetterScorer` / `Judge` 注入
+    stub，成功路径无需下载权重即可覆盖。
+
 ## 5. 文档与协作
 
 - `README.md` / `AGENTS.md` 与本文件一致

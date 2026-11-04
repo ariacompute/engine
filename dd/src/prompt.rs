@@ -87,4 +87,45 @@ mod tests {
         assert!(prompt.contains(SYSTEM));
         assert!(prompt.ends_with("<|im_start|>assistant\n<think>\n\n</think>\n\n"));
     }
+
+    #[test]
+    fn missing_options_is_an_error() {
+        let err = user_from_row(&json!({"state": "s", "question": "q"})).unwrap_err();
+        assert!(err.to_string().contains("semif row missing options"));
+        let err = prompt_text(&json!({})).unwrap_err();
+        assert!(err.to_string().contains("semif row missing options"));
+    }
+
+    #[test]
+    fn option_without_description_is_an_error() {
+        let row = json!({"options": [{"letter": "A"}]});
+        let err = user_from_row(&row).unwrap_err();
+        assert!(err.to_string().contains("semif option missing description"));
+    }
+
+    #[test]
+    fn more_than_sixteen_options_exceeds_letters() {
+        let options: Vec<Value> = (0..17)
+            .map(|i| json!({"id": i.to_string(), "description": format!("d{i}")}))
+            .collect();
+        let err = user_from_row(&json!({"options": options})).unwrap_err();
+        assert!(err.to_string().contains("exceeds A–P"));
+    }
+
+    #[test]
+    fn missing_state_and_criterion_render_as_null() {
+        let row = json!({"options": [{"id": "a", "description": "alpha"}, {"id": "b", "description": "beta"}]});
+        let user = user_from_row(&row).unwrap();
+        assert!(user.starts_with("{\"evidence\": null, \"criterion\": null"));
+        assert!(user.contains("\"letter\": \"A\""));
+        assert!(user.contains("\"letter\": \"B\""));
+    }
+
+    #[test]
+    fn pre_matches_the_system_prompt() {
+        let pre = pre();
+        assert!(pre.starts_with("<|im_start|>system\n"));
+        assert!(pre.ends_with("<|im_start|>user\n"));
+        assert!(!pre.contains(BOS));
+    }
 }

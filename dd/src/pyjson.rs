@@ -106,4 +106,44 @@ mod tests {
             "{\"a\": [1, true], \"b\": \"x\"}"
         );
     }
+
+    #[test]
+    fn dumps_numbers_like_python() {
+        assert_eq!(dumps(&json!(7)), "7");
+        assert_eq!(dumps(&json!(-3)), "-3");
+        assert_eq!(dumps(&json!(u64::MAX)), "18446744073709551615");
+        assert_eq!(dumps(&json!(2.0)), "2.0");
+        assert_eq!(dumps(&json!(-2.0)), "-2.0");
+        assert_eq!(dumps(&json!(1.5)), "1.5");
+        assert_eq!(dumps(&json!(1e16)), format!("{}", 1e16_f64));
+        assert_eq!(dumps(&json!(-1.25e-3)), format!("{}", -1.25e-3_f64));
+    }
+
+    #[test]
+    fn dumps_string_escapes() {
+        assert_eq!(dumps(&json!("a\"b\\c")), "\"a\\\"b\\\\c\"");
+        assert_eq!(dumps(&json!("a\nb\rc\td")), "\"a\\nb\\rc\\td\"");
+        assert_eq!(dumps(&json!("\u{8}\u{c}")), "\"\\b\\f\"");
+        assert_eq!(dumps(&json!("\u{1}")), "\"\\u0001\"");
+        assert_eq!(dumps(&json!("中文 ✓")), "\"中文 ✓\"");
+    }
+
+    #[test]
+    fn dumps_nested_structures() {
+        assert_eq!(
+            dumps(&json!({"k": [1, {"n": null}, false]})),
+            "{\"k\": [1, {\"n\": null}, false]}"
+        );
+        assert_eq!(dumps(&json!([])), "[]");
+        assert_eq!(dumps(&json!({})), "{}");
+    }
+
+    #[test]
+    fn dumps_object_keeps_insertion_order() {
+        assert_eq!(dumps_object(&[]), "{}");
+        assert_eq!(
+            dumps_object(&[("letter", json!("A")), ("description", json!("a: b"))]),
+            "{\"letter\": \"A\", \"description\": \"a: b\"}"
+        );
+    }
 }

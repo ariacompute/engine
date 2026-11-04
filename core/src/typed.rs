@@ -137,4 +137,84 @@ mod tests {
         let ans = typed_answer(Task::Choice, &names, &[0.2, 0.8]).unwrap();
         assert_eq!(ans["choice"], "b");
     }
+
+    #[test]
+    fn task_helpers_and_errors() {
+        assert_eq!(Task::Choice.as_str(), "choice");
+        assert_eq!(Task::Score.as_str(), "score");
+        assert_eq!(Task::Noul.as_str(), "noul");
+        assert_eq!(Task::Choice.type_id(), 0);
+        assert_eq!(Task::Score.type_id(), 1);
+        assert_eq!(Task::Noul.type_id(), 2);
+        for (raw, task) in [
+            ("choice", Task::Choice),
+            (" SCORE ", Task::Score),
+            ("NoUl", Task::Noul),
+        ] {
+            assert_eq!(Task::parse(raw).unwrap(), task);
+        }
+        assert!(Task::parse("ranking")
+            .unwrap_err()
+            .to_string()
+            .contains("unknown task"));
+    }
+
+    #[test]
+    fn softmax_handles_temperature_and_empty_input() {
+        let hot = softmax(&[1.0, 2.0], 100.0);
+        assert!((hot[0] - hot[1]).abs() < 1e-2);
+        assert!((hot[0] + hot[1] - 1.0).abs() < 1e-5);
+        // temperature <= 0 collapses onto the tiny floor and saturates the peak
+        let cold = softmax(&[1.0, 2.0], 0.0);
+        assert!(cold[1] > 0.999);
+        assert!(softmax(&[], 1.0).is_empty());
+        assert_eq!(confidence_from_prob_list(&[0.1, 0.7, 0.2]), 0.7);
+        assert_eq!(confidence_from_prob_list(&[]), 0.0);
+    }
+
+    #[test]
+    fn typed_answer_rejects_length_mismatch() {
+        let err = typed_answer(Task::Choice, &["a".to_string()], &[0.5, 0.5]).unwrap_err();
+        assert!(err.to_string().contains("must match option names"));
+    }
+
+    #[test]
+    fn score_answer_is_the_expected_level() {
+        let names = vec!["a".to_string(), "b".to_string(), "c".to_string()];
+        let ans = typed_answer(Task::Score, &names, &[0.2, 0.3, 0.5]).unwrap();
+        assert!((ans["score"].as_f64().unwrap() - 1.3).abs() < 1e-6);
+        assert!((ans["confidence"].as_f64().unwrap() - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn noul_answer_maps_true_and_false() {
+        let names = vec!["false".to_string(), "true".to_string()];
+        let ans = typed_answer(Task::Noul, &names, &[0.25, 0.75]).unwrap();
+        assert!((ans["noul"].as_f64().unwrap() - 0.75).abs() < 1e-6);
+        assert!((ans["confidence"].as_f64().unwrap() - 0.75).abs() < 1e-6);
+
+        // yes/no aliases are expanded to true/false
+        let names = vec!["yes".to_string(), "no".to_string()];
+        let ans = typed_answer(Task::Noul, &names, &[0.7, 0.3]).unwrap();
+        assert!((ans["noul"].as_f64().unwrap() - 0.7).abs() < 1e-6);
+        assert!((ans["probabilities"]["true"].as_f64().unwrap() - 0.7).abs() < 1e-6);
+        assert!((ans["probabilities"]["false"].as_f64().unwrap() - 0.3).abs() < 1e-6);
+
+        // a lone "yes" derives false mass from the complement
+        let names = vec!["yes".to_string()];
+        let ans = typed_answer(Task::Noul, &names, &[0.25]).unwrap();
+        assert!((ans["probabilities"]["false"].as_f64().unwrap() - 0.75).abs() < 1e-6);
+    }
+
+    #[test]
+    fn noul_answer_requires_true_side() {
+        let names = vec!["a".to_string(), "b".to_string()];
+        let err = typed_answer(Task::Noul, &names, &[0.5, 0.5]).unwrap_err();
+        assert!(err.to_string().contains("must include true"));
+
+        // upper-case aliases do not satisfy the lower-case contract
+        let names = vec!["YES".to_string()];
+        let err = typed_answer(Task::Noul, &names, &[0.9]).unwrap_err();
+        assert!(err.to_string().contains("must include true"));
+    }
 }

@@ -75,6 +75,7 @@ pub fn preferred_hub(site_url: &str) -> PublicHub {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn upgrade_urls() {
@@ -99,5 +100,44 @@ mod tests {
             PublicHub::ModelScope
         );
         assert_eq!(preferred_hub(""), PublicHub::HuggingFace);
+    }
+
+    #[test]
+    fn site_urls_and_flags() {
+        assert_eq!(GatewayPair::INTL.site_url(), "https://ariacompute.com");
+        assert_eq!(GatewayPair::CN.site_url(), "https://ariacompute.cn");
+        assert!(GatewayPair::CN.is_cn());
+        assert!(!GatewayPair::INTL.is_cn());
+        assert_eq!(PublicHub::HuggingFace.as_str(), "huggingface");
+        assert_eq!(PublicHub::ModelScope.as_str(), "modelscope");
+    }
+
+    #[test]
+    fn from_url_detects_cn_and_gitee() {
+        assert_eq!(
+            GatewayPair::from_url("https://ariacompute.cn"),
+            GatewayPair::Cn
+        );
+        assert_eq!(
+            GatewayPair::from_url("https://GITEE.com/ariacompute"),
+            GatewayPair::Cn
+        );
+        assert_eq!(
+            GatewayPair::from_url("https://ariacompute.com"),
+            GatewayPair::Intl
+        );
+        assert_eq!(GatewayPair::from_url(""), GatewayPair::Intl);
+    }
+
+    #[test]
+    #[serial]
+    fn detect_default_follows_locale() {
+        std::env::set_var("LANG", "zh_CN.UTF-8");
+        assert_eq!(GatewayPair::detect_default(), GatewayPair::Cn);
+        std::env::set_var("LANG", "en_US.UTF-8");
+        assert_eq!(GatewayPair::detect_default(), GatewayPair::Intl);
+        // no locale at all falls back to the international pair
+        std::env::remove_var("LANG");
+        assert_eq!(GatewayPair::detect_default(), GatewayPair::Intl);
     }
 }

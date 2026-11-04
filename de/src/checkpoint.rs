@@ -132,4 +132,54 @@ mod tests {
         assert_eq!(ckpt.config.max_len, 1024);
         assert!(!ckpt.has_weights());
     }
+
+    #[test]
+    fn defaults_when_config_missing() {
+        let dir = tempdir().unwrap();
+        let ckpt = EncoderCheckpoint::open(dir.path()).unwrap();
+        assert_eq!(
+            ckpt.config.encoder,
+            ariacompute_core::contract::ENCODER_NAME
+        );
+        assert_eq!(ckpt.config.head_layers, 2);
+        assert_eq!(ckpt.config.max_len, MAX_LEN);
+        assert_eq!(ckpt.config.head_max_len, HEAD_MAX_LEN);
+        assert_eq!(ckpt.tokenizer_dir, dir.path());
+        assert_eq!(ckpt.encoder_dir, dir.path());
+    }
+
+    #[test]
+    fn nested_tokenizer_and_encoder_dirs_are_used() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("tokenizer")).unwrap();
+        fs::create_dir_all(dir.path().join("encoder")).unwrap();
+        let ckpt = EncoderCheckpoint::open(dir.path()).unwrap();
+        assert_eq!(ckpt.tokenizer_dir, dir.path().join("tokenizer"));
+        assert_eq!(ckpt.encoder_dir, dir.path().join("encoder"));
+    }
+
+    #[test]
+    fn weights_are_detected() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(CHECKPOINT_WEIGHTS), b"stub").unwrap();
+        let ckpt = EncoderCheckpoint::open(dir.path()).unwrap();
+        assert!(ckpt.has_weights());
+        assert_eq!(ckpt.weights_path, dir.path().join(CHECKPOINT_WEIGHTS));
+    }
+
+    #[test]
+    fn rejects_missing_directory() {
+        let dir = tempdir().unwrap();
+        let missing = dir.path().join("nope");
+        let err = EncoderCheckpoint::open(&missing).unwrap_err();
+        assert!(err.to_string().contains("not a directory"));
+    }
+
+    #[test]
+    fn rejects_invalid_config_json() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join(CHECKPOINT_CONFIG), "{not json").unwrap();
+        let err = EncoderCheckpoint::open(dir.path()).unwrap_err();
+        assert!(matches!(err, AfmError::Json(_)));
+    }
 }

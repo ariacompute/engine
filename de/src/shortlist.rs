@@ -42,5 +42,14 @@ mod tests {
         };
         let slim = maybe_shortlist(&rec, Some(20));
         assert_eq!(slim.options.len(), 20);
+
+        // non-Choice tasks and small option lists pass through untouched
+        let mut noul = rec.clone();
+        noul.task = Task::Noul;
+        assert_eq!(maybe_shortlist(&noul, Some(20)).options.len(), 50);
+
+        let mut small = rec.clone();
+        small.options.truncate(2);
+        assert_eq!(maybe_shortlist(&small, Some(20)).options.len(), 2);
     }
 }

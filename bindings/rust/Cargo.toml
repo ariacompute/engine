@@ -22,3 +22,5 @@ thiserror = { workspace = true }
 
 [dev-dependencies]
 tempfile = { workspace = true }
+tokenizers = { workspace = true }
+serial_test = { workspace = true }

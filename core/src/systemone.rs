@@ -193,4 +193,174 @@ mod tests {
         assert_eq!(rec.task, Task::Choice);
         assert_eq!(rec.options.len(), 2);
     }
+
+    #[test]
+    fn choice_criteria_render_null_string_and_scalar_values() {
+        let q = json!({"type": "CHOICE", "criteria": {"a": null, "b": "beta", "c": 3}});
+        let rec = record_from_systemone_question("q", &Value::Null, &q).unwrap();
+        assert_eq!(
+            rec.instructions,
+            "Select the best-fitting option given the state."
+        );
+        assert_eq!(rec.options[0].description, "");
+        assert_eq!(rec.options[1].description, "beta");
+        assert_eq!(rec.options[2].description, "3");
+        assert_eq!(rec.state, Value::Null);
+
+        // empty instructions fall back to the default prompt
+        let q = json!({"type": "choice", "instructions": "   ", "criteria": {"a": "x"}});
+        let rec = record_from_systemone_question("q", &Value::Null, &q).unwrap();
+        assert_eq!(
+            rec.instructions,
+            "Select the best-fitting option given the state."
+        );
+    }
+
+    #[test]
+    fn choice_requires_nonempty_criteria_dict() {
+        let q = json!({"type": "choice"});
+        let err = record_from_systemone_question("q1", &Value::Null, &q).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("choice q1 needs nonempty criteria dict"));
+
+        let q = json!({"type": "choice", "criteria": {}});
+        let err = record_from_systemone_question("q1", &Value::Null, &q).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("choice q1 needs nonempty criteria dict"));
+
+        let q = json!({"type": "choice", "criteria": [1, 2]});
+        let err = record_from_systemone_question("q1", &Value::Null, &q).unwrap_err();
+        assert!(err.to_string().contains("needs nonempty criteria dict"));
+    }
+
+    #[test]
+    fn score_criteria_accepts_two_to_ten_levels() {
+        let q = json!({"type": "score", "criteria": ["low", 2]});
+        let rec = record_from_systemone_question("q", &json!("s"), &q).unwrap();
+        assert_eq!(rec.task, Task::Score);
+        assert_eq!(rec.options[0].name, "level-0");
+        assert_eq!(rec.options[1].description, "2");
+
+        for criteria in [
+            json!(["only"]),
+            json!((0..11).map(|i| i.to_string()).collect::<Vec<_>>()),
+        ] {
+            let q = json!({"type": "score", "criteria": criteria});
+            let err = record_from_systemone_question("q", &Value::Null, &q).unwrap_err();
+            assert!(err.to_string().contains("score q needs 2..10 levels"));
+        }
+        let q = json!({"type": "score"});
+        let err = record_from_systemone_question("q", &Value::Null, &q).unwrap_err();
+        assert!(err.to_string().contains("needs 2..10 levels"));
+    }
+
+    #[test]
+    fn noul_uses_criteria_texts_with_defaults() {
+        let q = json!({"type": "noul", "criteria": {"true": "it holds", "false": "it fails"}});
+        let rec = record_from_systemone_question("q", &Value::Null, &q).unwrap();
+        assert_eq!(rec.options[0].name, "false");
+        assert_eq!(rec.options[0].description, "it fails");
+        assert_eq!(rec.options[1].description, "it holds");
+
+        let q = json!({"type": "noul", "criteria": {"true": 1}});
+        let rec = record_from_systemone_question("q", &Value::Null, &q).unwrap();
+        assert_eq!(
+            rec.options[0].description,
+            "no, the statement does not hold"
+        );
+        assert_eq!(rec.options[1].description, "yes, the statement holds");
+
+        let q = json!({"type": "noul"});
+        let rec = record_from_systemone_question("q", &Value::Null, &q).unwrap();
+        assert_eq!(rec.options.len(), 2);
+    }
+
+    #[test]
+    fn unknown_or_missing_type_is_rejected() {
+        let err = record_from_systemone_question("q9", &Value::Null, &json!({"type": "rank"}))
+            .unwrap_err();
+        assert!(err.to_string().contains("unsupported systemone type"));
+        let err = record_from_systemone_question("q9", &Value::Null, &json!({})).unwrap_err();
+        assert!(err.to_string().contains("unsupported systemone type"));
+    }
+
+    #[test]
+    fn answer_from_probs_builds_the_record_answer() {
+        let rec = Record {
+            id: "r".into(),
+            task: Task::Choice,
+            instructions: "pick".into(),
+            options: vec![
+                OptionItem {
+                    name: "a".into(),
+                    description: String::new(),
+                },
+                OptionItem {
+                    name: "b".into(),
+                    description: String::new(),
+                },
+            ],
+            state: Value::Null,
+            label: None,
+        };
+        let ans = answer_from_probs(&rec, &[0.1, 0.9]).unwrap();
+        assert_eq!(ans["choice"], "b");
+    }
+
+    #[test]
+    fn answer_systemone_dd_covers_every_task() {
+        let mut probs = Map::new();
+        probs.insert("true".into(), json!(0.8));
+        probs.insert("false".into(), json!(0.2));
+
+        let noul = Record {
+            id: "n".into(),
+            task: Task::Noul,
+            instructions: String::new(),
+            options: vec![],
+            state: Value::Null,
+            label: None,
+        };
+        let ans = answer_systemone_dd(&noul, &probs, "true");
+        assert!((ans["noul"].as_f64().unwrap() - 0.8).abs() < 1e-9);
+
+        // yes alias
+        let mut yes = Map::new();
+        yes.insert("yes".into(), json!(0.6));
+        let ans = answer_systemone_dd(&noul, &yes, "yes");
+        assert!((ans["noul"].as_f64().unwrap() - 0.6).abs() < 1e-9);
+
+        let score = Record {
+            id: "s".into(),
+            task: Task::Score,
+            instructions: String::new(),
+            options: vec![],
+            state: Value::Null,
+            label: None,
+        };
+        let mut levels = Map::new();
+        levels.insert("level-0".into(), json!(0.5));
+        levels.insert("level-1".into(), json!(0.5));
+        let ans = answer_systemone_dd(&score, &levels, "level-1");
+        assert_eq!(ans["choice"], "level-1");
+        assert!((ans["score"].as_f64().unwrap() - 0.5).abs() < 1e-9);
+
+        let choice = Record {
+            id: "c".into(),
+            task: Task::Choice,
+            instructions: String::new(),
+            options: vec![],
+            state: Value::Null,
+            label: None,
+        };
+        // non-numeric probabilities are ignored by the confidence fold
+        let mut mixed = Map::new();
+        mixed.insert("a".into(), json!("n/a"));
+        mixed.insert("b".into(), json!(0.4));
+        let ans = answer_systemone_dd(&choice, &mixed, "b");
+        assert_eq!(ans["choice"], "b");
+        assert!((ans["confidence"].as_f64().unwrap() - 0.4).abs() < 1e-9);
+    }
 }

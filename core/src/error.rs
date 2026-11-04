@@ -31,3 +31,32 @@ impl From<&str> for AfmError {
         Self::Msg(s.to_string())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn message_constructors_display_verbatim() {
+        assert_eq!(AfmError::msg("boom").to_string(), "boom");
+        assert_eq!(AfmError::from("plain").to_string(), "plain");
+        assert_eq!(AfmError::from("owned".to_string()).to_string(), "owned");
+    }
+
+    #[test]
+    fn source_errors_convert_transparently() {
+        let io = std::io::Error::new(std::io::ErrorKind::NotFound, "missing file");
+        let err: AfmError = io.into();
+        assert!(err.to_string().contains("missing file"));
+
+        let json: AfmError = serde_json::from_str::<serde_json::Value>("{oops")
+            .unwrap_err()
+            .into();
+        assert!(!json.to_string().is_empty());
+
+        let yaml: AfmError = serde_yaml::from_str::<serde_yaml::Value>("a: [1,")
+            .unwrap_err()
+            .into();
+        assert!(!yaml.to_string().is_empty());
+    }
+}

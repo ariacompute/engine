@@ -48,3 +48,7 @@ dialoguer = "0.11"
 [dev-dependencies]
 tempfile = { workspace = true }
 tokio = { workspace = true }
+wiremock = { workspace = true }
+assert_cmd = { workspace = true }
+predicates = { workspace = true }
+serial_test = { workspace = true }

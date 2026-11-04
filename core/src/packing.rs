@@ -354,6 +354,274 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    fn record(v: Value) -> Record {
+        Record::from_value(&v).unwrap()
+    }
+
+    fn chars(s: &str) -> Vec<u32> {
+        s.chars().map(|c| c as u32).collect()
+    }
+
+    #[test]
+    fn from_value_defaults_and_id_fallbacks() {
+        let rec = record(json!({"task": "choice", "criteria": {"a": "alpha"}}));
+        assert_eq!(rec.id, "q");
+        assert_eq!(
+            rec.instructions,
+            "Select the best-fitting option given the state."
+        );
+        assert_eq!(rec.state, Value::String(String::new()));
+        assert!(rec.label.is_none());
+
+        let rec = record(json!({"qid": "q-7", "task": "CHOICE", "criteria": {"a": "x"}}));
+        assert_eq!(rec.id, "q-7");
+
+        let rec = record(
+            json!({"id": "i", "task": "choice", "label": 2, "state": {"k": 1}, "criteria": {"a": "x"}}),
+        );
+        assert_eq!(rec.label, Some(json!(2)));
+        assert_eq!(rec.state, json!({"k": 1}));
+    }
+
+    #[test]
+    fn from_value_rejects_unknown_task() {
+        let err = Record::from_value(&json!({"task": "ranking"})).unwrap_err();
+        assert!(err.to_string().contains("unknown task"));
+        let err = Record::from_value(&json!({})).unwrap_err();
+        assert!(err.to_string().contains("unknown task"));
+    }
+
+    #[test]
+    fn options_array_parses_and_fills_missing_fields() {
+        let rec = record(json!({
+            "task": "choice",
+            "options": [{"name": "a"}, {"description": "only desc"}, {}]
+        }));
+        assert_eq!(rec.options.len(), 3);
+        // blank descriptions are filled with the option name by the dedupe pass
+        assert_eq!(rec.options[0].description, "a");
+        assert_eq!(rec.options[1].name, "");
+        assert_eq!(rec.options[1].description, "only desc");
+        assert_eq!(rec.options[2].name, "");
+    }
+
+    #[test]
+    fn duplicate_option_texts_get_progressively_numbered() {
+        // four options sharing name+description: "d" → "x: d" → "x: d (2)" → "x: d (3)"
+        let rec = record(json!({
+            "task": "choice",
+            "options": [
+                {"name": "x", "description": "d"},
+                {"name": "x", "description": "d"},
+                {"name": "x", "description": "d"},
+                {"name": "x", "description": "d"}
+            ]
+        }));
+        let texts: Vec<&str> = rec.options.iter().map(|o| o.description.as_str()).collect();
+        assert_eq!(texts, vec!["d", "x: d", "x: d (2)", "x: d (3)"]);
+    }
+
+    #[test]
+    fn noul_options_are_canonicalised_and_deduped() {
+        let rec = record(json!({
+            "task": "noul",
+            "options": [
+                {"name": "YES", "description": "holds"},
+                {"name": "No", "description": "does not"},
+                {"name": "yes", "description": "duplicate"}
+            ]
+        }));
+        let names: Vec<&str> = rec.options.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, vec!["false", "true"]);
+        assert_eq!(rec.options[1].description, "holds");
+
+        // missing sides are synthesised in false,true order
+        let rec =
+            record(json!({"task": "noul", "options": [{"name": "true", "description": "t"}]}));
+        let names: Vec<&str> = rec.options.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, vec!["false", "true"]);
+        let rec =
+            record(json!({"task": "noul", "options": [{"name": "false", "description": "f"}]}));
+        assert_eq!(rec.options.len(), 2);
+        assert_eq!(rec.options[1].name, "true");
+
+        // unknown names are kept after the canonical pair
+        let rec = record(json!({
+            "task": "noul",
+            "options": [{"name": "maybe", "description": "m"}, {"name": "true", "description": "t"}]
+        }));
+        let names: Vec<&str> = rec.options.iter().map(|o| o.name.as_str()).collect();
+        assert_eq!(names, vec!["false", "true", "maybe"]);
+    }
+
+    #[test]
+    fn duplicate_option_texts_get_suffixed() {
+        let rec = record(json!({
+            "task": "choice",
+            "options": [
+                {"name": "a", "description": "same"},
+                {"name": "b", "description": "same"},
+                {"name": "c", "description": "same"}
+            ]
+        }));
+        assert_eq!(rec.options[1].description, "b: same");
+        assert_eq!(rec.options[2].description, "c: same");
+
+        let rec = record(json!({
+            "task": "choice",
+            "options": [
+                {"name": "a", "description": "same"},
+                {"name": "a", "description": "same"},
+                {"name": "a", "description": "same"}
+            ]
+        }));
+        assert_eq!(rec.options[1].description, "a: same");
+        assert_eq!(rec.options[2].description, "a: same (2)");
+
+        // blank descriptions fall back to the option name
+        let rec = record(json!({
+            "task": "choice",
+            "options": [{"name": "a", "description": "   "}, {"name": "a", "description": ""}]
+        }));
+        assert_eq!(rec.options[0].description, "a");
+        assert_eq!(rec.options[1].description, "a: a");
+    }
+
+    #[test]
+    fn noul_criteria_fallback_renders_texts() {
+        let rec = record(json!({
+            "task": "noul",
+            "criteria": {"true": "holds", "false": {"k": 1}}
+        }));
+        assert_eq!(rec.options[0].name, "false");
+        assert_eq!(rec.options[0].description, "{\"k\":1}");
+        assert_eq!(rec.options[1].description, "holds");
+
+        // non-string criteria are JSON-rendered ("null" is not empty)
+        let rec = record(json!({"task": "noul", "criteria": {"true": "", "false": null}}));
+        assert_eq!(rec.options[0].description, "null");
+        assert_eq!(rec.options[1].description, "yes, the statement holds");
+
+        let rec = record(json!({"task": "noul", "criteria": {"true": "", "false": ""}}));
+        assert_eq!(
+            rec.options[0].description,
+            "no, the statement does not hold"
+        );
+        assert_eq!(rec.options[1].description, "yes, the statement holds");
+
+        let rec = record(json!({"task": "noul"}));
+        assert_eq!(rec.options.len(), 2);
+        assert_eq!(rec.options[1].description, "yes, the statement holds");
+    }
+
+    #[test]
+    fn choice_criteria_fallback_and_errors() {
+        let rec = record(json!({
+            "task": "choice",
+            "criteria": {"a": "alpha", "b": null, "c": "", "d": [1, 2]}
+        }));
+        assert_eq!(rec.options[0].description, "alpha");
+        // null / empty descriptions fall back to the option name
+        assert_eq!(rec.options[1].description, "b");
+        assert_eq!(rec.options[2].description, "c");
+        assert_eq!(rec.options[3].description, "[1,2]");
+
+        let rec = record(json!({"task": "choice", "criteria": {}}));
+        assert!(rec.options.is_empty());
+
+        let err = Record::from_value(&json!({"task": "choice"})).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("choice record needs options or criteria"));
+        let err = Record::from_value(&json!({"task": "choice", "criteria": [1]})).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("choice record needs options or criteria"));
+    }
+
+    #[test]
+    fn score_criteria_fallback_and_errors() {
+        let rec = record(json!({"task": "score", "criteria": ["low", 3]}));
+        assert_eq!(rec.options[0].name, "level-0");
+        assert_eq!(rec.options[0].description, "low");
+        assert_eq!(rec.options[1].description, "3");
+
+        let err = Record::from_value(&json!({"task": "score"})).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("score record needs options or criteria"));
+        let err = Record::from_value(&json!({"task": "score", "criteria": {}})).unwrap_err();
+        assert!(err
+            .to_string()
+            .contains("score record needs options or criteria"));
+    }
+
+    #[test]
+    fn render_helpers_cover_all_tasks() {
+        assert_eq!(render_criterion(&json!("x")), "x");
+        assert_eq!(render_criterion(&json!({"a": 1})), "{\"a\":1}");
+        assert_eq!(serialize_state(&json!("state")), "state");
+        assert_eq!(serialize_state(&json!([1, 2])), "[1,2]");
+
+        let opts = vec![
+            OptionItem {
+                name: "a".into(),
+                description: String::new(),
+            },
+            OptionItem {
+                name: "b".into(),
+                description: "beta".into(),
+            },
+        ];
+        assert_eq!(
+            render_option_texts(Task::Choice, &opts),
+            vec!["a".to_string(), "b: beta".to_string()]
+        );
+        assert_eq!(
+            render_option_texts(Task::Score, &opts),
+            vec!["level 0: ".to_string(), "level 1: beta".to_string()]
+        );
+
+        let noul = vec![OptionItem {
+            name: "true".into(),
+            description: "holds".into(),
+        }];
+        assert_eq!(
+            render_option_texts(Task::Noul, &noul),
+            vec![
+                "false: no, the statement does not hold".to_string(),
+                "true: holds".to_string()
+            ]
+        );
+        let blank = vec![OptionItem {
+            name: "false".into(),
+            description: String::new(),
+        }];
+        assert_eq!(
+            render_option_texts(Task::Noul, &blank)[0],
+            "false: no, the statement does not hold"
+        );
+
+        assert_eq!(
+            head_instruction(Task::Choice, "pick"),
+            "choice question: pick"
+        );
+    }
+
+    #[test]
+    fn pack_record_text_includes_head_options_and_state() {
+        let rec = record(json!({
+            "task": "choice",
+            "instructions": "pick",
+            "options": [{"name": "a", "description": "alpha"}],
+            "state": {"k": 1}
+        }));
+        let text = pack_record_text(&rec);
+        assert!(text.starts_with("[CLS] choice question: pick [SEP]"));
+        assert!(text.contains("[MASK] a: alpha"));
+        assert!(text.ends_with("[SEP] {\"k\":1} [SEP]"));
+    }
+
     #[test]
     fn pack_noul_text() {
         let rec = Record::from_value(&json!({
@@ -393,5 +661,83 @@ mod tests {
         assert_eq!(packed.mask_positions.len(), 2);
         assert_eq!(packed.input_ids[0], 1);
         assert_eq!(packed.input_ids[packed.mask_positions[0]], 3);
+    }
+
+    #[test]
+    fn build_sequence_keeps_state_tail_and_respects_max_len() {
+        let rec = record(json!({
+            "id": "c",
+            "task": "choice",
+            "instructions": "pick",
+            "options": [
+                {"name": "a", "description": "alpha"},
+                {"name": "b", "description": "beta"}
+            ],
+            "state": "x".repeat(2000)
+        }));
+        let packed = build_sequence_ids(&chars, 1, 2, 3, &rec, 1000, 128);
+        assert_eq!(packed.input_ids.len(), 1000);
+        assert_eq!(packed.input_ids[0], 1);
+        assert_eq!(packed.input_ids[999], 2);
+        // the last state character survives the tail cut
+        assert_eq!(packed.input_ids[998], 'x' as u32);
+    }
+
+    #[test]
+    fn build_sequence_truncates_options_when_head_budget_is_tight() {
+        let rec = record(json!({
+            "id": "c",
+            "task": "choice",
+            "instructions": "pick",
+            "options": [
+                {"name": "a", "description": "alpha alpha alpha"},
+                {"name": "b", "description": "beta beta beta"}
+            ],
+            "state": "s"
+        }));
+        let packed = build_sequence_ids(&chars, 1, 2, 3, &rec, 256, 10);
+        assert_eq!(packed.mask_positions.len(), 2);
+        // every option piece is capped at 4 ids (mask + 3 text ids)
+        let gap = packed.mask_positions[1] - packed.mask_positions[0];
+        assert_eq!(gap, 4);
+        assert_eq!(packed.input_ids[packed.mask_positions[1]], 3);
+    }
+
+    #[test]
+    fn build_sequence_drops_markers_past_max_len() {
+        let rec = record(json!({
+            "id": "c",
+            "task": "choice",
+            "instructions": "pick",
+            "options": [
+                {"name": "a", "description": "alpha"},
+                {"name": "b", "description": "beta"}
+            ],
+            "state": "s"
+        }));
+        let packed = build_sequence_ids(&chars, 1, 2, 3, &rec, 8, 128);
+        assert_eq!(packed.input_ids.len(), 8);
+        assert!(packed.mask_positions.iter().all(|m| *m < 8));
+        assert!(packed.mask_positions.len() <= 2);
+    }
+
+    #[test]
+    fn build_sequence_without_options_has_no_markers() {
+        let rec = record(json!({
+            "id": "c",
+            "task": "choice",
+            "instructions": "[MASK] pick [MASK]",
+            "options": [],
+            "state": "[MASK]"
+        }));
+        let packed = build_sequence_ids(&chars, 1, 2, 3, &rec, 10, 4);
+        assert!(packed.mask_positions.is_empty());
+        // instructions/state [MASK] markers are stripped before encoding
+        assert!(!packed.input_ids.contains(&('[' as u32)));
+    }
+
+    #[test]
+    fn default_budgets_match_the_contract() {
+        assert_eq!(default_budgets(), (MAX_LEN, HEAD_MAX_LEN));
     }
 }

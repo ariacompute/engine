@@ -90,4 +90,111 @@ mod tests {
         assert_eq!(row["options"].as_array().unwrap().len(), 2);
         assert_eq!(row["options"][0]["id"], "a");
     }
+
+    fn record(task: &str, options: Value) -> Record {
+        Record {
+            id: "r1".into(),
+            task: ariacompute_core::typed::Task::parse(task).unwrap(),
+            instructions: "pick".into(),
+            options: serde_json::from_value(options).unwrap(),
+            state: json!({"k": "v"}),
+            label: None,
+        }
+    }
+
+    #[test]
+    fn option_count_is_bounded() {
+        for count in [0usize, 1, 17] {
+            let options: Vec<Value> = (0..count)
+                .map(|i| json!({"name": format!("o{i}"), "description": ""}))
+                .collect();
+            let err = record_to_semif_row(&record("choice", json!(options))).unwrap_err();
+            assert!(err.to_string().contains("need 2..16 options"));
+        }
+    }
+
+    #[test]
+    fn choice_uses_name_when_description_is_empty() {
+        let row = record_to_semif_row(&record(
+            "choice",
+            json!([
+                {"name": "a", "description": ""},
+                {"name": "b", "description": "beta"}
+            ]),
+        ))
+        .unwrap();
+        assert_eq!(row["options"][0]["description"], "a: a");
+        assert_eq!(row["options"][1]["description"], "b: beta");
+        assert_eq!(row["state"], json!({"k": "v"}));
+        assert_eq!(row["question"], "pick");
+    }
+
+    #[test]
+    fn score_options_use_numeric_ids() {
+        let row = record_to_semif_row(&record(
+            "score",
+            json!([
+                {"name": "level-0", "description": ""},
+                {"name": "level-1", "description": "high"}
+            ]),
+        ))
+        .unwrap();
+        assert_eq!(row["options"][0]["id"], "0");
+        assert_eq!(row["options"][0]["description"], "0: level-0");
+        assert_eq!(row["options"][1]["description"], "1: high");
+    }
+
+    #[test]
+    fn noul_uses_true_false_order_and_aliases() {
+        let row = record_to_semif_row(&record(
+            "noul",
+            json!([
+                {"name": "yes", "description": "it holds"},
+                {"name": "no", "description": ""}
+            ]),
+        ))
+        .unwrap();
+        assert_eq!(row["options"][0]["id"], "true");
+        assert_eq!(row["options"][0]["description"], "true: it holds");
+        assert_eq!(row["options"][1]["id"], "false");
+        assert_eq!(
+            row["options"][1]["description"],
+            "false: The proposition is false."
+        );
+
+        // no true/false (or aliases) at all → placeholder descriptions
+        let bare = record_to_semif_row(&record(
+            "noul",
+            json!([
+                {"name": "maybe", "description": ""},
+                {"name": "sure", "description": ""}
+            ]),
+        ))
+        .unwrap();
+        assert_eq!(
+            bare["options"][0]["description"],
+            "true: The proposition is true."
+        );
+    }
+
+    #[test]
+    fn blank_instructions_fall_back_to_the_contract_default() {
+        let mut rec = record(
+            "choice",
+            json!([
+                {"name": "a", "description": ""},
+                {"name": "b", "description": ""}
+            ]),
+        );
+        rec.instructions = "   ".into();
+        let row = record_to_semif_row(&rec).unwrap();
+        assert_eq!(
+            row["question"],
+            "Select the best-fitting option given the state."
+        );
+
+        rec.instructions = "  custom prompt  ".into();
+        let row = record_to_semif_row(&rec).unwrap();
+        assert_eq!(row["question"], "custom prompt");
+    }
 }

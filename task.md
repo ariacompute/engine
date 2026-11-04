@@ -69,6 +69,34 @@
 - [ ] `aria-engine serve --track encoder|decoder` 对真实 checkpoint 返回 answers
 - [ ] FFI / 至少一种宿主 SDK `systemone` 冒烟（init → systemone → destroy）
 
+## 阶段 E — 测试覆盖硬化（T90）
+
+目标：全 workspace 行覆盖 100%（`./scripts/coverage.sh`，排除 2 个纯张量前向文件，理由见
+`requirements.md` §4.1），并把门禁固化到 CI。
+
+- [x] 注入 seam：`EncoderForward`（de）/ `LetterScorer`（dd）/ `Judge`（serve），
+      `#[doc(hidden)] with_forward` / `from_parts` / `with_encoder`、`with_decoder`
+- [x] 模块拆分：`de/src/model/{mod,config,forward}.rs`、`dd/src/{weights,letters}.rs`，
+      把不可测的张量图收敛到 `forward.rs`
+- [x] CLI 拆分：`app.rs`（子命令分发）+ `main.rs`（tracing + parse + exit）
+- [x] 网络 seam：`HubEndpoints` / `RetryPolicy` / `DownloadCtx`（`ARIA_HF_ENDPOINT`、
+      `ARIA_MS_ENDPOINT`、`ARIA_MS_ENDPOINT_ALT`）与 `ReleaseApi`（`ARIA_UPGRADE_API_GITHUB`、
+      `ARIA_UPGRADE_API_GITEE`），全部用 `wiremock` 离线覆盖
+- [x] `serve` 优雅退出：`serve_on(listener, app, shutdown)` + `run_serve` 接 `ctrl_c`
+- [x] `setup` 非 TTY 回退：`Prompter` seam + `cmd_setup_with`
+- [x] core：config（`ARIA_COMPUTE_HOME` 隔离）/ gateway（LANG）/ packing / systemone / typed /
+      contract / error 全分支
+- [x] de：checkpoint、tokenizer 夹具、model/config 映射、shortlist、score
+- [x] dd：checkpoint、prompt、semif、pyjson、weights（定位/收集/反量化/LoRA）、letters、score
+- [x] ffi：`null` 指针、非法 UTF-8、非法 track、坏 JSON、缓冲不足 `-2`、成功 `0`、thread-local 错误槽
+- [x] bindings/rust：`decide_with_logits` / `decide_with_semif_out` / 交叉误用 / `resolve_checkpoint`
+- [x] `cli/tests/cli.rs`：assert_cmd 覆盖 setup / download / list / check / clean / upgrade / serve /
+      decide / version 与退出码（含 SIGINT 优雅退出）
+- [x] `scripts/coverage.sh` + `.github/workflows/ci.yml`（fmt / clippy / test / coverage / lcov artifact）
+- [x] 门禁口径：脚本解析 lcov `DA:<line>,0`，要求零未覆盖行（`lines: 8239/8239 (100.00%)`）；
+      不用 `--fail-under-lines 100`（多实例下 summary 按「行 × 实例」成对计数会自相矛盾，
+      见脚本头注释与 `requirements.md` §4.1）
+
 ## 阶段 C — 发布硬化
 
 ### T20 — Release 资产

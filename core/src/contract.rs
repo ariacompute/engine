@@ -46,3 +46,44 @@ impl Track {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budgets_are_pinned_to_the_python_contract() {
+        assert_eq!(MAX_LEN, 1024);
+        assert_eq!(HEAD_MAX_LEN, 512);
+        assert_eq!(OPTION_DESC_MAX, 96);
+        assert_eq!(MAX_OPTIONS_DD, 16);
+        assert_eq!(DD_DEFAULT_PORT, 8011);
+        assert_eq!(DECISION_TEMPERATURE, 1.0);
+        assert_eq!(DD_BASE_REVISION, "12a3808a956f869c767195e9266b59c4d21d92e2");
+    }
+
+    #[test]
+    fn track_aliases_parse_case_insensitively() {
+        for raw in ["encoder", "ENCODER", " afm_de ", "de"] {
+            assert_eq!(Track::parse(raw).unwrap(), Track::Encoder, "{raw}");
+        }
+        for raw in ["decoder", "Decoder", "afm_dd", "dd"] {
+            assert_eq!(Track::parse(raw).unwrap(), Track::Decoder, "{raw}");
+        }
+        let err = Track::parse("router").unwrap_err();
+        assert!(err.contains("unknown track"));
+        assert!(err.contains("encoder|decoder"));
+    }
+
+    #[test]
+    fn track_strings_and_serde_round_trip() {
+        assert_eq!(Track::Encoder.as_str(), "encoder");
+        assert_eq!(Track::Decoder.as_str(), "decoder");
+        let json = serde_json::to_string(&Track::Decoder).unwrap();
+        assert_eq!(json, "\"decoder\"");
+        let back: Track = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, Track::Decoder);
+        let yaml: Track = serde_yaml::from_str("encoder").unwrap();
+        assert_eq!(yaml, Track::Encoder);
+    }
+}
