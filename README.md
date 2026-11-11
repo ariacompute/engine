@@ -1,15 +1,91 @@
+<div align="center">
+<a name="readme-top"></a>
+
 # Aria Engine
 
-Pure Rust inference runtime for **AFM**:
+**Pure Rust inference runtime for AFM-D typed decision**
 
-| Track | Crate | Model |
-| --- | --- | --- |
-| Encoder (`afm_de`) | `ariacompute-de` | Laya-layout ModernBERT DecisionModel |
-| Decoder (`afm_dd`) | `ariacompute-dd` | MiniCPM5-2B ± PEFT LoRA (SemIf direct) |
+The **Encoder** (`afm_de`, Laya-layout ModernBERT DecisionModel) and **Decoder**<br/>
+(`afm_dd`, MiniCPM5-2B ± PEFT LoRA) each publish a typed decision under one<br/>
+contract — **System One**. Surfaces: **`aria-engine` CLI** · **`POST /v1/systemone`** ·<br/>
+**`libaria_ffi` C ABI** · language SDKs under `bindings/`.
 
-Surfaces: **`aria-engine` CLI** · **`POST /v1/systemone`** · **`libaria_ffi` C ABI** · language SDKs under `bindings/`.
+[English] · [简体中文](./README_cn.md) · [Agent context](./AGENTS.md) · [Requirements](./requirements.md) · [Tasks](./task.md)
 
-## Build
+[![][release-shield]][release-link] [![][rust-shield]][rust-link] [![][license-shield]][license-link] [![][lastcommit-shield]][lastcommit-link]
+<br/>
+[![][httpapi-shield]][httpapi-link] [![][tests-shield]][tests-link] [![][sdks-shield]][sdks-link] [![][trust-shield]][trust-link]
+</div>
+
+<details>
+<summary><kbd>Table of contents</kbd></summary>
+
+#### TOC
+
+**Get started**
+
+- [✨ Features](#-features)
+- [🧱 Workspace](#-workspace)
+- [🚀 Quick start](#-quick-start)
+- [🧰 Command line](#-command-line)
+- [🔧 Configuration](#-configuration)
+
+**Deploy & serve**
+
+- [🛳 Deployment](#-deployment)
+  - [`A` Run from source](#a-run-from-source)
+  - [`B` Docker Compose](#b-docker-compose)
+- [🔌 HTTP API](#-http-api)
+
+**Internals**
+
+- [🧭 Decide](#-decide)
+- [🧩 FFI & language SDKs](#-ffi--language-sdks)
+- [🔏 Trust store security](#-trust-store-security)
+- [🔨 Development](#-development)
+- [📚 Documentation](#-documentation)
+- [📝 License](#-license)
+- [🤝 Engineering conventions](#-engineering-conventions)
+
+</details>
+
+## ✨ Features
+
+Aria Engine turns one question into one typed answer — *which option (or level, or yes/no) is the right decision for this state?* — without a chat loop. The Encoder and Decoder share the same System One contract, so callers never learn which model answered.
+
+- 🧮 **AFM-D typed decision** — `choice` / `score` / `noul` answers under one System One shape; no open-ended generation.
+- ⚡ **Two tracks** — Encoder (ModernBERT) for fast option logits; Decoder (MiniCPM5-2B) for SemIf-style direct scoring.
+- 🖥 **Four surfaces** — `aria-engine` CLI, `POST /v1/systemone` HTTP, `libaria_ffi` C ABI, and eight language SDKs.
+- 📦 **Offline-first** — real weight forward needs a downloaded checkpoint; golden-path scoring (`--logits` / `--semif-out`) works without one.
+- 🌍 **Region hubs** — `.com` resolves Hugging Face, `.cn` resolves ModelScope, chosen by `aria-engine setup`.
+- 🔏 **Pinned trust store** — the binary embeds `webpki-roots >=1.0.10`, which drops the compromised emSign roots (see [Trust store security](#-trust-store-security)).
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🧱 Workspace
+
+A Rust workspace; no runtime database or persistence. Reuse only the product shell patterns (CLI, FFI packaging, `release.yml`) — the deprecated chat graph is gone.
+
+| Crate | Role |
+|---|---|
+| `ariacompute-core` | System One types, packing, config (`~/.ariacompute`), gateway |
+| `ariacompute-de` | Encoder checkpoint + packing + score/logits |
+| `ariacompute-dd` | SemIf row + decoder map + scorer shell |
+| `aria-cli` | bin `aria-engine` (`setup` / `download` / `upgrade` / `serve` / `decide`) |
+| `ariacompute-ffi` | cdylib `aria_ffi` → release name `libaria-engine_ffi` |
+| `bindings/rust` | crates.io `ariacompute-engine` |
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🚀 Quick start
 
 ```bash
 cargo build --workspace
@@ -19,9 +95,75 @@ cargo build --release -p aria-cli -p ariacompute-ffi
 
 Optional CUDA feature: `cargo build -p aria-cli --features cuda` (propagates to de/dd).
 
-## Config (`aria-engine setup`)
+```bash
+# 1. Configure region + hub token (writes ~/.ariacompute/engine.yml)
+aria-engine setup --site-url https://ariacompute.cn --compute cuda
 
-Writes `~/.ariacompute/engine.yml` (no router fields):
+# 2. Download a checkpoint (HF / ModelScope HTTP API; no hub CLI needed)
+aria-engine download afm-de
+aria-engine download afm-dd
+
+# 3. Serve the Encoder as a local System One server (→ http://127.0.0.1:8010)
+aria-engine serve --model-name afm-de
+
+# 4. Ask a typed question
+curl -s http://127.0.0.1:8010/v1/systemone \
+  -H 'content-type: application/json' \
+  -d '{
+    "state": "user wants a refund",
+    "questions": {
+      "q1": {
+        "type": "choice",
+        "instructions": "Pick the best action",
+        "criteria": {
+          "refund": "issue a full refund",
+          "deny": "deny the request"
+        }
+      }
+    }
+  }'
+```
+
+Real weight forward requires a complete local checkpoint (see Stage B in [`task.md`](task.md)). Until then, use `decide` with `--logits` / `--semif-out` for golden-path scoring.
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🧰 Command line
+
+```bash
+aria-engine download afm-de       # HF/ModelScope HTTP API (site_url + setup token); no hub CLI
+                                  # .cn → ModelScope /api/v1/.../repo?FilePath=… ; .com → HF resolve
+aria-engine list | check | clean  # list = local ∪ Hub org (ariacompute / AriaCompute); status downloaded|not downloaded
+                                  # check/clean: complete checkpoints only; failed downloads cleaned up
+aria-engine upgrade [version]     # needs upgrade_url
+aria-engine serve …               # see HTTP API below
+aria-engine decide …              # see Decide below
+aria-engine -v
+```
+
+| Command | Purpose |
+|---|---|
+| `setup` | Write `~/.ariacompute/engine.yml` (region, hub token, compute) |
+| `download` | Fetch an AFM checkpoint over the HF/ModelScope HTTP API |
+| `list` / `check` / `clean` | Enumerate / verify / prune local + hub checkpoints |
+| `upgrade` | Update the binary from `upgrade_url` (needs a release) |
+| `serve` | Start a local System One HTTP server |
+| `decide` | One-shot typed decision over a JSON body |
+| `-v` | Print version |
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🔧 Configuration
+
+`aria-engine setup` writes `~/.ariacompute/engine.yml` (no router fields):
 
 | Field | Meaning | Default |
 | --- | --- | --- |
@@ -40,24 +182,98 @@ aria-engine setup --site-url https://ariacompute.cn --compute cuda
 
 Regional hub token prompt: `.cn` → ModelScope only; otherwise Hugging Face only. Interactive token input is masked with `*`.
 
-## CLI
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🛳 Deployment
+
+Two supported paths: run the binary against a downloaded checkpoint, or run the full stack as containers.
+
+### `A` Run from source
 
 ```bash
-aria-engine download afm-de       # HF/ModelScope HTTP API (site_url + setup token); no hub CLI
-                                  # .cn → ModelScope /api/v1/.../repo?FilePath=… ; .com → HF resolve
-aria-engine list | check | clean  # list = local ∪ Hub org (ariacompute / AriaCompute); status downloaded|not downloaded
-                                  # check/clean: complete checkpoints only; failed downloads cleaned up
-aria-engine upgrade [version]     # needs upgrade_url
-aria-engine serve …               # see Serve below
-aria-engine decide …              # see Decide below
-aria-engine -v
+cargo build --release -p aria-cli
+aria-engine setup                 # writes ~/.ariacompute/engine.yml
+aria-engine download afm-de       # fetch encoder checkpoint
+aria-engine serve --model-name afm-de --bind 127.0.0.1:8010
 ```
 
-## Serve (`aria-engine serve`)
+The encoder service listens on `127.0.0.1:8010` by default; the decoder on `127.0.0.1:8011`. Provide `--compute cpu|cuda` to override the value from `engine.yml`. Put a TLS-terminating reverse proxy (e.g. Nginx, Caddy) in front before exposing it beyond the host.
 
-Start a local System One HTTP server over a downloaded AFM checkpoint. No router registration.
+### `B` Docker Compose
 
-### Flags
+The repo ships a parameterized `Dockerfile`, a `docker/entrypoint.sh` orchestrator, a CPU `docker-compose.yml` (two services: `engine-encoder` on **8010** and `engine-decoder` on **8011**), and a `docker-compose.cuda.yml` GPU override.
+
+1. Create `.env` from the template:
+
+   ```bash
+   cp .env.example .env          # set ARIA_DATA_DIR to your host ~/.ariacompute (absolute path)
+   ```
+
+   Both services bind-mount your host `ARIA_DATA_DIR` (default `~/.ariacompute`) into `/data/aria`, so the `engine.yml` (config) and `models/` (checkpoints) you already downloaded on the host are used directly — **offline, no download**. The entrypoint writes `engine.yml` from env vars **only when absent**, so a pre-mounted config (e.g. the host's `~/.ariacompute/engine.yml`) is respected.
+
+2. Build and start (CPU):
+
+   ```bash
+   docker compose build
+   docker compose up -d
+   ```
+
+3. Verify:
+
+   ```bash
+   curl -s http://localhost:8010/health     # {"ok":true,"service":"afm-engine","model":"afm-de"}
+   curl -s http://localhost:8011/health     # decoder
+   docker compose ps                        # both services healthy
+   ```
+
+**Models**
+
+- **Offline (default, `AUTO_DOWNLOAD=0`):** weights come from the host `ARIA_DATA_DIR/models/{afm-de,afm-dd}`. Make sure both checkpoints are present on the host (run `aria-engine download afm-de && aria-engine download afm-dd` once on the host, or copy them into `~/.ariacompute/models/`).
+- **Auto-download:** set `AUTO_DOWNLOAD=1` in `.env`; the entrypoint runs `aria-engine download <model>` on first run (needs network + the matching hub token). A failed/blocked download is **non-fatal** — the container logs a warning and only refuses to start if the checkpoint is still missing.
+
+> **Note — hub selection & network:** the container regenerates `engine.yml` from `SITE_URL` when it is set, so `SITE_URL=https://ariacompute.cn` makes downloads use **ModelScope** (where `afm-de` is published) instead of the HuggingFace-baked host config. If the host only reaches the internet through a local proxy, set `HTTPS_PROXY=http://host.docker.internal:<port>` in `.env` (the compose file maps `host.docker.internal` to the host gateway); `127.0.0.1` inside the container is the container itself, not the host.
+
+**GPU (CUDA)** — requires the NVIDIA driver + `nvidia-container-toolkit`:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
+docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+```
+
+The override swaps the build base to a CUDA image, compiles with `--features cuda`, requests a GPU per service, and sets `COMPUTE=cuda` so candle selects the CUDA backend.
+
+**Configuration (`.env`)**
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ENGINE_IMAGE` | `aria-engine:latest` | Tag for the built image |
+| `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / *(defaults to `BUILD_IMAGE`)* | CPU build base; the runtime reuses it so glibc always matches. Only the CUDA override sets `RUNTIME_IMAGE` |
+| `FEATURES` | _(empty)_ | Build features; the CUDA override sets `cuda` |
+| `SITE_URL` / `UPGRADE_URL` | _(empty)_ | Region hub (`.com`→HF, `.cn`→ModelScope); when set, overrides the mounted config |
+| `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(empty)_ | Hub token for the active region |
+| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | _(empty)_ | Optional egress proxy for downloads (use `host.docker.internal` for a host-local proxy) |
+| `COMPUTE` | `auto` | `auto` \| `cpu` \| `cuda` |
+| `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder model (empty disables the service) + port |
+| `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder model (empty disables the service) + port |
+| `ARIA_DATA_DIR` | `${HOME}/.ariacompute` | Host dir bind-mounted to `/data/aria` (config + models) |
+| `AUTO_DOWNLOAD` | `0` | `1` to fetch weights on first run (non-fatal if it fails) |
+| `RUST_LOG` | `info` | Rust tracing filter |
+
+The container binds `0.0.0.0` internally; `serve` keeps its `127.0.0.1` default outside containers. **Do not commit `.env`** — it may contain hub tokens.
+
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🔌 HTTP API
+
+`aria-engine serve` starts a local System One HTTP server over a downloaded AFM checkpoint. No router registration.
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -69,17 +285,13 @@ Start a local System One HTTP server over a downloaded AFM checkpoint. No router
 
 Provide either `--model-name` or `--checkpoint` (or both). Soft layout check rejects an encoder track pointed at a decoder-looking dir and vice versa.
 
-### Endpoints
-
 | Method | Path | Response |
 | --- | --- | --- |
 | `GET` | `/health` or `/` | `{ "ok": true, "service": "afm-engine", "model": "<model-name>" }` |
 | `GET` | `/v1/models` | OpenAI-style list with one entry for `--model-name` |
 | `POST` | `/v1/systemone` | `{ "answers": { … }, "model": "<model-name>" }` |
 
-`POST /v1/systemone` body matches Decide’s System One shape: `{ "state": …, "questions": { "<qid>": { "type", "instructions", "criteria" } } }` (`type` = `choice` \| `score` \| `noul`). Invalid questions → HTTP **422**; scoring errors → **500**.
-
-### Examples
+`POST /v1/systemone` body matches Decide's System One shape: `{ "state": …, "questions": { "<qid>": { "type", "instructions", "criteria" } } }` (`type` = `choice` \| `score` \| `noul`). Invalid questions → HTTP **422**; scoring errors → **500**.
 
 ```bash
 # Encoder (default track) from cache name
@@ -152,13 +364,15 @@ curl -s http://127.0.0.1:8010/v1/systemone \
   }'
 ```
 
-Real weight forward requires a complete local checkpoint (see Stage B in [`task.md`](task.md)). Until then, use `decide` with `--logits` / `--semif-out` for golden-path scoring.
+<div align="right">
 
-## Decide (`aria-engine decide`)
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🧭 Decide
 
 One-shot typed decision over a JSON body (stdin or `--file`). Prints one pretty JSON answer per question/record. Same packing / typed-answer contract as `POST /v1/systemone`.
-
-### Flags
 
 | Flag | Default | Meaning |
 | --- | --- | --- |
@@ -170,8 +384,6 @@ One-shot typed decision over a JSON body (stdin or `--file`). Prints one pretty 
 | `--semif-out` | — | Decoder **golden path**: SemIf-style JSON (skips weight forward) |
 
 Without `--logits` / `--semif-out`, the scorer runs a real forward on the checkpoint (needs a complete local model; see Stage B in [`task.md`](task.md)).
-
-### Input shapes
 
 **1. AFM-D record** (single question) — `task` + `options` + `state`:
 
@@ -260,8 +472,6 @@ Without `--logits` / `--semif-out`, the scorer runs a real forward on the checkp
 | `score` | array of 2–10 ordered level strings |
 | `noul` | object with `true` / `false` (optional; defaults apply) |
 
-### Examples
-
 ```bash
 # Encoder golden path (no weight forward) — logits length = option count
 aria-engine decide \
@@ -340,17 +550,19 @@ aria-engine decide --track encoder --model-name afm-de --file record.json
 
 `--model-name afm-de` (or `--checkpoint afm-de`) resolves to `~/.ariacompute/models/afm-de` when that path exists (same rules as `serve`).
 
-### Output
-
 One pretty-printed typed answer object per record (e.g. `type`, `choice` / `score` / `noul`, `probabilities`, `confidence`). For System One multi-question input, answers are printed sequentially (one JSON document per question).
 
-## FFI
+<div align="right">
 
-Header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_systemone`, `aria_model_destroy`.
+[![][back-to-top]](#readme-top)
+
+</div>
+
+## 🧩 FFI & language SDKs
+
+Header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_systemone`, `aria_model_destroy`, `aria_last_error`.
 
 Release assets: `aria-engine_${VERSION}_${OS}.tar.gz|zip`, `libaria-engine_ffi_${VERSION}_${OS}.tar.gz`.
-
-## Language SDKs
 
 Native C ABI (`ariacompute-ffi` / `libaria-engine_ffi`) plus thin wrappers under `bindings/`. API surface is **System One** (`systemone`), not chat/complete.
 
@@ -365,16 +577,12 @@ Native C ABI (`ariacompute-ffi` / `libaria-engine_ffi`) plus thin wrappers under
 | Swift | `bindings/swift` | CocoaPods `AriaEngine` |
 | Kotlin | `bindings/kotlin` | Maven Central `com.ariacompute:engine` |
 
-C header: [`ffi/include/aria.h`](ffi/include/aria.h) — `aria_model_init`, `aria_systemone`, `aria_model_destroy`, `aria_last_error`.
-
 FFI-backed SDKs need `libaria-engine_ffi` (via `aria-engine upgrade`, package bundle, or `ARIA_FFI_LIB`). Point `checkpoint` at a downloaded AFM dir (e.g. `~/.ariacompute/models/afm-de` after `aria-engine download afm-de`). Rust crate links crates natively and does not require unpacking the shared library.
 
 ```bash
 cargo test -p ariacompute-ffi -p ariacompute-engine
 ./scripts/run-binding-tests.sh   # host matrix (Rust / Python / Go / TS)
 ```
-
-### Examples
 
 **Python** (`aria-engine`; `ARIA_FFI_LIB` optional):
 
@@ -630,99 +838,99 @@ eng.destroy()
 
 More detail per language: `bindings/*/README.md`.
 
-## Publish workflows
-
 On GitHub Release: `release.yml` (CLI+FFI assets) plus `publish-cargo.yml`, `publish-npm.yml`, `publish-pub.yml`, `publish-pypi.yml`, `publish-maven.yml`, `publish-cocoapods.yml`.
 
-## Docker / Docker Compose deployment
+<div align="right">
 
-Run the System One HTTP server as containers. The repo ships a parameterized
-`Dockerfile`, a `docker/entrypoint.sh` orchestrator, a CPU `docker-compose.yml`
-(two services: `engine-encoder` on **8010** and `engine-decoder` on **8011**), and
-a `docker-compose.cuda.yml` GPU override.
+[![][back-to-top]](#readme-top)
 
-### Build & run (CPU)
+</div>
 
-```bash
-cp .env.example .env          # set ARIA_DATA_DIR to your host ~/.ariacompute (absolute path)
-docker compose build
-docker compose up -d
-```
+## 🔏 Trust store security
 
-Both services bind-mount your host `ARIA_DATA_DIR` (default `~/.ariacompute`)
-into `/data/aria`, so the `engine.yml` (config) and `models/` (checkpoints) you
-already downloaded on the host are used directly — **offline, no download**.
-The entrypoint writes `engine.yml` from env vars **only when absent**, so a
-pre-mounted config (e.g. the host's `~/.ariacompute/engine.yml`) is respected.
+The 2026-10 eMudhra (emSign) intermediate CA key compromise is addressed on the Rust side: `aria-engine` / `aria-cli` do outbound TLS for hub downloads via `reqwest` and `hf-hub` (both `rustls-tls`), which use the embedded **`webpki-roots`**, pinned `>=1.0.10` in `cli/Cargo.toml` (removes the compromised emSign roots). The Docker build already installs `ca-certificates` (system store), but the binaries embed `webpki-roots`, so the lock bump is the decisive fix. The language bindings (Go / Python / TS / RN) are FFI-only and perform no outbound TLS themselves, so their runtimes' trust stores are out of scope; the actual network path is the Rust side above.
 
-### Models
+<div align="right">
 
-- **Offline (default, `AUTO_DOWNLOAD=0`):** weights come from the host
-  `ARIA_DATA_DIR/models/{afm-de,afm-dd}`. Make sure both checkpoints are present
-  on the host (run `aria-engine download afm-de && aria-engine download afm-dd`
-  once on the host, or copy them into `~/.ariacompute/models/`).
-- **Auto-download:** set `AUTO_DOWNLOAD=1` in `.env`; the entrypoint runs
-  `aria-engine download <model>` on first run (needs network + the matching hub
-  token). A failed/blocked download is **non-fatal** — the container logs a
-  warning and only refuses to start if the checkpoint is still missing.
+[![][back-to-top]](#readme-top)
 
-> **Note — hub selection & network:** the container regenerates `engine.yml`
-> from `SITE_URL` when it is set, so `SITE_URL=https://ariacompute.cn` makes
-> downloads use **ModelScope** (where `afm-de` is published) instead of the
-> HuggingFace-baked host config. If the host only reaches the internet through a
-> local proxy, set `HTTPS_PROXY=http://host.docker.internal:<port>` in `.env`
-> (the compose file maps `host.docker.internal` to the host gateway); `127.0.0.1`
-> inside the container is the container itself, not the host.
+</div>
 
-### GPU (CUDA)
+## 🔨 Development
 
-Requires the NVIDIA driver + `nvidia-container-toolkit`. The override swaps the
-build base to a CUDA image, compiles with `--features cuda`, and requests a GPU
-per service:
+| Target | Effect |
+| --- | --- |
+| `cargo build --workspace` | Build every crate |
+| `cargo test --workspace` | Run the full workspace test suite |
+| `cargo build --release -p aria-cli -p ariacompute-ffi` | Release binary + FFI cdylib |
+| `cargo build -p aria-cli --features cuda` | Build with the CUDA backend (propagates to de/dd) |
+| `cargo test -p ariacompute-ffi -p ariacompute-engine` | FFI + native Rust SDK tests |
+| `./scripts/run-binding-tests.sh` | Host matrix (Rust / Python / Go / TS) |
+| `./scripts/prepare-binding-fixture.sh` | Build the binding fixture for local SDK tests |
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml build
-docker compose -f docker-compose.yml -f docker-compose.cuda.yml up -d
+cargo test --workspace
+./scripts/prepare-binding-fixture.sh
+./scripts/run-binding-tests.sh
 ```
 
-Set `COMPUTE=cuda` (done by the override) so candle selects the CUDA backend.
+<div align="right">
 
-### Configuration (`.env`)
+[![][back-to-top]](#readme-top)
 
-| Variable | Default | Meaning |
-| --- | --- | --- |
-| `ENGINE_IMAGE` | `aria-engine:latest` | Tag for the built image |
-| `BUILD_IMAGE` / `RUNTIME_IMAGE` | `rust:1-slim` / *(defaults to `BUILD_IMAGE`)* | CPU build base; the runtime reuses it so glibc always matches. Only the CUDA override sets `RUNTIME_IMAGE` |
-| `FEATURES` | _(empty)_ | Build features; the CUDA override sets `cuda` |
-| `SITE_URL` / `UPGRADE_URL` | _(empty)_ | Region hub (`.com`→HF, `.cn`→ModelScope); when set, overrides the mounted config |
-| `HF_TOKEN` / `MODELSCOPE_API_TOKEN` | _(empty)_ | Hub token for the active region |
-| `HTTP_PROXY` / `HTTPS_PROXY` / `NO_PROXY` | _(empty)_ | Optional egress proxy for downloads (use `host.docker.internal` for a host-local proxy) |
-| `COMPUTE` | `auto` | `auto` \| `cpu` \| `cuda` |
-| `ENCODER_MODEL` / `ENCODER_PORT` | `afm-de` / `8010` | encoder model (empty disables the service) + port |
-| `DECODER_MODEL` / `DECODER_PORT` | `afm-dd` / `8011` | decoder model (empty disables the service) + port |
-| `ARIA_DATA_DIR` | `${HOME}/.ariacompute` | Host dir bind-mounted to `/data/aria` (config + models) |
-| `AUTO_DOWNLOAD` | `0` | `1` to fetch weights on first run (non-fatal if it fails) |
-| `RUST_LOG` | `info` | Rust tracing filter |
+</div>
 
-### Verify
+## 📝 License
 
-```bash
-curl -s http://localhost:8010/health     # {"ok":true,"service":"afm-engine","model":"afm-de"}
-curl -s http://localhost:8011/health     # decoder
-docker compose ps                        # both services healthy
-```
+MIT. See [LICENSE](./LICENSE).
 
-The container binds `0.0.0.0` internally; `serve` keeps its `127.0.0.1` default
-outside containers. **Do not commit `.env`** — it may contain hub tokens.
+<div align="right">
 
-## License
+[![][back-to-top]](#readme-top)
 
-MIT.
+</div>
 
-## Engineering Conventions
+## 🤝 Engineering conventions
 
-This repository follows the Harness Engineering philosophy:
+- [`AGENTS.md`](./AGENTS.md) — agent engineering context entry and directory index
+- [`requirements.md`](./requirements.md) — requirements spec (feature boundaries / exceptions / acceptance criteria), human-review-gated
+- [`task.md`](./task.md) — implementation task checklist
 
-- [`AGENTS.md`](AGENTS.md): Agent engineering context entry and directory index
-- [`requirements.md`](requirements.md): Requirements spec (feature boundaries/exceptions/acceptance criteria, human-review-gated)
-- [`task.md`](task.md): Implementation task checklist
+<div align="right">
+
+[![][back-to-top]](#readme-top)
+
+</div>
+
+---
+
+<div align="center">
+
+Copyright © 2026 [ariacompute][org]. <br/>
+This project is [MIT](./LICENSE) licensed.
+
+</div>
+
+<!-- LINK GROUP -->
+
+[org]: https://github.com/ariacompute
+
+[release-shield]: https://img.shields.io/github/v/release/ariacompute/engine?style=flat-square&labelColor=black&color=555
+[release-link]: https://github.com/ariacompute/engine/releases
+[rust-shield]: https://img.shields.io/badge/rust-edition_2021-555?style=flat-square&labelColor=black
+[rust-link]: ./Cargo.toml
+[license-shield]: https://img.shields.io/github/license/ariacompute/engine?style=flat-square&labelColor=black&color=555
+[license-link]: ./LICENSE
+[lastcommit-shield]: https://img.shields.io/github/last-commit/ariacompute/engine?style=flat-square&labelColor=black&color=555
+[lastcommit-link]: https://github.com/ariacompute/engine/commits
+
+[httpapi-shield]: https://img.shields.io/badge/HTTP_API-3_routes-555?style=flat-square&labelColor=black
+[httpapi-link]: #-http-api
+[tests-shield]: https://img.shields.io/badge/tests-cargo_test-555?style=flat-square&labelColor=black
+[tests-link]: ./Cargo.toml
+[sdks-shield]: https://img.shields.io/badge/SDKs-8_languages-555?style=flat-square&labelColor=black
+[sdks-link]: #-ffi--language-sdks
+[trust-shield]: https://img.shields.io/badge/trust-webpki_roots_1.0.10-555?style=flat-square&labelColor=black
+[trust-link]: #-trust-store-security
+
+[back-to-top]: https://img.shields.io/badge/-BACK_TO_TOP-151515?style=flat-square
