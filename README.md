@@ -10,7 +10,7 @@ The **Encoder** (`afm_de`, Laya-layout ModernBERT DecisionModel) and **Decoder**
 contract — **System One**. Surfaces: **`aria-engine` CLI** · **`POST /v1/systemone`** ·<br/>
 **`libaria_ffi` C ABI** · language SDKs under `bindings/`.
 
-[English] · [简体中文](./README_cn.md) · [Agent context](./AGENTS.md) · [Requirements](./requirements.md) · [Tasks](./task.md)
+**English** · [简体中文](./README_cn.md) · [Agent context](./AGENTS.md) · [Requirements](./requirements.md) · [Tasks](./task.md)
 
 [![][release-shield]][release-link] [![][rust-shield]][rust-link] [![][license-shield]][license-link] [![][lastcommit-shield]][lastcommit-link]
 <br/>
