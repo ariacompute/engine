@@ -5,14 +5,30 @@ name: Publish npm (@ariacompute/engine-ts, @ariacompute/engine-rn)
 # account. engine-ts is built (npm ci + tsc) before publishing so the
 # `files: ["dist"]` package is not empty; engine-rn is plain JS and ships
 # src/ directly. Version is injected from the release tag via
-# `npm version --no-git-tag-version` (no git tag, no repo write-back).
-# Publish failures are hard failures (no continue-on-error); republishing
-# an existing version fails with npm 409 — bump the tag to re-release.
+# `npm version --no-git-tag-version --allow-same-version`
+# (no git tag, no repo write-back; same version as package.json is a no-op).
+# Publish failures are hard failures (no continue-on-error);
+# republishing an existing version fails with npm 409 — bump the tag to
+# re-release.
 #
-# Secrets required:
-#   NPM_TOKEN — npmjs.com token for ~ariacompute with publish permission
-#               on @ariacompute/engine-ts and @ariacompute/engine-rn
-#               (granular access token, bypass 2FA for automation)
+# Auth: npm Trusted Publishing (OIDC). No long-lived token, no repo secret.
+# Prerequisites, per package on npmjs.com:
+#   Packages → <pkg> → Settings → Trusted publishing → Add trusted publisher
+#     Provider            GitHub Actions
+#     Organization/user   ariacompute
+#     Repository          engine
+#     Workflow filename   publish-npm.yml   (file name only, .yml included)
+#     Environment name    (empty)
+#     Allowed actions     must have "npm publish" checked (npm 2026-09-03+
+#                         defaults to only "npm stage publish")
+#   The connection must complete its first successful publish within 2 days
+#   or it expires and cannot be edited (delete + recreate).
+# OIDC requires npm CLI >= 11.5.1, i.e. Node >= 22.14 (we run Node 24).
+# Provenance is generated automatically for public repos + public packages;
+# no --provenance flag needed.
+# After the first verified OIDC release, tighten the package's
+# Settings → Publishing access to "Require two-factor authentication and
+# disallow tokens", then revoke the old granular/NPM_TOKEN credential.
 
 on:
   release:
@@ -23,25 +39,43 @@ on:
         description: "Version to publish (default: tag with v stripped)"
         required: false
 
+permissions:
+  id-token: write # OIDC token exchange with the npm registry, required
+  contents: read
+
 jobs:
   engine-ts:
     name: npm @ariacompute/engine-ts
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
         with:
-          node-version: 20
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          # Release build: never restore a cached npm state.
+          package-manager-cache: false
+      - name: Verify npm CLI supports OIDC
+        shell: bash
+        run: |
+          NPM_VERSION="$(npm --version)"
+          echo "node $(node --version) / npm $NPM_VERSION"
+          NPM_VERSION="$NPM_VERSION" node -e '
+            const [major, minor] = process.env.NPM_VERSION.split(".").map(Number);
+            if (major < 11 || (major === 11 && minor < 5)) {
+              console.error(`npm ${process.env.NPM_VERSION} is too old for Trusted Publishing (need >= 11.5.1)`);
+              process.exit(1);
+            }
+          '
       - name: Resolve version
         shell: bash
         run: |
           VERSION="${{ inputs.version }}"
-          # release event: GITHUB_REF_NAME is the tag (e.g. v0.2.0 -> 0.2.0)
           if [ -z "$VERSION" ] && [ "${GITHUB_EVENT_NAME}" = "release" ]; then
             VERSION="${GITHUB_REF_NAME#v}"
           fi
-          # manual dispatch without a version: fall back to the newest tag
           if [ -z "$VERSION" ]; then
             VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
           fi
@@ -54,31 +88,46 @@ jobs:
           npm ci
           npm run build
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        # No NODE_AUTH_TOKEN: setting one would silently fall back to token
+        # auth and defeat trusted publishing. `--access public` is not needed
+        # either; package.json carries publishConfig.access.
         run: |
           cd bindings/typescript
-          npm version "$VERSION" --no-git-tag-version
-          npm publish --access public
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm publish
 
   engine-rn:
     name: npm @ariacompute/engine-rn
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
         with:
-          node-version: 20
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 24
           registry-url: https://registry.npmjs.org
+          # Release build: never restore a cached npm state.
+          package-manager-cache: false
+      - name: Verify npm CLI supports OIDC
+        shell: bash
+        run: |
+          NPM_VERSION="$(npm --version)"
+          echo "node $(node --version) / npm $NPM_VERSION"
+          NPM_VERSION="$NPM_VERSION" node -e '
+            const [major, minor] = process.env.NPM_VERSION.split(".").map(Number);
+            if (major < 11 || (major === 11 && minor < 5)) {
+              console.error(`npm ${process.env.NPM_VERSION} is too old for Trusted Publishing (need >= 11.5.1)`);
+              process.exit(1);
+            }
+          '
       - name: Resolve version
         shell: bash
         run: |
           VERSION="${{ inputs.version }}"
-          # release event: GITHUB_REF_NAME is the tag (e.g. v0.2.0 -> 0.2.0)
           if [ -z "$VERSION" ] && [ "${GITHUB_EVENT_NAME}" = "release" ]; then
             VERSION="${GITHUB_REF_NAME#v}"
           fi
-          # manual dispatch without a version: fall back to the newest tag
           if [ -z "$VERSION" ]; then
             VERSION="$(git describe --tags --abbrev=0 2>/dev/null | sed 's/^v//')"
           fi
@@ -86,9 +135,7 @@ jobs:
           echo "VERSION=$VERSION" >> "$GITHUB_ENV"
           echo "Publishing version=$VERSION"
       - name: Publish
-        env:
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: |
           cd bindings/react-native
-          npm version "$VERSION" --no-git-tag-version
-          npm publish --access public
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          npm publish

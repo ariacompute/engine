@@ -39,7 +39,9 @@ jobs:
             # Windows accepts AMD64/ARM64/x86 only (x86_64 is a Linux alias)
             arch: AMD64
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@stable
       - name: Inject version into pyproject.toml
         shell: bash

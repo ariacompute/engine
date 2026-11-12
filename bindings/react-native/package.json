@@ -4,5 +4,13 @@
   "description": "React Native binding for AFM-D System One",
   "main": "src/index.js",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ariacompute/engine.git",
+    "directory": "bindings/react-native"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "files": ["src", "README.md"]
 }

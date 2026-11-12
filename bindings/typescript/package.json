@@ -9,6 +9,14 @@
     "test": "node --test test/binding.test.mjs"
   },
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ariacompute/engine.git",
+    "directory": "bindings/typescript"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
   "dependencies": {
     "koffi": "^2.8.0"
   },
