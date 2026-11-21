@@ -6,7 +6,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc -p .",
-    "test": "node --test test/binding.test.mjs"
+    "test": "node --test test/binding.test.mjs",
+    "prepublishOnly": "npm run build"
   },
   "license": "MIT",
   "repository": {

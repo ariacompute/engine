@@ -87,6 +87,22 @@ jobs:
           cd bindings/typescript
           npm ci
           npm run build
+      - name: Verify package contents
+        run: |
+          cd bindings/typescript
+          npm pack --dry-run --json > packed.json
+          node --input-type=module -e '
+            import fs from "node:fs";
+            const files = JSON.parse(fs.readFileSync("packed.json", "utf8"))[0].files.map((f) => f.path);
+            for (const required of ["dist/index.js", "dist/index.d.ts"]) {
+              if (!files.includes(required)) {
+                console.error(`npm tarball is missing ${required}; refusing to publish`);
+                process.exit(1);
+              }
+            }
+            console.log(`package contains ${files.length} files, including dist/index.js`);
+          '
+          rm packed.json
       - name: Publish
         # No NODE_AUTH_TOKEN: setting one would silently fall back to token
         # auth and defeat trusted publishing. `--access public` is not needed
