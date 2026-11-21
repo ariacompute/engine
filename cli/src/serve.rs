@@ -147,13 +147,9 @@ where
     let app = build_router(&opts)?;
     let listener = tokio::net::TcpListener::bind(&opts.bind).await?;
     let track = opts.track.as_str();
-    tracing::info!(
-        "listening on http://{} track={} model={} compute={}",
-        opts.bind,
-        track,
-        opts.model_name,
-        compute
-    );
+    let bind = &opts.bind;
+    let model_name = &opts.model_name;
+    tracing::info!("listening on http://{bind} track={track} model={model_name} compute={compute}");
     serve_on(listener, app, shutdown).await
 }
 
@@ -337,6 +333,24 @@ mod tests {
             model_name: "afm-de".into(),
             bind: "127.0.0.1:0".into(),
             compute: "auto".into(),
+        };
+        run_serve_with(opts, std::future::ready(())).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn run_serve_with_logs_listen_fields() {
+        let _subscriber = tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::INFO)
+                .finish(),
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let opts = ServeOpts {
+            track: Track::Encoder,
+            checkpoint: dir.path().to_path_buf(),
+            model_name: "afm-de".into(),
+            bind: "127.0.0.1:0".into(),
+            compute: "cpu".into(),
         };
         run_serve_with(opts, std::future::ready(())).await.unwrap();
     }

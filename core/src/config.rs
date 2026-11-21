@@ -167,11 +167,15 @@ pub fn model_cache_dir(model: &str) -> io::Result<PathBuf> {
 }
 
 pub fn resolve_checkpoint(ref_: &str) -> PathBuf {
+    resolve_checkpoint_with(models_dir(), ref_)
+}
+
+fn resolve_checkpoint_with(models: io::Result<PathBuf>, ref_: &str) -> PathBuf {
     let p = Path::new(ref_);
     if p.exists() || ref_.contains('/') || ref_.contains('\\') {
         return p.to_path_buf();
     }
-    models_dir()
+    models
         .map(|d| d.join(ref_))
         .unwrap_or_else(|_| p.to_path_buf())
 }
@@ -425,9 +429,17 @@ mod tests {
     }
 
     fn write(path: PathBuf, body: &str) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
+        let parent = path.parent().unwrap_or(Path::new("."));
+        fs::create_dir_all(parent).unwrap();
         fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn resolve_checkpoint_falls_back_when_models_dir_fails() {
+        let err = io::Error::new(io::ErrorKind::NotFound, "no home");
+        assert_eq!(
+            resolve_checkpoint_with(Err(err), "afm-de"),
+            PathBuf::from("afm-de")
+        );
     }
 }

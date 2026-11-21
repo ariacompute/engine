@@ -310,9 +310,8 @@ mod tests {
     }
 
     fn save_tensors(path: &Path, map: HashMap<&str, Tensor>) {
-        if let Some(parent) = path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
+        let parent = path.parent().unwrap_or(Path::new("."));
+        fs::create_dir_all(parent).unwrap();
         candle_core::safetensors::save(&map, path).unwrap();
     }
 
@@ -571,8 +570,12 @@ mod tests {
                     "base_model.model.model.layers.0.mlp.gate_proj.lora_A.weight",
                     Tensor::from_vec(vec![1.0f32], (1, 1), &dev()).unwrap(),
                 ),
-                // not a lora key at all
+                // not a lora key at all, and a plain target weight that stays unpaired
                 ("some.other.weight", tensor(vec![1.0], (1, 1))),
+                (
+                    "base_model.model.model.layers.0.self_attn.q_proj.weight",
+                    tensor(vec![1.0, 0.0, 0.0, 1.0], (2, 2)),
+                ),
             ]),
         );
         let mut base = HashMap::from([(
@@ -671,6 +674,11 @@ mod tests {
         fs::write(dir.path().join("adapter_config.json"), "{not json").unwrap();
         let err = merge_lora_into(&mut HashMap::new(), dir.path(), &dev()).unwrap_err();
         assert!(matches!(err, AfmError::Json(_)));
+
+        let broken = tempdir().unwrap();
+        fs::write(broken.path().join("adapter_model.safetensors"), b"garbage").unwrap();
+        let err = merge_lora_into(&mut HashMap::new(), broken.path(), &dev()).unwrap_err();
+        assert!(err.to_string().contains("adapter "));
     }
 
     #[test]

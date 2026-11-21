@@ -56,9 +56,8 @@ mod tests {
 
     fn write(dir: &Path, rel: &str, body: &str) {
         let path = dir.join(rel);
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).unwrap();
-        }
+        let parent = path.parent().unwrap_or(Path::new("."));
+        std::fs::create_dir_all(parent).unwrap();
         std::fs::write(path, body).unwrap();
     }
 

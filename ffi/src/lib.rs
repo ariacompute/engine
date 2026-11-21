@@ -455,6 +455,22 @@ mod tests {
     }
 
     #[test]
+    fn systemone_rejects_bad_question() {
+        let model = encoder_model(vec![0.1, 3.0]);
+        let req = CString::new(
+            json!({"state": "hello", "questions": {"q1": {"type": "rank"}}}).to_string(),
+        )
+        .unwrap();
+        let mut buf = out_buf(256);
+        assert_eq!(
+            aria_systemone(model, req.as_ptr(), buf.as_mut_ptr(), buf.len()),
+            -1
+        );
+        assert!(last_error_text().contains("unsupported systemone type"));
+        aria_model_destroy(model);
+    }
+
+    #[test]
     fn systemone_encoder_success_writes_json() {
         let model = encoder_model(vec![0.1, 3.0]);
         let req = choice_request();

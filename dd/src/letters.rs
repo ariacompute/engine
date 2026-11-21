@@ -249,6 +249,41 @@ mod tests {
     }
 
     #[test]
+    fn letter_token_ids_reports_tokenize_failure() {
+        let tok = Tokenizer::from_bytes(
+            json!({
+                "version": "1.0",
+                "truncation": null,
+                "padding": null,
+                "added_tokens": [],
+                "normalizer": null,
+                "pre_tokenizer": {"type": "Whitespace"},
+                "post_processor": null,
+                "decoder": null,
+                "model": {"type": "WordLevel", "vocab": {"known": 0}, "unk_token": "[UNK]"}
+            })
+            .to_string()
+            .as_bytes(),
+        )
+        .unwrap();
+        let err = letter_token_ids(&tok).unwrap_err();
+        assert!(err.to_string().contains("tokenize letter"));
+    }
+
+    #[test]
+    fn load_tokenizer_reports_malformed_file() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("tokenizer.json"), "{not json").unwrap();
+        let ckpt = DecoderCheckpoint {
+            root: None,
+            config: crate::checkpoint::DdConfig::default(),
+            adapter_dir: None,
+        };
+        let err = load_tokenizer(&ckpt, dir.path()).unwrap_err();
+        assert!(err.to_string().contains("tokenizer load"));
+    }
+
+    #[test]
     fn load_tokenizer_searches_root_adapter_and_base() {
         let root = tempdir().unwrap();
         write_tokenizer(root.path());

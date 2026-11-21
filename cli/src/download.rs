@@ -878,7 +878,7 @@ fn progress_bar(total: Option<u64>, label: &str, show: bool) -> ProgressBar {
             ProgressStyle::with_template(
                 "{msg} [{bar:40.green/bright.black}] {bytes}/{total_bytes} ({bytes_per_sec}, ETA {eta})",
             )
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .unwrap_or(ProgressStyle::default_bar())
             .progress_chars("█▉▊▋▌▍▎▏ "),
         );
         pb.set_message(label.to_string());
@@ -887,7 +887,7 @@ fn progress_bar(total: Option<u64>, label: &str, show: bool) -> ProgressBar {
     let pb = ProgressBar::new_spinner();
     pb.set_style(
         ProgressStyle::with_template("{msg} {spinner:.green} {bytes} ({bytes_per_sec})")
-            .unwrap_or_else(|_| ProgressStyle::default_spinner()),
+            .unwrap_or(ProgressStyle::default_spinner()),
     );
     pb.set_message(label.to_string());
     pb.enable_steady_tick(Duration::from_millis(100));
@@ -932,8 +932,11 @@ pub fn list_models() -> io::Result<Vec<String>> {
     }
     let mut out = Vec::new();
     // loose files in `models/` are not checkpoints; skip them without failing
-    let entries = fs::read_dir(dir)?
-        .collect::<io::Result<Vec<_>>>()?
+    let mut found = Vec::new();
+    for entry in fs::read_dir(dir)? {
+        found.push(entry?);
+    }
+    let entries = found
         .into_iter()
         .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false));
     for entry in entries {
@@ -2966,7 +2969,7 @@ mod tests {
                     .and(mock_path("/openapi/v1/models"))
                     .and(query_param("page_number", "1"))
                     .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                        "data": {"models": [{"id": ""}, {"id": "AriaCompute/afm-de"}], "total_count": 2}
+                        "data": {"models": [{"id": ""}, {"id": "AriaCompute/afm-de"}, {"id": "Other/afm-de"}], "total_count": 3}
                     })))
                     .mount(&server)
                     .await;

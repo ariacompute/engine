@@ -217,10 +217,7 @@ pub fn select_release<'a>(
     if let Some(r) = candidates.iter().copied().find(|r| !r.prerelease) {
         return Ok(r);
     }
-    candidates
-        .first()
-        .copied()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no stable release"))
+    Ok(candidates[0])
 }
 
 fn find_asset<'a>(assets: &'a [ReleaseAsset], name: &str) -> io::Result<&'a ReleaseAsset> {
@@ -276,14 +273,15 @@ fn extract_engine_archive(archive_name: &str, archive: &Path, dest_dir: &Path) -
     }
 }
 
+fn zip_io_error(e: zip::result::ZipError) -> io::Error {
+    io::Error::new(io::ErrorKind::InvalidData, e)
+}
+
 fn extract_zip(archive: &Path, dest_dir: &Path) -> io::Result<()> {
     let file = fs::File::open(archive)?;
-    let mut zip =
-        zip::ZipArchive::new(file).map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let mut zip = zip::ZipArchive::new(file).map_err(zip_io_error)?;
     for i in 0..zip.len() {
-        let mut entry = zip
-            .by_index(i)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let mut entry = zip.by_index(i).map_err(zip_io_error)?;
         let out = dest_dir.join(entry.name());
         if entry.is_dir() {
             fs::create_dir_all(&out)?;
@@ -766,6 +764,16 @@ mod tests {
             "dll"
         );
 
+        // legacy dylib name is renamed to the release name too
+        let dylib = dir.path().join("staging-dylib");
+        fs::create_dir_all(&dylib).unwrap();
+        fs::write(dylib.join("libaria_ffi.dylib"), b"dylib").unwrap();
+        install_ffi(&dylib, &lib_dir).unwrap();
+        assert_eq!(
+            fs::read_to_string(lib_dir.join("libaria-engine_ffi.dylib")).unwrap(),
+            "dylib"
+        );
+
         let empty = dir.path().join("staging-empty");
         fs::create_dir_all(&empty).unwrap();
         let err = install_ffi(&empty, &lib_dir).unwrap_err();
@@ -936,6 +944,24 @@ mod tests {
                 assert!(err.to_string().contains("releases API"));
             });
         });
+    }
+
+    #[tokio::test]
+    async fn fetch_releases_rejects_invalid_json() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(mock_path("/repos/acme/engine/releases"))
+            .respond_with(ResponseTemplate::new(200).set_body_string("not json"))
+            .mount(&server)
+            .await;
+        let api = ReleaseApi {
+            github: server.uri(),
+            gitee: server.uri(),
+        };
+        let err = fetch_releases(&api, ReleaseHost::GitHub, "https://github.com/acme")
+            .await
+            .unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::InvalidData);
     }
 
     #[test]

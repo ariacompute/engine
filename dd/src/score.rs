@@ -88,9 +88,8 @@ pub fn probs_from_semif_out(record: &Record, out: &Value) -> Result<(Map<String,
             let total: f64 = mapped.values().filter_map(|v| v.as_f64()).sum();
             if total > 0.0 {
                 for v in mapped.values_mut() {
-                    if let Some(p) = v.as_f64() {
-                        *v = json!(p / total);
-                    }
+                    let p = v.as_f64().unwrap_or(0.0);
+                    *v = json!(p / total);
                 }
             }
             probs = mapped;
@@ -114,9 +113,8 @@ pub fn probs_from_semif_out(record: &Record, out: &Value) -> Result<(Map<String,
             let total: f64 = mapped.values().filter_map(|v| v.as_f64()).sum();
             if total > 0.0 {
                 for v in mapped.values_mut() {
-                    if let Some(p) = v.as_f64() {
-                        *v = json!(p / total);
-                    }
+                    let p = v.as_f64().unwrap_or(0.0);
+                    *v = json!(p / total);
                 }
             }
             probs = mapped;
