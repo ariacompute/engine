@@ -241,10 +241,7 @@ fn keep_afm_dd_product_file(path: &str) -> bool {
         return false;
     }
     let lower = path.to_ascii_lowercase();
-    if lower.ends_with(".gguf") || lower.starts_with("gguf/") || lower.contains("/gguf/") {
-        return false;
-    }
-    true
+    !(lower.ends_with(".gguf") || lower.starts_with("gguf/") || lower.contains("/gguf/"))
 }
 
 /// MiniCPM base: safetensors + configs/tokenizer only (skip README / images / GGUF).

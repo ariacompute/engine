@@ -37,7 +37,6 @@ futures-util = { workspace = true }
 urlencoding = "2"
 clap = { workspace = true }
 dirs = { workspace = true }
-sha2 = { workspace = true }
 flate2 = { workspace = true }
 tar = { workspace = true }
 zip = { workspace = true }
